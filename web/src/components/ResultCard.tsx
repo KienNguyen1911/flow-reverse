@@ -9,6 +9,88 @@ import {
 import type { Job } from "../types";
 import { btnCls } from "./ui";
 
+const BATCH_STATUS: Record<string, { label: string; cls: string }> = {
+  pending: { label: "chờ", cls: "text-mut" },
+  running: { label: "chạy", cls: "text-acc" },
+  ok: { label: "ok", cls: "text-ok" },
+  dry_run: { label: "dry", cls: "text-dim" },
+  rejected: { label: "từ chối", cls: "text-warn" },
+  failed: { label: "lỗi", cls: "text-err" },
+  skipped: { label: "bỏ", cls: "text-mut" },
+};
+
+function BatchResultCard({ job }: { job: Job }) {
+  const r = job.result;
+  if (!r?.batch) {
+    return (
+      <div className="rounded-ctl border border-err/30 bg-err/5 p-3.5 text-[12.5px] leading-relaxed">
+        <p className="font-semibold text-err">Batch lỗi</p>
+        <p className="mt-1 text-dim">{job.error || "Không rõ nguyên nhân."}</p>
+      </div>
+    );
+  }
+  const items = r.items ?? [];
+  const running = job.state === "running" || job.state === "queued";
+  return (
+    <div className="rounded-ctl border border-line2 bg-panel2 p-3.5 flex flex-col gap-2.5">
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12.5px]">
+        <p className="font-semibold text-fg">Batch {r.total ?? items.length} ảnh</p>
+        {running && (r.pending ?? 0) > 0 ? (
+          <span className="text-acc">{r.pending} đang chờ/chạy…</span>
+        ) : null}
+        <span className="text-ok">{r.ok ?? 0} ok</span>
+        {r.rejected ? <span className="text-warn">{r.rejected} bị từ chối</span> : null}
+        {r.failed ? <span className="text-err">{r.failed} lỗi</span> : null}
+        {r.skipped ? <span className="text-mut">{r.skipped} bỏ qua</span> : null}
+        {r.dry_run ? <span className="text-dim">{r.dry_run} dry-run</span> : null}
+      </div>
+      <p className="text-[11.5px] text-mut">
+        N_alloc {r.n_alloc ?? "?"} · account: {r.accounts?.join(", ") || "—"}
+        {r.output_dir ? <span className="font-mono"> · {r.output_dir}</span> : null}
+      </p>
+      <div className="slim-scroll max-h-[320px] overflow-y-auto flex flex-col">
+        {items.map((it) => {
+          const st = BATCH_STATUS[it.status] ?? { label: it.status, cls: "text-mut" };
+          return (
+            <div key={it.idx} className="flex items-center gap-2 py-[3px] text-[11.5px] min-w-0">
+              <span className="w-7 shrink-0 font-mono text-mut">
+                {String(it.idx + 1).padStart(3, "0")}
+              </span>
+              <span className={`w-12 shrink-0 font-medium ${st.cls}`}>{st.label}</span>
+              <span className="w-8 shrink-0 font-mono text-[10px] text-mut">{it.mode}</span>
+              <span className="min-w-0 flex-1 truncate text-dim" title={it.prompt}>
+                {it.shot_id ? (
+                  <span className="font-mono text-[10.5px] text-mut">{it.shot_id} </span>
+                ) : null}
+                {it.prompt}
+              </span>
+              {it.account_id ? (
+                <span className="shrink-0 font-mono text-[10px] text-mut">{it.account_id}</span>
+              ) : null}
+              {it.result?.image_url ? (
+                <a
+                  className="shrink-0 text-acc hover:underline"
+                  href={it.result.image_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  xem
+                </a>
+              ) : null}
+              {it.error ? (
+                <span className="shrink-0 max-w-[180px] truncate text-err" title={it.error}>
+                  {it.error}
+                </span>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+      {job.state === "failed" && job.error ? <p className="text-[12px] text-err">{job.error}</p> : null}
+    </div>
+  );
+}
+
 function Meta({ k, v, mono = true }: { k: string; v: string | number | null | undefined; mono?: boolean }) {
   if (v === null || v === undefined || v === "") return null;
   return (
@@ -31,6 +113,10 @@ function fmtRes(r?: number[] | null) {
 
 export function ResultCard({ job, onUseProject }: { job: Job; onUseProject: (id: string) => void }) {
   const r = job.result;
+
+  if (job.kind === "batch_generate") {
+    return <BatchResultCard job={job} />;
+  }
 
   if (job.state === "failed") {
     return (

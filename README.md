@@ -10,6 +10,8 @@ mọi thao tác đi qua trình duyệt thật đang đăng nhập, tái sử d�
 
 - Nghiên cứu (reverse engineering) giao thức `batchexecute` của Google Flow: endpoint, envelope,
   các RPC nghiệp vụ (`jHPbke` tạo project, `ogiZ0b` tạo ảnh, `UpteDb` đọc danh sách...).
+- Hỗ trợ **pool N tài khoản** (browser mở theo nhu cầu, hot-spare failover, breaker riêng từng account) và
+  **batch nhiều ảnh** theo storyboard (t2i + i2i) phục vụ pipeline dựng phim.
 - Đóng gói quy trình chuẩn 2 pha: **Khám phá** (UI → mạng → đặc tả) → **Thực thi tất định** (module production
   không còn phụ thuộc công cụ điều khiển UI bằng LLM).
 - Cung cấp client CLI + playground web tạo ảnh **có kiểm soát credit**: dry-run luôn 0 credit;
@@ -24,7 +26,7 @@ Bốn lớp độc lập (chi tiết chuẩn hoá tại [`AGENTS.md`](AGENTS.md)
 | **1. Browser Runtime** | CloakBrowser | Profile cô lập (`browser_vault/`), seed/locale/timezone cố định, mở cổng CDP `:9222` |
 | **2. Discovery** | Playwright sniffer + payload differ | Thu trace mạng (XHR/fetch/WS), differential analysis → đặc tả tại `docs/api_specs/` |
 | **3. Bridge** | Playwright `connect_over_cdp` | Hook fetch trong page: chặn request `ogiZ0b` của app (0 credit) để "mượn" token tươi + `at` + `_reqid`; dựng body riêng (prompt/seed/UUID chữ hoa); fire in-page; long-poll; tải signed CDN URL |
-| **4. Production** | Python + FastAPI + React | `FlowClient` (CLI), WebUI backend, playground web; circuit breaker persisted, jitter + exponential backoff |
+| **4. Production** | Python + FastAPI + React | `FlowClient` (CLI), WebUI backend, playground web, pool N account (launch theo nhu cầu + hot spare); batch t2i/i2i theo storyboard; circuit breaker per account, jitter + exponential backoff |
 
 Luồng bridge mode:
 
@@ -46,7 +48,7 @@ CLI / Web UI ──▶ FlowClient ──▶ FlowBridge (CDP) ──▶ tab Flow 
 ```bash
 pip install playwright fastapi uvicorn pydantic requests cloakbrowser
 
-# 1) Mở trình duyệt với profile đã đăng nhập Google (cổng CDP :9222)
+# 1) Mở trình duyệt với profile đã đăng nhập Google (cổng CDP :9222) — hoặc để server tự đánh thức khi cần
 python src/BrowserHost/launch_profile.py --profile flow_main --wait
 
 # 2) CLI (0 credit với status / list-projects / --dry-run)

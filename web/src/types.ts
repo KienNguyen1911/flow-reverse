@@ -21,6 +21,46 @@ export interface Status {
   breaker: BreakerInfo;
 }
 
+export interface PoolAccount {
+  id: string;
+  profile_id: string;
+  cdp_port: number;
+  cdp_url: string;
+  enabled: boolean;
+  note?: string | null;
+  running: boolean;
+  managed: boolean;
+  status: "ready" | "cooldown" | "disabled" | "error" | string;
+  role: "active" | "standby" | string;
+  cooldown_remaining_s: number;
+  cooldown_reason?: string | null;
+  total_completed: number;
+  total_rejected: number;
+  total_failed: number;
+  last_used_at_ms?: number | null;
+  last_error?: string | null;
+}
+
+export interface PoolBatchInfo {
+  job_id: string;
+  j: number;
+  n_alloc: number;
+  accounts: string[];
+  ts_ms: number;
+}
+
+export interface PoolInfo {
+  n_total: number;
+  n_available: number;
+  target_jobs_per_account: number;
+  max_active_browsers: number;
+  working_set: string[];
+  current_batch: PoolBatchInfo | null;
+  last_batch: PoolBatchInfo | null;
+  accounts: PoolAccount[];
+  reference_cache: { accounts: number; entries: number };
+}
+
 export interface Project {
   id: string;
   title?: string | null;
@@ -70,17 +110,56 @@ export interface JobResult {
   count?: number;
   id?: string;
   title?: string | null;
+  account_id?: string | null;
+  // -- batch fields (kind === "batch_generate") ---------------------------- //
+  batch?: boolean;
+  total?: number;
+  ok?: number;
+  dry_run?: number;
+  rejected?: number;
+  failed?: number;
+  skipped?: number;
+  pending?: number;
+  n_alloc?: number;
+  accounts?: string[];
+  output_dir?: string;
+  items?: BatchItemResult[];
+}
+
+export interface BatchItemResult {
+  idx: number;
+  shot_id?: string | null;
+  prompt: string;
+  mode: string;
+  status: "pending" | "running" | "ok" | "dry_run" | "rejected" | "failed" | "skipped" | string;
+  account_id?: string | null;
+  attempts: number;
+  error?: string | null;
+  output_path?: string | null;
+  result?: JobResult | null;
+}
+
+export interface BatchItemRequest {
+  prompt: string;
+  seed?: number | null;
+  mode?: "t2i" | "i2i";
+  reference_image_path?: string | null;
+  depends_on_shot_id?: string | null;
+  id?: string | null;
+  filename?: string | null;
 }
 
 export interface Job {
   id: string;
-  kind: "generate" | "dry_run" | "create_project" | "list_projects" | string;
+  kind: "generate" | "dry_run" | "create_project" | "list_projects" | "batch_generate" | string;
   params: {
     project_id?: string;
     prompt?: string;
     aspect?: number;
     seed?: number | null;
     title?: string;
+    items?: BatchItemRequest[];
+    dry_run?: boolean;
   };
   state: JobState;
   created_ms: number;

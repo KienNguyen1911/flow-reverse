@@ -4,14 +4,21 @@ Run:  python -m src.WebUI.app  [--port 8787] [--cdp-url http://127.0.0.1:9222] [
 
 Serves:
   /api/status            bridge/browser/tab status + breaker snapshot (no playwright)
+  /api/pool              N-account pool: active working set vs standby (wakes nothing)
+  /api/pool/config       tuning: target_jobs_per_account, max_active_browsers
+  /api/pool/accounts/{id}/{wake|hibernate|reset}   per-account actions
   /api/projects          registry of projects (GET list, POST add, DELETE remove)
   /api/projects/refresh  job: UpteDb list-projects (0 credit)
   /api/projects/create   job: jHPbke create-project (0 credit, needs confirm)
   /api/generate          job: ogiZ0b generate image (needs confirm unless dry_run)
+  /api/batch             job: J images across N_alloc accounts (needs confirm unless dry_run)
   /api/jobs, /api/jobs/{id}
   /api/gallery           past runs (scans out/playground/*/meta.json)
   /api/files/{run}/{name}
   /                      the built playground UI (web/dist)
+
+Browsers are woken on demand by the pool (AccountPoolManager) — the server
+never launches all profiles at startup (plan docs/upgrade_plan_n_account_pool.md).
 """
 
 from __future__ import annotations
@@ -28,7 +35,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from ..Workflows.flow_client import DEFAULT_CDP_URL, CircuitOpenError, FlowClient
+from ..Workflows.account_pool import AccountPoolManager
+from ..Workflows.flow_client import DEFAULT_CDP_URL
 from ..Workflows.flow_models import parse_project_ref
 from .jobs import JobManager, ProjectsStore
 
@@ -59,6 +67,31 @@ class CreateProjectBody(BaseModel):
 class AddProjectBody(BaseModel):
     ref: str
     title: Optional[str] = None
+
+
+class BatchItemBody(BaseModel):
+    prompt: str = Field(min_length=1, max_length=2000)
+    seed: Optional[int] = None
+    mode: Optional[str] = None                     # t2i | i2i (auto if omitted)
+    reference_image_path: Optional[str] = None
+    depends_on_shot_id: Optional[str] = None
+    id: Optional[str] = None
+    filename: Optional[str] = None
+
+
+class BatchBody(BaseModel):
+    project_id: str
+    items: list[BatchItemBody] = Field(default_factory=list)
+    storyboard_path: Optional[str] = None
+    aspect: int = 3
+    dry_run: bool = False
+    confirm: bool = False
+    dest_dir: Optional[str] = None
+
+
+class PoolConfigBody(BaseModel):
+    target_jobs_per_account: Optional[int] = None
+    max_active_browsers: Optional[int] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -111,14 +144,20 @@ def scan_gallery(out_root: Path) -> list[dict]:
 
 
 def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
-               projects_file: Optional[Path] = None, web_dist: Optional[Path] = None) -> FastAPI:
+               projects_file: Optional[Path] = None, web_dist: Optional[Path] = None,
+               pool_config: Optional[Path] = None, pool_state: Optional[Path] = None) -> FastAPI:
     out_root = Path(out_dir) if out_dir else DEFAULT_OUT
     store = ProjectsStore(Path(projects_file) if projects_file else DEFAULT_PROJECTS_FILE)
-    client = FlowClient(cdp_url=cdp_url, out_dir=out_root)
-    manager = JobManager(client=client, store=store)
+    pool = AccountPoolManager(
+        config_path=Path(pool_config) if pool_config else None,
+        state_path=Path(pool_state) if pool_state else None,
+        out_root=out_root,
+        default_cdp_url=cdp_url,
+    )
+    manager = JobManager(pool=pool, store=store, out_root=out_root)
 
-    app = FastAPI(title="Flow Bench", version="0.1.0")
-    app.state.client = client
+    app = FastAPI(title="Flow Bench", version="0.2.0")
+    app.state.pool = pool
     app.state.manager = manager
     app.state.store = store
     app.state.out_root = out_root
@@ -127,6 +166,7 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
 
     @app.get("/api/status")
     def api_status():
+        client = pool.status_client()
         st = client.status()
         snap = client.breaker.snapshot()
         d = st.model_dump()
@@ -140,6 +180,41 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
             "consecutive_anti_abuse": snap.get("consecutive_anti_abuse"),
         }
         return d
+
+    # -- account pool --------------------------------------------------------- #
+
+    @app.get("/api/pool")
+    def api_pool():
+        return pool.snapshot()
+
+    @app.post("/api/pool/config")
+    def api_pool_config(body: PoolConfigBody):
+        try:
+            updated = pool.update_config(body.target_jobs_per_account, body.max_active_browsers)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return {"ok": True, **updated}
+
+    @app.post("/api/pool/accounts/{aid}/wake")
+    def api_pool_wake(aid: str):
+        try:
+            return pool.wake_account(aid)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
+    @app.post("/api/pool/accounts/{aid}/hibernate")
+    def api_pool_hibernate(aid: str):
+        try:
+            return pool.hibernate_account(aid)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
+    @app.post("/api/pool/accounts/{aid}/reset")
+    def api_pool_reset(aid: str):
+        try:
+            return pool.reset_account(aid)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e))
 
     # -- projects ------------------------------------------------------------ #
 
@@ -188,14 +263,45 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
             if not body.confirm:
                 raise HTTPException(status_code=400,
                                     detail="Chạy thật cần confirm=true. Mỗi ảnh ~1 credit nếu Google nhận (reject = 0).")
-            try:
-                client.breaker.check()
-            except CircuitOpenError as e:
-                raise HTTPException(status_code=423, detail=str(e))
+            if not pool.available_accounts():
+                raise HTTPException(status_code=423,
+                                    detail="Tất cả account đang cooldown/disabled — chờ hết cooldown hoặc reset trong tab Pool.")
         kind = "dry_run" if body.dry_run else "generate"
         job = manager.submit(kind, {
             "project_id": pid, "prompt": body.prompt.strip(),
             "aspect": body.aspect, "seed": body.seed,
+        })
+        return {"job_id": job.id}
+
+    # -- batch (N_alloc accounts, plan Task 3) --------------------------------- #
+
+    @app.post("/api/batch")
+    def api_batch(body: BatchBody):
+        try:
+            pid = parse_project_ref(body.project_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        items = [i.model_dump(exclude_none=True) for i in body.items]
+        if not items and not body.storyboard_path:
+            raise HTTPException(status_code=400, detail="Cần 'items' (danh sách shot) hoặc 'storyboard_path'.")
+        for i, it in enumerate(items):
+            seed = it.get("seed")
+            if seed is not None and not (1 <= int(seed) <= 2147483647):
+                raise HTTPException(status_code=400, detail=f"items[{i}].seed phải trong int32: 1..2147483647")
+        if not body.dry_run:
+            if not body.confirm:
+                raise HTTPException(status_code=400,
+                                    detail="Batch chạy thật cần confirm=true. Mỗi ảnh ~1 credit nếu Google nhận.")
+            if not pool.available_accounts():
+                raise HTTPException(status_code=423,
+                                    detail="Tất cả account đang cooldown/disabled — chờ hết cooldown hoặc reset trong tab Pool.")
+        job = manager.submit("batch_generate", {
+            "project_id": pid,
+            "items": items,
+            "storyboard_path": body.storyboard_path,
+            "aspect": body.aspect,
+            "dry_run": body.dry_run,
+            "dest_dir": body.dest_dir,
         })
         return {"job_id": job.id}
 
@@ -231,9 +337,16 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
         return FileResponse(rp)
 
     @app.get("/api/circuit/clear")
-    def api_clear_circuit():  # GET intentionally: idempotent reset, no secrets
-        client.breaker.clear_cooldown()
-        return {"ok": True}
+    def api_clear_circuit(account: Optional[str] = None):  # GET intentionally: idempotent reset, no secrets
+        if account:
+            try:
+                pool.reset_account(account)
+            except KeyError as e:
+                raise HTTPException(status_code=404, detail=str(e))
+            return {"ok": True, "accounts": [account]}
+        for a in pool.accounts:
+            pool.reset_account(a.id)
+        return {"ok": True, "accounts": [a.id for a in pool.accounts]}
 
     # -- static UI ------------------------------------------------------------------ #
 

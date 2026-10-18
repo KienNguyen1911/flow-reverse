@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { XCircle, X } from "@phosphor-icons/react";
 import { api } from "./api";
-import { useGallery, useJob, useProjects, useStatus } from "./hooks";
+import { useGallery, useJob, usePool, useProjects, useStatus } from "./hooks";
 import type { Job } from "./types";
-import { ComposePanel, type GenRequest } from "./components/ComposePanel";
+import { ComposePanel, type BatchRequest, type GenRequest } from "./components/ComposePanel";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Gallery } from "./components/Gallery";
 import { JobConsole } from "./components/JobConsole";
@@ -17,6 +17,7 @@ function msg(e: unknown): string {
 
 export default function App() {
   const { status, refresh: refreshStatus } = useStatus(5000);
+  const { pool, refresh: refreshPool } = usePool(4000);
   const {
     projects,
     loading: projectsLoading,
@@ -35,14 +36,18 @@ export default function App() {
   );
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [confirmReq, setConfirmReq] = useState<GenRequest | null>(null);
+  const [confirmBatch, setConfirmBatch] = useState<BatchRequest | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [dismissedProjectsError, setDismissedProjectsError] = useState(false);
 
   const onTerminal = useMemo(
     () => (j: Job) => {
-      if (j.kind === "generate") refreshGallery(true);
-      if (j.kind === "generate" || j.kind === "dry_run") refreshStatus();
+      if (j.kind === "generate" || j.kind === "batch_generate") refreshGallery(true);
+      if (j.kind === "generate" || j.kind === "dry_run" || j.kind === "batch_generate") {
+        refreshStatus();
+        refreshPool();
+      }
       if (j.kind === "list_projects" || j.kind === "create_project") refreshProjects();
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -63,7 +68,7 @@ export default function App() {
   }, [selectedId]);
 
   const busy = job ? job.state === "queued" || job.state === "running" : false;
-  const bridgeReady = !!status?.cdp_ok;
+  const bridgeReady = !!status?.cdp_ok || (pool?.n_total ?? 0) > 0;
   const selectedTitle = projects.find((p) => p.id === selectedId)?.title ?? null;
 
   const banner = actionError || (!dismissedProjectsError ? projectsError : null);
@@ -82,17 +87,29 @@ export default function App() {
     void startJob(api.generate({ ...req, dry_run: true }));
   };
 
+  const submitBatchDry = (req: BatchRequest) => {
+    void startJob(api.batch({ ...req, dry_run: true }));
+  };
+
+  const cancelConfirm = () => {
+    setConfirmReq(null);
+    setConfirmBatch(null);
+  };
+
   const confirmRun = async () => {
-    if (!confirmReq) return;
+    if (!confirmReq && !confirmBatch) return;
     setConfirmBusy(true);
     setActionError(null);
     try {
-      const r = await api.generate({ ...confirmReq, confirm: true });
+      const r = confirmBatch
+        ? await api.batch({ ...confirmBatch, confirm: true })
+        : await api.generate({ ...confirmReq!, confirm: true });
       setConfirmReq(null);
+      setConfirmBatch(null);
       setActiveJobId(r.job_id);
     } catch (e) {
       setActionError(msg(e));
-      setConfirmReq(null);
+      cancelConfirm();
     } finally {
       setConfirmBusy(false);
     }
@@ -100,7 +117,7 @@ export default function App() {
 
   return (
     <div className="max-w-[1240px] mx-auto px-4 lg:px-6 py-5 flex flex-col gap-5 min-h-full">
-      <TopBar status={status} onRefresh={refreshStatus} />
+      <TopBar status={status} pool={pool} onRefresh={refreshStatus} />
 
       <div className="grid gap-5 lg:grid-cols-[400px_minmax(0,1fr)] items-start">
         <ComposePanel
@@ -110,8 +127,17 @@ export default function App() {
           onSelect={setSelectedId}
           busy={busy}
           bridgeReady={bridgeReady}
+          pool={pool}
           onRealRun={setConfirmReq}
           onDryRun={submitDry}
+          onBatchRun={setConfirmBatch}
+          onBatchDryRun={submitBatchDry}
+          onSavePoolConfig={(q) => {
+            void api
+              .poolConfig({ target_jobs_per_account: q })
+              .then(() => refreshPool())
+              .catch((e) => setActionError(msg(e)));
+          }}
           onRefreshProjects={() => void startJob(api.refreshProjects())}
           onCreateProject={(title) => void startJob(api.createProject(title))}
           onAddProject={async (ref) => {
@@ -151,17 +177,18 @@ export default function App() {
 
       <footer className="flex flex-wrap items-center justify-between gap-2 pt-2 pb-4 text-[11.5px] text-mut">
         <p>
-          Flow Bench · bridge mode qua CloakBrowser (CDP 9222). Mọi lần chạy thật đều cần bạn xác
-          nhận trước.
+          Flow Bench · bridge mode qua CloakBrowser (pool N tài khoản, browser mở theo nhu cầu). Mọi
+          lần chạy thật đều cần bạn xác nhận trước.
         </p>
-        <p className="font-mono">v0.1</p>
+        <p className="font-mono">v0.2</p>
       </footer>
 
       <ConfirmDialog
-        payload={confirmReq}
+        payload={confirmReq ?? confirmBatch}
         projectTitle={selectedTitle}
+        pool={pool}
         busy={confirmBusy}
-        onCancel={() => setConfirmReq(null)}
+        onCancel={cancelConfirm}
         onConfirm={() => void confirmRun()}
       />
     </div>

@@ -73,6 +73,11 @@ export function JobConsole({
             {job.id}
           </span>
         ) : null}
+        {job?.kind === "batch_generate" ? (
+          <span className="shrink-0 inline-flex items-center rounded-full border border-acc/40 bg-acc/10 px-2 h-5 text-[10px] font-semibold tracking-wide text-acc">
+            BATCH
+          </span>
+        ) : null}
         <div className="ml-auto flex items-center gap-2.5">
           {elapsed ? <span className="font-mono text-[11px] text-mut">{elapsed}</span> : null}
           {meta ? (
@@ -119,7 +124,11 @@ export function JobConsole({
         )}
       </div>
 
-      {job && (job.state === "succeeded" || job.state === "rejected" || job.state === "failed") ? (
+      {job &&
+      (job.state === "succeeded" ||
+        job.state === "rejected" ||
+        job.state === "failed" ||
+        job.kind === "batch_generate") ? (
         <div className="border-t border-line p-4 lg:p-5 shrink-0">
           <ResultCard job={job} onUseProject={onUseProject} />
         </div>

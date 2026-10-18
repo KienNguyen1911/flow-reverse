@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import type { GalleryRun, Job, Project, Status } from "./types";
+import type { GalleryRun, Job, PoolInfo, Project, Status } from "./types";
 
 const TERMINAL: ReadonlySet<string> = new Set(["succeeded", "failed", "rejected"]);
 
@@ -34,6 +34,38 @@ export function useStatus(intervalMs = 5000) {
   }, [intervalMs]);
 
   return { status, error, refresh: tick };
+}
+
+/** Poll the N-account pool (active working set vs standby) every `intervalMs`. */
+export function usePool(intervalMs = 4000) {
+  const [pool, setPool] = useState<PoolInfo | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const tick = async () => {
+    try {
+      setPool(await api.pool());
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  useEffect(() => {
+    let stop = false;
+    const run = async () => {
+      if (stop) return;
+      await tick();
+    };
+    run();
+    const t = window.setInterval(run, intervalMs);
+    return () => {
+      stop = true;
+      window.clearInterval(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [intervalMs]);
+
+  return { pool, error, refresh: tick };
 }
 
 /** Poll one job until it reaches a terminal state. */

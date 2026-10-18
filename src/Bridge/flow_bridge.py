@@ -209,6 +209,13 @@ def extract_app_reqid(url: str) -> Optional[int]:
     return int(m.group(2)) if m else None
 
 
+def parse_captured_args(body: str) -> list:
+    """Extract the raw args JSON (``f.req[0][0][1]``) from a captured ogiZ0b body."""
+    qs = parse_qs(body, keep_blank_values=True)
+    obj = json.loads(qs.get("f.req", ["[]"])[0])
+    return json.loads(obj[0][0][1])
+
+
 def build_capture_fire_url(captured_url: str, new_reqid: int) -> str:
     """Replace _reqid in the app's own (captured) ogiZ0b URL — proven in R2."""
     if re.search(r"([?&]_reqid=)\d+", captured_url):
@@ -587,6 +594,80 @@ class FlowBridge:
         ts = int(time.time() * 1000)
         self._log(f"generate clicked @ {ts}")
         return ts
+
+    # -- reference image attach (i2i template capture) --------------------------- #
+    #
+    # The image2image upload RPC is intentionally NOT guessed here: the app
+    # performs its own upload when we attach the file via its <input type=file>
+    # (Playwright set_input_files works on hidden inputs and fires `change`).
+    # The app's next ogiZ0b request (blocked, 0 credit) is captured as the i2i
+    # template — see FlowClient.upload_reference_image.
+
+    _FILE_INPUTS_JS = (
+        "(() => { const out = []; const nodes = Array.from(document.querySelectorAll('input[type=file]')); "
+        "for (let i = 0; i < nodes.length; i++) { const el = nodes[i]; const r = el.getBoundingClientRect(); "
+        "out.push({i: i, accept: String(el.accept || ''), multiple: !!el.multiple, "
+        "visible: (r.width > 0 && r.height > 0), cls: String(el.className || '').slice(0, 60)}); } "
+        "return out; })()"
+    )
+
+    _ATTACH_STATE_JS = (
+        "(() => { let blob = 0, files = 0; "
+        "for (const im of Array.from(document.querySelectorAll('img'))) { "
+        "  const s = String(im.src || im.currentSrc || ''); if (s.indexOf('blob:') === 0) blob++; } "
+        "for (const el of Array.from(document.querySelectorAll('input[type=file]'))) "
+        "  files += (el.files ? el.files.length : 0); "
+        "return {blobImgs: blob, fileInputsWithFiles: files}; })()"
+    )
+
+    def list_file_inputs(self) -> list[dict]:
+        res = self.eval_json(self._FILE_INPUTS_JS)
+        return res if isinstance(res, list) else []
+
+    def composer_probe(self) -> dict:
+        """Read-only DOM probe (discovery/QA, 0 side effects)."""
+        return {
+            "url": self.page.url if self.page is not None else None,
+            "prosemirror": bool(self.eval_json("(() => !!document.querySelector('div.ProseMirror'))()")),
+            "generate_button": bool(self.eval_json("(() => !!document.querySelector('button.generate-icon-button'))()")),
+            "file_inputs": self.list_file_inputs(),
+        }
+
+    def attach_reference(self, file_path: str | Path, timeout_s: float = 20.0) -> dict:
+        """Attach a local image to the composer via the app's own file input.
+
+        Returns probe info; raises PageInteractionError when no file input
+        exists (UI changed / image mode without attach support).
+        """
+        path = Path(file_path)
+        if not path.is_file():
+            raise PageInteractionError(f"Không thấy file ảnh tham chiếu: {path}")
+        infos = self.list_file_inputs()
+        if not infos:
+            raise PageInteractionError(
+                "Composer không có <input type=file> — chạy discovery để cập nhật selector "
+                "(xem docs/api_specs/flow_image2image.md)."
+            )
+        pick = next((x for x in infos if "image" in str(x.get("accept") or "").lower()), infos[0])
+        handles = self.page.query_selector_all("input[type=file]")
+        idx = int(pick.get("i") or 0)
+        if idx >= len(handles):
+            raise PageInteractionError("Danh sách file input lệch — thử lại sau khi reload trang.")
+
+        before = self.eval_json(self._ATTACH_STATE_JS) or {}
+        handles[idx].set_input_files(str(path.resolve()))
+        self._log(f"attached reference {path.name} -> input #{idx} (accept={pick.get('accept')!r})")
+
+        deadline = time.time() + timeout_s
+        preview = False
+        while time.time() < deadline:
+            st = self.eval_json(self._ATTACH_STATE_JS) or {}
+            if int(st.get("blobImgs") or 0) > int(before.get("blobImgs") or 0) or int(st.get("fileInputsWithFiles") or 0) > 0:
+                preview = True
+                break
+            time.sleep(0.5)
+        time.sleep(jitter(1.5, 0.4, 0.6))  # let the app's own upload settle
+        return {"input_index": idx, "accept": pick.get("accept"), "preview_seen": preview, "inputs": infos}
 
     # -- capture / fire / poll --------------------------------------------------- #
 

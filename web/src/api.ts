@@ -1,4 +1,4 @@
-import type { GalleryRun, Job, Project, Status } from "./types";
+import type { BatchItemRequest, GalleryRun, Job, PoolInfo, Project, Status } from "./types";
 
 async function j<T>(r: Response): Promise<T> {
   if (!r.ok) {
@@ -51,4 +51,24 @@ export const api = {
   gallery: () => fetch("/api/gallery").then(j<{ runs: GalleryRun[] }>),
 
   clearCircuit: () => fetch("/api/circuit/clear").then(j<{ ok: boolean }>),
+
+  // -- N-account pool (plan Task 4) ---------------------------------------- //
+
+  pool: () => fetch("/api/pool").then(j<PoolInfo>),
+
+  poolConfig: (p: { target_jobs_per_account?: number; max_active_browsers?: number }) =>
+    post("/api/pool/config", p).then(j<{ ok: boolean; target_jobs_per_account: number; max_active_browsers: number }>),
+
+  poolAccount: (id: string, action: "wake" | "hibernate" | "reset") =>
+    post(`/api/pool/accounts/${id}/${action}`, {}).then(j<{ ok?: boolean; reason?: string; errors?: unknown[] }>),
+
+  batch: (p: {
+    project_id: string;
+    items?: BatchItemRequest[];
+    storyboard_path?: string;
+    aspect?: number;
+    dry_run?: boolean;
+    confirm?: boolean;
+    dest_dir?: string;
+  }) => post("/api/batch", p).then(j<{ job_id: string }>),
 };

@@ -273,6 +273,11 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--wait-timeout", type=float, default=30.0, help="Seconds to wait with --wait")
     parser.add_argument("--dry-run", action="store_true", help="Print the exact command without starting the browser")
     parser.add_argument("--vault-dir", default=None, help="Override the browser_vault location (testing/advanced)")
+    parser.add_argument(
+        "--pid-file",
+        default=None,
+        help="Write the launched browser PID to this file (used by pool_supervisor to hibernate the account later)",
+    )
     return parser.parse_args(argv)
 
 
@@ -335,6 +340,14 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     print(f"[launch] started      : pid={process.pid}")
     print(f"[launch] CDP endpoint : http://127.0.0.1:{args.port}")
+    if args.pid_file:
+        try:
+            pid_path = Path(args.pid_file)
+            pid_path.parent.mkdir(parents=True, exist_ok=True)
+            pid_path.write_text(str(process.pid), encoding="utf-8")
+            print(f"[launch] pid file     : {pid_path}")
+        except OSError as exc:
+            print(f"[launch] !! could not write pid file {args.pid_file!r}: {exc}", file=sys.stderr)
     if args.wait:
         return wait_for_cdp(args.port, args.wait_timeout)
     print("[launch] (browser keeps running after this script exits; attach tools to the CDP endpoint)")

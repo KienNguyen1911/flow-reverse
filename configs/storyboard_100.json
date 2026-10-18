@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "project_id": "<uuid dự án Flow — có thể truyền qua API thay vì để ở đây>",
+  "shots": [
+    {
+      "id": "anchor_char_01",
+      "mode": "t2i",
+      "prompt": "Character master: cô gái trẻ tóc đen ngắn, áo khoác xanh navy, nhìn thẳng camera, nền studio trắng, ánh sáng mềm",
+      "seed": 123456789,
+      "filename": "char_master_01.png"
+    },
+    {
+      "id": "anchor_env_01",
+      "mode": "t2i",
+      "prompt": "Environment master: thung lũng sương sớm, núi đá vôi, mặt hồ phẳng lặng, nắng bình minh vàng nhạt",
+      "seed": 987654321,
+      "filename": "env_master_01.png"
+    },
+    {
+      "id": "scene_001_shot_001",
+      "mode": "i2i",
+      "depends_on_shot_id": "anchor_char_01",
+      "prompt": "Nhân vật chính đứng bên hồ, góc máy ngang tầm mắt, giữ nguyên nhân dạng và trang phục như ảnh tham chiếu, sương nhẹ buổi sớm",
+      "filename": "scene_001_shot_001.png"
+    },
+    {
+      "id": "scene_001_shot_002",
+      "mode": "i2i",
+      "depends_on_shot_id": "anchor_env_01",
+      "prompt": "Toàn cảnh thung lũng từ trên cao theo bố cục ảnh tham chiếu, thêm vài con thuyền nhỏ trôi trên hồ",
+      "filename": "scene_001_shot_002.png"
+    },
+    {
+      "id": "scene_002_shot_001",
+      "mode": "i2i",
+      "reference_image_path": "out/outputs/<project>/char_master_01.png",
+      "prompt": "Cận cảnh nhân vật quay đầu nhìn về phía hồ, biểu cảm tò mò, giữ nguyên nhân dạng và trang phục",
+      "filename": "scene_002_shot_001.png"
+    },
+    {
+      "id": "broll_001",
+      "mode": "t2i",
+      "prompt": "B-roll: mặt hồ lăn tăn sóng nhẹ lúc hoàng hôn, phản chiếu núi đá vôi, tone ấm"
+    }
+  ]
+}

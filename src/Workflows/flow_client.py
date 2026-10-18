@@ -24,6 +24,7 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -48,6 +49,7 @@ from ..Bridge.flow_bridge import (
     jitter,
     parse_app_capture,
     parse_batchexecute_text,
+    parse_captured_args,
 )
 from .flow_models import (
     ASPECT_DEFAULT,
@@ -56,12 +58,17 @@ from .flow_models import (
     GeneratedImage,
     GenerationResult,
     ProjectInfo,
+    ReferenceTemplate,
     UUID_RE,
+    build_args_from_template,
     build_create_project_args,
     build_image_args,
     build_uptedb_args,
+    captured_args_has_reference,
     encode_batchexecute_form,
+    find_uuid_candidates,
     generate_seed,
+    mask_template_token,
     new_uuids,
     parse_project_ref,
     parse_uptedb_projects,
@@ -176,6 +183,18 @@ class CircuitBreaker:
 def _slugify(text: str, max_len: int = 40) -> str:
     s = re.sub(r"[^a-z0-9]+", "_", (text or "").lower()).strip("_")
     return (s[:max_len].strip("_") or "image")
+
+
+def sha256_file(path: Path | str, chunk: int = 1 << 20) -> str:
+    """Content hash used as the per-account reference cache key (plan §2)."""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        while True:
+            block = fh.read(chunk)
+            if not block:
+                break
+            h.update(block)
+    return h.hexdigest()
 
 
 class FlowClient:
@@ -310,6 +329,86 @@ class FlowClient:
             br.nav_project(pid.lower())
             return ProjectInfo(id=pid.lower(), title=title_echo, source="created")
 
+    # -- reference image (i2i) --------------------------------------------------- #
+
+    def upload_reference_image(
+        self,
+        project_id: str,
+        file_path: str | Path,
+        *,
+        prompt_probe: str = "reference",
+        on_event: Optional[EventFn] = None,
+    ) -> ReferenceTemplate:
+        """Attach a local image and capture the app's own i2i request (0 credit).
+
+        Google Flow's upload RPC is NOT reverse-engineered: the app uploads the
+        file itself when we attach it via its ``<input type=file>`` (Playwright
+        ``set_input_files``). We then let the app build its generate request and
+        capture it blocked — that request IS the i2i template (arg layout + the
+        per-account media reference). Callers cache the result in
+        ``AccountPoolManager.registry`` keyed by account + file sha256, so each
+        account uploads a given reference at most once (plan §2).
+
+        ``prompt_probe`` is typed into the composer only to trigger the request;
+        the stored template's prompt is textually substituted at fire time.
+        """
+        ev = self._mk_events(on_event)
+        project = parse_project_ref(project_id)
+        path = Path(file_path)
+        if not path.is_file():
+            raise BridgeError(f"Không thấy file ảnh tham chiếu: {path}")
+        prompt_probe = (prompt_probe or "").strip() or "reference"
+        sha = sha256_file(path)
+        run_dir = self._new_run_dir(f"ref_{path.stem}")
+        with FlowBridge(self.cdp_url) as br:
+            try:
+                ev("step", f"attach tab Flow: {br.page.url}")
+                br.install_hook()
+                ev("step", "hook armed: ogiZ0b của app sẽ bị chặn khi capture (0 credit)")
+                br.nav_home()
+                ev("step", f"mở dự án {project_id[:8]}...")
+                br.nav_project(project)
+                ev("step", f"đính ảnh tham chiếu vào composer: {path.name} (app tự upload)")
+                info = br.attach_reference(path)
+                ev("info", f"attach OK: input #{info['input_index']} accept={info['accept']!r} preview={info['preview_seen']}", info)
+                ev("step", "nhập prompt thăm dò + bấm Generate (chặn) để app dựng request i2i…")
+                br.type_prompt(prompt_probe)
+                br.click_generate(timeout_s=30.0)
+                cap = br.wait_capture(30.0)
+                token, _at = parse_app_capture(cap.body)
+                (run_dir / "app_request_body.txt").write_text(cap.body, encoding="utf-8")
+                app_args = parse_captured_args(cap.body)
+                has_ref = captured_args_has_reference(app_args)
+                if has_ref is False:
+                    raise BridgeError(
+                        "Capture giống hệt request t2i — ảnh tham chiếu chưa kịp đính/upload. "
+                        "Thử lại (chậm hơn) hoặc kiểm tra UI Flow."
+                    )
+                candidates = find_uuid_candidates(app_args, exclude=[project])
+                masked = mask_template_token(app_args)
+                (run_dir / "reference_template.pretty.json").write_text(
+                    json.dumps(masked, ensure_ascii=False, indent=1), encoding="utf-8"
+                )
+                tpl = ReferenceTemplate(
+                    sha256=sha,
+                    project_id=project,
+                    prompt=prompt_probe,
+                    media_id=(candidates[0] if candidates else None),
+                    candidates=candidates,
+                    template_args=masked,
+                    source_path=str(path),
+                    captured_ts=int(cap.ts_ms or time.time() * 1000),
+                )
+                ev("info", f"template i2i OK: {len(candidates)} uuid tham chiếu (media≈{tpl.media_id}), token {len(token)} ký tự, sha {sha[:8]}…")
+                self._reload_safe(br, ev)
+                return tpl
+            except Exception:
+                try:
+                    br.reload(settle_s=4.0)
+                except Exception:  # noqa: BLE001
+                    pass
+                raise
+
     # -- generation ------------------------------------------------------------ #
 
     def generate_image(
@@ -322,9 +421,15 @@ class FlowClient:
         dry_run: bool = False,
         poll_timeout_s: float = 150.0,
         anti_abuse_retries: int = 1,
+        reference: Optional[ReferenceTemplate] = None,
         on_event: Optional[EventFn] = None,
     ) -> GenerationResult:
-        """Generate one image via Bridge Mode. ~1 credit if accepted, 0 if rejected."""
+        """Generate one image via Bridge Mode. ~1 credit if accepted, 0 if rejected.
+
+        ``reference`` (i2i): pass a :class:`ReferenceTemplate` captured (once
+        per account) by :meth:`upload_reference_image`; the request is then a
+        replay of the app's own i2i args with a fresh token/seed/prompt.
+        """
         ev = self._mk_events(on_event)
         project = parse_project_ref(project_id)
         prompt = (prompt or "").strip()
@@ -345,6 +450,7 @@ class FlowClient:
                 seed=seed_v,
                 dry_run=dry_run,
                 poll_timeout_s=poll_timeout_s,
+                reference=reference,
                 ev=ev,
             )
             if dry_run or res.status == "dry_run":
@@ -379,6 +485,7 @@ class FlowClient:
         dry_run: bool,
         poll_timeout_s: float,
         ev: EventFn,
+        reference: Optional[ReferenceTemplate] = None,
     ) -> GenerationResult:
         run_dir = self._new_run_dir(prompt)
         t0 = time.time()
@@ -402,7 +509,17 @@ class FlowClient:
                 (run_dir / "app_request_body.txt").write_text(cap.body, encoding="utf-8")
 
                 u1, u2, gen_id = new_uuids()
-                args = build_image_args(project_id, prompt, token, seed, aspect, u1, u2, gen_id)
+                if reference is not None:
+                    args, replaced = build_args_from_template(
+                        reference.template_args,
+                        token=token, seed=seed, prompt=prompt,
+                        old_prompt=reference.prompt, u1=u1, u2=u2, gen_id=gen_id,
+                    )
+                    ev("info",
+                       f"i2i template replay: ref sha {reference.sha256[:8]}… (media≈{reference.media_id or '?'}), "
+                       f"thay {replaced}")
+                else:
+                    args = build_image_args(project_id, prompt, token, seed, aspect, u1, u2, gen_id)
                 body = encode_batchexecute_form("ogiZ0b", args, at_param)
                 (run_dir / "our_request_body.txt").write_text(body, encoding="utf-8")
                 (run_dir / "our_args.pretty.json").write_text(json.dumps(args, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -416,12 +533,17 @@ class FlowClient:
 
                 base_meta = {
                     "kind": "dry_run" if dry_run else "generate",
+                    "mode": "i2i" if reference is not None else "t2i",
                     "prompt": prompt, "project_id": project_id, "seed": seed, "aspect": aspect,
                     "generation_id": gen_id, "uuid1": u1, "uuid2": u2,
                     "token_len": len(token), "app_reqid": app_reqid,
                     "created_ts": datetime.now().isoformat(timespec="seconds"),
                     "run_dir": str(run_dir),
                 }
+                if reference is not None:
+                    base_meta["reference_sha256"] = reference.sha256
+                    base_meta["reference_media_id"] = reference.media_id
+                    base_meta["reference_source"] = reference.source_path
 
                 if dry_run:
                     base_meta["status"] = "dry_run"

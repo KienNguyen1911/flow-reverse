@@ -15,9 +15,14 @@ __pycache__/
 .venv/
 venv/
 
+# ==== Config nhạy cảm =======================================================
+# Cache tham chiếu i2i per-account (media_id + template args — dấu vết phiên)
+configs/reference_media_cache.json
+
 # ==== Web ===================================================================
 web/node_modules/
 web/dist/
+*.tsbuildinfo
 
 # ==== Khác ==================================================================
 *.log

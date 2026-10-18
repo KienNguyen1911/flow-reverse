@@ -1,0 +1,7 @@
+{
+  "target_jobs_per_account": 25,
+  "max_active_browsers": 4,
+  "port_base": 9222,
+  "auto_discover": true,
+  "accounts": []
+}
