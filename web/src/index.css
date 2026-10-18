@@ -1,0 +1,89 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Be Vietnam Pro", ui-sans-serif, system-ui, "Segoe UI", Roboto, Arial, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, "Cascadia Code", Consolas, monospace;
+
+  /* Darkroom palette. One accent: banana yellow (Nano Banana model tie-in). */
+  --color-ink: #0b0c0e;
+  --color-panel: #131417;
+  --color-panel2: #17191d;
+  --color-line: #232529;
+  --color-line2: #2e3138;
+  --color-fg: #f2f1ec;
+  --color-dim: #b9bcc4;
+  --color-mut: #85898f;
+  --color-acc: #f2c84b;
+  --color-acc2: #ffd76a;
+  --color-accink: #191302;
+  --color-ok: #5fd48f;
+  --color-warn: #ff9e64;
+  --color-err: #f2707a;
+
+  /* Shape lock: panels 14px, controls 10px, chips pill. */
+  --radius-panel: 14px;
+  --radius-ctl: 10px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--color-ink);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-acc) 35%, transparent);
+}
+
+/* Thin dark scrollbars for the log + gallery. */
+.slim-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line2) transparent;
+}
+.slim-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.slim-scroll::-webkit-scrollbar-thumb {
+  background: var(--color-line2);
+  border-radius: 8px;
+}
+.slim-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Confirm dialog. */
+dialog.confirm-dialog {
+  border: 1px solid var(--color-line2);
+  border-radius: var(--radius-panel);
+  background: var(--color-panel);
+  color: var(--color-fg);
+  padding: 0;
+  width: min(480px, calc(100vw - 2rem));
+  box-shadow: 0 24px 80px rgb(0 0 0 / 0.6);
+}
+dialog.confirm-dialog::backdrop {
+  background: rgb(4 5 7 / 0.72);
+  backdrop-filter: blur(3px);
+}
+dialog.confirm-dialog {
+  margin: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

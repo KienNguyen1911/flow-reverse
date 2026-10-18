@@ -1,0 +1,28 @@
+# ==== Runtime & nhạy cảm (KHÔNG BAO GIỜ commit) ==============================
+# Profile CloakBrowser: cookie phiên, user_data (hàng trăm MB)
+browser_vault/
+
+# Capture mạng (token reCAPTCHA, `at`, request/response bodies của app)
+traces/
+
+# Artifact chạy: ảnh, response, meta, bridge_state, UI shots
+out/
+
+# ==== Python ================================================================
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ==== Web ===================================================================
+web/node_modules/
+web/dist/
+
+# ==== Khác ==================================================================
+*.log
+*.local
+.env
+.env.*
+.DS_Store
+Thumbs.db
