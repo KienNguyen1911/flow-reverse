@@ -9,6 +9,7 @@
 > `200 OK` (`di`=258ms) → project mới `d3059ec6-a97c-41c1-9a25-40fac3954a43`, **title tùy ý được chấp nhận**
 > ("Client Test (delete me)"), app SPA-nav vào project mới và load OK (Zzl0ze/ngNC2/mrlkwd đều 200).
 > **0 credit** (tạo project miễn phí). Response lưu: `traces/phase4/jhpbke_replay_response.txt`.
+> Client production dùng đúng args này: `FlowClient.create_project()` (`src/Workflows/flow_client.py`).
 
 ---
 
@@ -44,7 +45,8 @@ at=AFfZSpgmiwic4dtoi0JlcRidGLyV:1792315115087&
 | `[2]` | `[null, 22]` | Kích hoạt tool 22 (công cụ ảnh / PINHOLE) cho project mới | Inference mạnh (22 = tool ảnh, khớp `KV2T2d [22]` + `ngNC2` trả `beluga_display`) |
 
 Tiêu đề do **client sinh theo format ngôn ngữ**: `"<TênTháng> <Ngày> - <HH:MM>"` (vi: `Tháng 10 18 - 16:18`).
-Chưa kiểm chứng việc server chấp nhận tiêu đề tùy ý / đổi tên (TODO Phase 4).
+**Đã kiểm chứng (replay Phase 4):** server lưu tiêu đề tùy ý nguyên văn (vd `Client Test (delete me)` — xem
+ghi chú đầu tài liệu). RPC đổi tên project thì chưa capture.
 
 ## 3. Response (Observed)
 

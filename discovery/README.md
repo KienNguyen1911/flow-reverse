@@ -1,11 +1,11 @@
 # discovery — Vòng lặp Khám phá UI → Mạng → Đặc tả
 
-Thư mục này chứa các công cụ cho **Pha Khám phá & Bảo trì** (theo AGENTS.md mục 2). Vòng lặp gồm 4 bước: khởi chạy trình duyệt → chạy sniffer → thao tác UI qua browser-harness (có ghi mốc thời gian) → chạy differential analysis.
+Thư mục này chứa các công cụ cho **Pha Khám phá & Bảo trì** (theo AGENTS.md mục 2). Vòng lặp gồm 4 bước: khởi chạy trình duyệt → chạy sniffer → thao tác UI qua browser-use (LLM điều khiển, có ghi mốc thời gian) → chạy differential analysis.
 
 Luồng dữ liệu:
 
 ```text
-launch_profile.py ──▶ Chromium (CDP port 9222) ◀── browser-harness (thao tác UI)
+launch_profile.py ──▶ Chromium (CDP port 9222) ◀── browser-use (thao tác UI qua CDP)
                               ▲
                               │ connect_over_cdp
                         sniffer.py ──▶ traces/raw_trace_<UTC>.jsonl
@@ -15,7 +15,7 @@ launch_profile.py ──▶ Chromium (CDP port 9222) ◀── browser-harness (
                                        docs/api_specs/<feature>.md  (đặc tả chốt lại)
 ```
 
-> **Nguyên tắc vàng:** sniffer và browser-harness là **hai client CDP độc lập** attach vào **cùng một trình duyệt**. Không bao giờ mở trình duyệt thứ hai trên cùng profile (Chrome khóa `user_data_dir`).
+> **Nguyên tắc vàng:** sniffer và browser-use là **hai client CDP độc lập** attach vào **cùng một trình duyệt**. Không bao giờ mở trình duyệt thứ hai trên cùng profile (Chrome khóa `user_data_dir`).
 
 ---
 
@@ -42,9 +42,9 @@ python discovery/sniffer.py --out-dir traces --types xhr,fetch,websocket --max-b
 - Body nhị phân/protobuf được ghi dạng base64 kèm `"encoding": "base64"`; body bị cắt theo `--max-body` được đánh dấu `"truncated": true`.
 - Response streaming (`text/event-stream`) và response redirect **không lấy body** (tránh treo sniffer khi stream chưa kết thúc) — chúng có `resp_body: null` + `body_error` giải thích.
 
-## Bước 3 — Thao tác UI qua browser-harness, ghi mốc thời gian
+## Bước 3 — Thao tác UI qua browser-use, ghi mốc thời gian
 
-Dùng **browser-harness** attach vào `http://127.0.0.1:9222` và thực hiện luồng cần khảo sát (ví dụ: tạo project → tạo ảnh).
+Dùng **browser-use** attach vào `http://127.0.0.1:9222` và thực hiện luồng cần khảo sát (ví dụ: tạo project → tạo ảnh).
 
 **Lặp lại thao tác 2 lần với 1 tham số khác nhau** (ví dụ prompt ảnh khác nhau) để có dữ liệu diff ở bước 4. Trước/sau **mỗi** thao tác quan trọng, ghi lại mốc thời gian (epoch ms) — dùng để ánh xạ *Thao tác UI X → Request Y* khi đối chiếu JSONL (`ts_ms` của event nằm giữa 2 mốc chính là request do thao tác đó sinh ra).
 
@@ -70,7 +70,16 @@ python discovery/payload_differ.py traces/raw_trace_<A>.jsonl traces/raw_trace_<
 - Body nhị phân/protobuf → size, content-type, **offset byte khác đầu tiên**, preview ~100 bytes hex (kèm text preview nếu là UTF-8).
 - `--url-contains` thu hẹp phạm vi (nên lọc theo endpoint nhóm `batchexecute` / `api` để diff sạch); `--out` xuất report JSON đầy đủ để agent chính đọc và viết đặc tả.
 
-Sau bước 4, kết quả phân tích được chốt thành tài liệu tại `docs/api_specs/<feature>.md` kèm DTO — và từ đó chuyển sang Pha 4 (đóng gói module thực thi cố định trong `src/Workflows`, `src/Bridge`).
+Sau bước 4, kết quả phân tích được chốt thành tài liệu tại `docs/api_specs/<feature>.md` kèm DTO — rồi chuyển sang Pha 4 (đóng gói module thực thi cố định trong `src/Workflows`, `src/Bridge`; **đã hoàn tất**: xem `docs/phase4_report.md` §5 và `docs/playground.md`).
+
+---
+
+## Các script khác trong thư mục
+
+| File | Vai trò |
+| :--- | :--- |
+| `decode_batchexecute.py` | Giải mã request/response `batchexecute` (form-encoded + chunked XSSI) từ trace JSONL → JSON pretty trong `traces/decoded/`. Dùng: `python discovery/decode_batchexecute.py traces/raw_trace_<UTC>.jsonl` |
+| `test_generate_2_images.py` | Script test bridge mode đời đầu (R2, 2 ảnh, có `--dry-run`), chạy qua CLI `browser-harness` (**legacy**). Bản production thay thế: `python -m src.Workflows.flow_client generate ...` (Playwright thuần, `src/Bridge/flow_bridge.py`) |
 
 ---
 

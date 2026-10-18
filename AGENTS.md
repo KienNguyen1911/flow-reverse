@@ -75,7 +75,9 @@ project-root/
 ├── traces/                          # Chứa log mạng và HAR thu thập được
 ├── docs/
 │   └── api_specs/                   # Tài liệu đặc tả Schema sau khi phân tích
+├── web/                             # Frontend playground Flow Bench (React 19 + Vite + Tailwind)
 └── src/                             # Mã nguồn vận hành chính thức (Production)
     ├── BrowserHost/                 # Quản lý vòng đời CloakBrowser & Profile
     ├── Bridge/                      # Cầu nối WebSocket / In-Page Execution
+    ├── WebUI/                       # FastAPI backend + job manager cho playground (Flow Bench)
     └── Workflows/                   # Các pipeline thực thi cố định (Deterministic)

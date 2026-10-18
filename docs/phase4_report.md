@@ -68,7 +68,7 @@ CloakBrowser (profile flow_main, CDP :9222, đã login sẵn)
 [5] Builder của TA (Python) dựng body mới:
        • prompt/seed riêng, UUID CHỮ HOA (4 uuid: u1, u2, gen)
        • _reqid = app_reqid + 100000
-       • fire trong ≤ ~100 ms sau response reload (E8: 72 ms)
+       • fire ngay khi capture request app xong (E8 đo 72 ms sau handshake reload)
    │
 [6] fetch in-page (credentials:'include', x-same-domain, header bypass x-harness-ours)
        → long-poll ~18–24 s → payload 200 OK

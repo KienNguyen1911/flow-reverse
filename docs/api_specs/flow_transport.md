@@ -26,7 +26,7 @@ POST https://flow.google.com/_/AiSandboxAngularFrontend/data/batchexecute
 | `bl` | `boq_labs-ai-sandbox-frontend_20261016.00_p1` | Build label của frontend | Lấy từ page; đổi theo deploy |
 | `f.sid` | `744816825352939461` | Session id của page | Đổi mỗi lần load trang (2 phiên capture khác nhau: `744816825352939461`, `1661927511675113672`) |
 | `hl` | `vi` | Ngôn ngữ UI | Theo locale phiên |
-| `_reqid` | `1058716`, `2458716`, `2558716`, `2658716` | Số thứ tự request | Opaque; tăng dần trong phiên (Inference: server không validate chặt — TODO kiểm chứng) |
+| `_reqid` | `1058716`, `2458716`, `2558716`, `2658716` | Số thứ tự request | Opaque; tăng dần trong phiên. **Observed:** server không validate chặt — `app_reqid + 100000` được chấp nhận (E8, R2, production) |
 | `rt` | `c` | Không rõ | Giữ nguyên |
 
 ### 1.2 Headers (Observed)
@@ -58,7 +58,7 @@ f.req=<urlencoded JSON>&at=<XSRF token>&
 - Format: `AFfZSpgmiwic4dtoi0JlcRidGLyV:1792315115087` = `<22 ký tự> : <epoch_ms lúc mint>`.
 - **Mint một lần lúc page load** (ms `1792315115087` nằm trong lúc load trang home; trước request đầu tiên).
 - Không đổi suốt vòng đời SPA: **30/30 request** trong trace đầu dùng đúng 1 giá trị, xuyên qua cả điều hướng home → project.
-- Inference: mint lại khi full page load; nguồn cấp phát trong JS bootstrap (TODO Phase 4: tìm vị trí trong page).
+- **Observed (Phase 4 + production):** giá trị đọc được trực tiếp từ `window.WIZ_global_data.SNlM0e`; mint lại khi full page load (đã kiểm chứng qua request thật — xem §4).
 
 ### 1.4 Response (Observed)
 
@@ -75,7 +75,7 @@ f.req=<urlencoded JSON>&at=<XSRF token>&
 - Sau đó là các **chunk có độ dài đứng trước** (số nguyên 1 dòng, rồi 1 dòng JSON).
 - Dòng kết thúc: `[["e",4,null,null,<byte_count>]]`.
 - Hàng kết quả: `["wrb.fr","<rpcid>","<payload>", ...]` — `payload` là **chuỗi JSON lồng** (double-encoded), cần `json.loads` lần 2.
-- HTTP luôn `200` trong các quan sát; **TODO**: định dạng lỗi RPC (chưa kích hoạt được lỗi để quan sát).
+- HTTP `200` cũng xảy ra khi RPC lỗi: frame `wrb.fr` payload `null`, cột 5 = **gRPC canonical status** (`[3]` INVALID_ARGUMENT; `[7,...]` PERMISSION_DENIED/anti-abuse). HTTP `401/403/429` ở tầng transport có thể gặp (client dùng làm tín hiệu circuit breaker). Chi tiết: `flow_create_image.md` §7.5.2 #15.
 
 ### 1.5 Codec tham chiếu (Python, stdlib)
 
@@ -149,9 +149,9 @@ Nội bộ tool: ảnh = tool id **22**, tên nội bộ **`PINHOLE`**, model **
 2. **Điều hướng SPA** (home → project): `f.sid`, `at` giữ nguyên.
 3. **Request nghiệp vụ**: 1 RPC/lần, đúng 1 token `at` cố định.
 
-## 4. Câu hỏi mở (cho Phase 4)
+## 4. Câu hỏi cũ (đã trả lời ở Phase 4)
 
-- [ ] Nguồn cấp `at`/`bl`/`f.sid` trong page (JS bootstrap / inline HTML) — cần để client tự lấy.
-- [ ] Định dạng lỗi RPC (rate limit, invalid args, 401/403).
-- [ ] `_reqid` có được server validate không.
-- [ ] Có cần header/cookie đặc biệt nào khác không (thử replay tối thiểu: chỉ cookie + content-type + x-same-domain + f.req + at).
+- [x] **Nguồn cấp `at`/`bl`/`f.sid`:** `at` = `window.WIZ_global_data.SNlM0e`; `f.sid` = `FdrFJe`; `bl`/`hl`/`_reqid` = performance entry `batchexecute` gần nhất. Client tự đọc được hoàn toàn — implemented: `FlowBridge.session_ctx()` (`src/Bridge/flow_bridge.py`).
+- [x] **Định dạng lỗi RPC:** HTTP 200 + frame `wrb.fr` payload null + cột 5 gRPC status (`[3]`, `[7]...`); HTTP 401/403/429 ở tầng transport — xem §1.4 và `flow_create_image.md` §7.5.2 #15.
+- [x] **`_reqid` validate:** không chặt — `app_reqid + 100000` pass ổn định (E8, R2, production).
+- [x] **Header/cookie tối thiểu:** cookie phiên + `content-type` + `x-same-domain: 1` là đủ (E7/E8 + production); header bypass riêng của ta được server bỏ qua.

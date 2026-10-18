@@ -46,10 +46,12 @@ POST https://www.google.com/recaptcha/enterprise/reload?k=6LdsFiUsAAAAAIjVDZcuLh
 ```
 (khối "project ref" bị lặp 2 lần — nhúng token ở cả hai)
 
-> ✅ **Giải pháp đã kiểm chứng (E7/E8 — xem §7.5):** bắt token từ **response `reload`** khi app tự chạy
-> handshake (trigger bằng click Generate thật trên UI; request `ogiZ0b` của app bị hook chặn → 0 credit).
-> Đọc qua **CDP Network/sniffer** — bắt buộc vì request `reload` phát từ iframe cross-origin
-> `www.google.com` nên hook in-page không thấy được. Token này nhúng thẳng vào `ogiZ0b` của ta → server chấp nhận.
+> ✅ **Giải pháp đã kiểm chứng (E7/E8 + production — xem §7.5):** token chỉ cần đọc từ **body của chính
+> request `ogiZ0b`** mà app tự bắn sau handshake: hook in-page chặn request đó (0 credit) và capture
+> body qua `input.text()`; token nằm ngay trong args (`[1][0][7][10][0]`).
+> Request handshake `reload` phát từ iframe cross-origin `www.google.com` nên hook in-page không thấy —
+> nhưng **không cần** thấy: token app mint ra đã được nhúng sẵn vào request `ogiZ0b` mà ta capture.
+> (Sniffer CDP Network là đường dự phòng/chẩn đoán, không còn là bắt buộc.)
 > Đường (a) `grecaptcha.enterprise.execute`: mint được token `0cAFcWeA...` (~2510 ký tự, E4) nhưng replay
 > từng bị `UNUSUAL_ACTIVITY` **trong điều kiện builder cũ** (UUID thường, `_reqid` tự chế, gap ~8s) —
 > chưa cô lập lại với builder đã sửa (xem thể loại E9 ở §7.5.4).
@@ -241,8 +243,9 @@ def build_generate_args(a: GenerateImageArgs) -> list:
    (app truyền **`Request` object**, không phải string — `input.clone().text()` hoặc `input.text()` đều được),
    capture `{url, body, headers}`, rồi `Promise.reject(new Error('harness-blocked'))` → **app không tiêu credit**.
    (Bypass cho request của ta: header `x-harness-ours: 1` — server bỏ qua header lạ, E7/E8 chứng minh.)
-3. Click nút Generate như người dùng → app chạy handshake reCAPTCHA (`reload` từ iframe) — **bắt token từ
-   response reload** qua CDP Network (sniffer) đồng thời đọc token đó trong body app đã capture.
+3. Click nút Generate như người dùng → app chạy handshake reCAPTCHA (`reload` từ iframe) rồi tự bắn
+   request `ogiZ0b` — hook chặn + capture body. **Token đọc trực tiếp từ body capture**
+   (`args[1][0][7][10][0]`); `at` = param form trong body đó.
 4. **Builder của ta** dựng body `ogiZ0b` (ai cũng dựng được — xem §7.5.2).
 5. Fire trong page bằng `fetch(url, {method:'POST', credentials:'include', headers:{'content-type':...,
    'x-same-domain':'1'}, body})` → long-poll ~18–24s → payload (hoặc lỗi nhanh ≤3s).
@@ -254,7 +257,7 @@ def build_generate_args(a: GenerateImageArgs) -> list:
 |---|---|---|
 | 1 | UUID client (`[12]`, `[13]`, `[4][0]`) nên **CHỮ HOA** (dạng app: `1075A650-CD1A-...`) | So byte body app (E7). Chưa cô lập đơn biến — nhưng E8 dùng chữ hoa ⇒ PASS |
 | 2 | `_reqid` theo **counter thật**: base ngẫu nhiên ~58–59k (đổi mỗi page-load) + **+100000 mỗi request** | Session1: `58716,158716,...,2458716`; E8 dùng `app_reqid+100000` ⇒ PASS |
-| 3 | **Fire sớm sau reload** — E8: **72ms** sau reload response (app thật: 79–85ms); E6 với gap ~7.8s bị `UNUSUAL_ACTIVITY` | `GAP reload_resp -> our ogiZ0b: 72.4 ms` |
+| 3 | **Fire sớm ngay khi có token** — E8: **72ms** sau reload response (app thật: 79–85ms); E6 gap ~7.8s bị `UNUSUAL_ACTIVITY`. Production (`flow_bridge`): fire ngay sau khi capture request app, không chờ thêm | `GAP reload_resp -> our ogiZ0b: 72.4 ms` |
 | 4 | **HTTP headers** = app + (chỉ) header bypass của ta; browser tự thêm `sec-ch-ua*`, `referer: https://flow.google.com/` | So trace E6: tập header app ⊂ ta, khác duy nhất `x-harness-ours` |
 | 5 | Percent-encoding = **`encodeURIComponent` chuẩn** (space→`%20`); app body ↔ ta byte-identical ở tầng encode | `traces/phase4/enc_forensics.py`: 0 diff |
 | 6 | `at` param: giá trị **đã decode** rồi urlencode (`%3A`) — KHÔNG double-encode (bug đầu tiên gây 400) | ngNC2 replay ban đầu |
@@ -275,7 +278,7 @@ ref  = [None, 22, None, None, None, project_id, None, None, None, None, [recaptc
 spec = [None, None, None, seed, aspect, "BELUGA", None, ref, [[[prompt]]], None, None, None, u1, u2]
 args = [None, [spec], 1, ref, [gen]]           # u1,u2,gen = UUID4 .upper()
 ```
-- `seed` = uint32 ngẫu nhiên; `gen` được server **echo lại** trong response item (`generation_uuid`) → khóa đối chiếu kết quả.
+- `seed` = **int32** ngẫu nhiên (`randint(1, 2³¹−1)` — xem #14); `gen` được server **echo lại** trong response item (`generation_uuid`) → khóa đối chiếu kết quả.
 - E8 evidence: `seed=1363572693`, `gen=DC206280-27F9-4ABF-84F8-8843BE7C0673` (echo), `title="Purple teapot on wooden table"`.
 
 ### 7.5.4. Việc còn mở (E9 optional)
@@ -297,6 +300,10 @@ Script `discovery/test_generate_2_images.py` (bridge mode + retry type + `--dry-
   (seed/u1/u2/gen) — công cụ `traces/phase4/raw_byte_check.py`.
 - Bằng chứng: `out/test_2images_20261018_185519/` (metadata.json + response + JPEG);
   reject R1: `out/test_2images_20261018_184946/image_1_response.txt`.
+
+> **Production (kế tiếp R2):** quy trình này đã được port sang module Python thuần
+> (`src/Bridge/flow_bridge.py` + `src/Workflows/flow_client.py`, không dùng browser-harness/browser-use)
+> và playground web Flow Bench. Xem `docs/phase4_report.md` §5 và `docs/playground.md`.
 
 ## 8. Câu hỏi mở (Phase 4)
 
