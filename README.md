@@ -61,7 +61,7 @@ cd web && npm install && npm run build && cd ..
 python -m src.WebUI.app --port 8787 --open
 ```
 
-Tài liệu: [đặc tả protocol](docs/api_specs/) · [hướng dẫn playground](docs/playground.md) · [báo cáo tổng hợp](docs/phase4_report.md)
+Tài liệu: [cẩm nang học tập reverse API](docs/reverse_api_study_guide.md) · [đặc tả protocol](docs/api_specs/) · [hướng dẫn playground](docs/playground.md) · [báo cáo tổng hợp](docs/phase4_report.md)
 
 ## 5. Miễn trừ trách nhiệm
 

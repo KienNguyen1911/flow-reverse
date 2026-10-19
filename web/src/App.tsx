@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { BookOpen, Images, Sparkle, Users } from "@phosphor-icons/react";
+import { BookOpen, Code, Images, Sparkle, Users } from "@phosphor-icons/react";
 import { motion, useReducedMotion } from "motion/react";
 import { api } from "./api";
 import { useGallery, useJob, usePool, useProjects, useStatus } from "./hooks";
 import type { Job } from "./types";
 import { AccountPanel } from "./components/AccountPanel";
+import { ApiDocsPanel } from "./components/ApiDocsPanel";
 import { ComposePanel, type BatchRequest, type GenRequest } from "./components/ComposePanel";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Gallery } from "./components/Gallery";
@@ -15,7 +16,7 @@ import { TopBar } from "./components/TopBar";
 
 const PROJECT_KEY = "fb_project";
 
-type TabKey = "compose" | "gallery" | "accounts" | "guide";
+type TabKey = "compose" | "gallery" | "accounts" | "guide" | "docs";
 
 function msg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -79,9 +80,9 @@ export default function App() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (!e.altKey) return;
-      const idx = ["1", "2", "3", "4"].indexOf(e.key);
+      const idx = ["1", "2", "3", "4", "5"].indexOf(e.key);
       if (idx === -1) return;
-      const tabs: TabKey[] = ["compose", "gallery", "accounts", "guide"];
+      const tabs: TabKey[] = ["compose", "gallery", "accounts", "guide", "docs"];
       setActiveTab(tabs[idx]);
     };
     window.addEventListener("keydown", handler);
@@ -149,6 +150,7 @@ export default function App() {
         badge: pool && activeCount > 0 ? String(activeCount) : undefined,
       },
       { key: "guide" as TabKey, label: "Huong dan", icon: <BookOpen size={15} /> },
+      { key: "docs" as TabKey, label: "Docs API", icon: <Code size={15} /> },
     ],
     [pool, activeCount],
   );
@@ -256,6 +258,16 @@ export default function App() {
                   refreshStatus();
                 }}
               />
+            </motion.div>
+          )}
+
+          {activeTab === "docs" && (
+            <motion.div
+              initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.25, ease: "easeOut" }}
+            >
+              <ApiDocsPanel />
             </motion.div>
           )}
 

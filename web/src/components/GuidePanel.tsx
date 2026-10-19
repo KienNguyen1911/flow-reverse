@@ -189,7 +189,7 @@ export function GuidePanel() {
             <div className="flex items-center justify-between rounded-ctl border border-line2 bg-panel2 p-3">
               <span>Chuyen doi giua cac tab</span>
               <kbd className="rounded border border-line2 bg-panel px-2 py-1 font-mono text-[11px] text-fg">
-                Alt + 1-4
+                Alt + 1-5
               </kbd>
             </div>
             <div className="flex items-center justify-between rounded-ctl border border-line2 bg-panel2 p-3">
