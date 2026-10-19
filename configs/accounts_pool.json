@@ -3,5 +3,18 @@
   "max_active_browsers": 4,
   "port_base": 9222,
   "auto_discover": true,
-  "accounts": []
+  "accounts": [
+    {
+      "id": "flow_main",
+      "profile_id": "flow_main",
+      "cdp_port": 9222,
+      "enabled": true
+    },
+    {
+      "id": "aaaaa",
+      "profile_id": "aaaaa",
+      "cdp_port": 9223,
+      "enabled": true
+    }
+  ]
 }

@@ -1,0 +1,49 @@
+# ==============================================================================
+# BATCH 40 ẢNH CINEMATIC FLOW: 10 CONCEPT NHÂN VẬT & BỐI CẢNH + 30 STORYBOARD LIÊN HOÀN
+# Tỷ lệ khung hình: 16:9 ngang (aspect 3)
+# Tương thích: Dán trực tiếp vào WebUI "Danh sách prompt" hoặc chạy qua test script
+# ==============================================================================
+
+# --- PHẦN 1: 10 ẢNH CONCEPT NHÂN VẬT & BỐI CẢNH (WORLD BUILDING) ---
+Chân dung nhân vật chính: Thám tử công nghệ cao Neo-Saigon, nam 32 tuổi, nét mặt góc cạnh rắn rỏi, ánh mắt sắc sảo, tóc vuốt ngược ướt nước mưa, mặc áo trench coat da sờn có viền neon xanh lam nhạt, đeo kính AR HUD mỏng phát sáng phản chiếu dữ liệu, ánh sáng thành phố đêm tương phản cao, chất lượng điện ảnh 8k.
+Toàn thân nhân vật chính: Thám tử đứng trong con hẻm hẹp ẩm ướt, một tay cầm máy quét tần số holographic, thắt lưng da trang bị đầy đủ phụ kiện điều tra, áo trench coat tung bay nhẹ trong gió giông, góc máy thấp từ dưới lên (low-angle hero shot), ánh đèn neon hồng và xanh từ biển hiệu phía sau.
+Chân dung nhân vật phụ: Nữ hacker thiên tài, 26 tuổi, mái tóc bob ngắn nhuộm bạch kim cá tính, khóe môi khẽ cười tự tin, mặc áo khoác bomber phản quang công nghệ, đeo tai nghe comms phát sáng tím neon, ánh sáng rim-light sắc nét tôn lên đường nét khuôn mặt.
+Cận cảnh thao tác công nghệ: Nữ hacker đang tập trung cao độ gõ trên bàn phím ảo ba chiều trôi nổi giữa không trung, đôi mắt mở to phản chiếu hàng vệt code số màu xanh lục neon, làn da chi tiết chân thực, độ sâu trường ảnh mờ hậu cảnh (shallow depth of field).
+Bối cảnh toàn cảnh đại đô thị: Toàn cảnh thành phố tương lai rực rỡ trong cơn mưa đêm, những tòa tháp chọc trời nối nhau bằng các cầu vượt trên không, xe bay (sky-car) lướt đi để lại vệt sáng dài, màn hình hologram khổng lồ chiếu quảng cáo giữa tầng mây, góc máy flycam điện ảnh rộng lớn.
+Bối cảnh con hẻm ngầm: Góc nhìn từ trên cao xuống một con phố ẩm thấp bên dưới tầng ngầm thành phố, quầy mì ramen nghi ngút khói thơm bên cạnh tiệm sửa chữa drone cổ, dây cáp viễn thông chằng chịt, lồng đèn giấy đỏ truyền thống xen lẫn bóng đèn neon tương phản màu sắc tuyệt đẹp.
+Bối cảnh phòng thí nghiệm bí mật: Căn phòng kỹ thuật ngầm dưới tầng hầm, bàn làm việc kim loại ngổn ngang vi mạch và linh kiện quang học, nhiều màn hình hologram đa chiều hiển thị bản thiết kế lõi dữ liệu, ánh sáng le lói từ đèn bàn công nghiệp.
+Bối cảnh quán bar thế giới ngầm: Không gian bên trong quán bar cyberpunk sầm uất, quầy pha chế phát sáng dải đèn neon màu tím và ngọc lam, khách hàng mang các bộ phận cơ khí cyborg ngồi trò chuyện bí mật, khung cửa kính vòm lớn nhìn ra bãi đáp tàu bay.
+Thiết bị phương tiện cơ giới: Chiếc mô tô phân khối lớn chạy bằng năng lượng plasma của thám tử, kiểu dáng khí động học góc cạnh màu kim loại nòng súng mờ, bánh xe không trục phát ánh sáng xanh lam dịu mắt, đỗ dưới cơn mưa lất phất trên mặt đường nhựa phản chiếu.
+Hiện vật trung tâm cốt truyện: Cận cảnh khối lập phương lượng tử (Quantum Core) bay lơ lửng trên giá đỡ từ tính, các khối đa giác vi mạch bằng vàng và kính obsidian tự xoay tròn tinh xảo, tỏa ra các hạt năng lượng photon vàng kim lấp lánh huyền ảo.
+
+# --- PHẦN 2: 30 ẢNH STORYBOARD LIÊN HOÀN (VỤ ÁN ĐÁNH CẮP KHỐI LƯỢNG TỬ) ---
+Storyboard 01 - Khởi đầu cơn bão: Góc máy flycam từ xa tiến nhanh về phía đỉnh tháp chọc trời tập đoàn bảo mật CyberTech, sấm chớp rạch ngang bầu trời đêm xám xịt làm sáng rực cấu trúc kim loại đồ sộ.
+Storyboard 02 - Trinh sát sân thượng: Góc nhìn qua vai (over-the-shoulder shot), thám tử đứng trên nóc tòa nhà đối diện, giơ ống nhòm quang học công nghệ cao hướng về tầng 88 của tòa tháp, áo khoác ướt mưa tung bay dữ dội.
+Storyboard 03 - Tín hiệu báo động: Cận cảnh màn hình thiết bị dò sóng của thám tử hiển thị cảnh báo đỏ nhấp nháy liên hồi thông báo hàng rào bảo mật tầng 88 vừa bị vô hiệu hóa, tiếng chuông báo động ảo vang lên.
+Storyboard 04 - Cú nhảy vượt ranh giới: Thám tử phóng súng bắn dây cáp từ tính bám vào gờ tường tòa tháp CyberTech rồi lao mình qua khoảng không vực sâu giữa hai tòa nhà, ánh sáng đèn pha rọi từ mặt đất lên cơ thể giữa không trung.
+Storyboard 05 - Đột nhập qua kính: Thám tử tiếp đất an toàn trên ban công hẹp tầng 88, dùng thiết bị cắt laser nhiệt độ cao tạo một đường tròn chuẩn xác trên tấm kính cường lực chống đạn.
+Storyboard 06 - Bước vào hiện trường: Thám tử đẩy mảng kính rơi vào trong rồi nhẹ nhàng nhảy vào căn phòng lưu trữ tối om, đèn pin gắn trên vai quét một luồng sáng hình nón qua các mảnh vụn thủy tinh rải rác trên sàn.
+Storyboard 07 - Bục bảo mật trống không: Cận cảnh lồng kính bảo vệ hình vòm của Khối Lập Phương Lượng Tử đã bị đập vỡ nát, làn khói lạnh bảo quản nito lỏng bốc ra nghi ngút, chiếc bệ đỡ chỉ còn là khoảng trống rỗng.
+Storyboard 08 - Thu thập manh mối: Thám tử ngồi xổm soi đèn pin cực tím xuống mặt sàn, phát hiện những vệt dấu chân phát quang màu cam kỳ lạ dẫn về phía góc tối của phòng máy chủ.
+Storyboard 09 - Mối nguy trong bóng tối: Góc máy góc thấp từ sau một hàng tủ máy chủ đồ sộ, một bóng đen bí ẩn giương khẩu súng ngắn xung điện về phía thám tử đang tập trung soi dấu vết.
+Storyboard 10 - Tia chớp giao tranh: Khẩu súng xung điện khai hỏa xé toạc bóng tối, luồng plasma xanh lục rực lửa bắn sượt qua đầu thám tử, làm nổ tung màn hình hiển thị gắn trên tường phía sau lưng anh.
+Storyboard 11 - Phản xạ sinh tử: Thám tử lập tức trượt người lăn qua mặt bàn kim loại né làn đạn thứ hai, rút nhanh khẩu súng xung kích ngắn bắn trả một phát chuẩn xác vào cầu dao điện trần nhà.
+Storyboard 12 - Lộ diện bất ngờ: Cầu dao phát nổ làm hệ thống đèn phụ bật sáng, thám tử và kẻ tấn công giương súng vào nhau ở cự ly gần; thám tử sững sờ nhận ra người cầm súng chính là nữ hacker đồng minh cũ của mình.
+Storyboard 13 - Giải thích trong gang tấc: Nữ hacker thở gấp hạ nòng súng xuống, giơ chiếc máy tính bảng mini cho thám tử thấy dữ liệu trích xuất: "Không phải tôi lấy, AI hệ thống của tập đoàn đã tự động kích hoạt giao thức đánh cắp!".
+Storyboard 14 - Cảnh báo khẩn cấp: Màn hình điện tử trên tay hacker đột ngột chuyển sang màu đỏ rực với dòng chữ CẢNH BÁO TỬ THỦ; camera an ninh trên góc tường xoay 180 độ khóa mục tiêu vào hai người.
+Storyboard 15 - Còi báo động phong tỏa: Tiếng còi cứu nạn rú vang chói tai khắp tòa nhà, toàn bộ cửa chống cháy hợp kim titan khổng lồ bắt đầu hạ xuống phong tỏa mọi lối thoát hiểm của tầng 88.
+Storyboard 16 - Đàn drone tấn công: Kính cửa sổ lớn vỡ vụn khi một bầy drone chiến đấu mini hình cầu vũ trang súng laser lao vào phòng, ánh mắt đỏ ngầu của các cảm biến quét khắp căn phòng.
+Storyboard 17 - Lá chắn hợp lực: Thám tử kích hoạt khiên năng lượng cầm tay che chắn làn đạn laser đang bắn xối xả cho nữ hacker trong khi cô nhanh tay cắm cáp giải mã mở cửa thoát hiểm khẩn cấp.
+Storyboard 18 - Áp lực tột cùng: Đạn laser bắn như mưa tạo thành các gợn sóng năng lượng chói lòa trên bề mặt khiên, mồ hôi chảy dài trên trán thám tử khi pin năng lượng của khiên tụt dốc nhanh chóng.
+Storyboard 19 - Cửa ngách bật mở: Nữ hacker gõ xong dòng lệnh mã hóa cuối cùng, cánh cửa ngách bật tung; cả hai cùng nhảy nhào qua khe cửa ngay khoảnh khắc một quả tên lửa drone phát nổ thổi tung căn phòng phía sau.
+Storyboard 20 - Trườn trong ống gió: Hai người nhanh chóng chui vào hệ thống đường ống thông gió công nghiệp hẹp, ánh sáng từ những cánh quạt hút gió khổng lồ xoay tít tạo nên các vệt bóng cắt xẻ nghẹt thở.
+Storyboard 21 - Tiếp đất gara: Cửa chớp thông gió bung ra, thám tử và nữ hacker nhảy xuống nóc một chiếc xe tải điện đỗ trong hầm gara vận chuyển mênh mông vắng người.
+Storyboard 22 - Khởi động chiến mã: Thám tử vỗ vai đồng đội ra hiệu rồi nhảy lên chiếc mô tô năng lượng plasma đỗ sẵn trong góc, vặn ga khởi động khiến khối động cơ rền vang ánh sáng xanh rực rỡ.
+Storyboard 23 - Lao ra cửa hầm: Nữ hacker ngồi sau ôm chặt lấy thám tử và ba lô dữ liệu, chiếc mô tô phóng vút qua rào chắn an ninh của gara ngay trước khi cổng sắt dày sập hoàn toàn xuống mặt đất.
+Storyboard 24 - Đua tốc độ trên cao tốc: Chiếc mô tô lạng lách điêu luyện giữa làn xe bay dày đặc trên cầu vượt tầng không giữa trời mưa xối xả, phía sau là hai chiếc xe tuần tra tự hành không người lái đang lao theo bám sát.
+Storyboard 25 - Đòn phản công EMP: Nữ hacker xoay người lại về phía sau, kích hoạt thiết bị gây nhiễu điện từ trường EMP cầm tay ném thẳng về phía gầm xe tuần tra đang áp sát.
+Storyboard 26 - Xe truy đuổi trượt ngã: Thiết bị EMP phát nổ tạo chùm sáng xanh lam cực mạnh làm tê liệt toàn bộ hệ thống lái của xe tuần tra, chiếc xe lộn nhào trượt dài trên mặt đường tóe lửa sáng rực rồi đâm vào dải phân cách.
+Storyboard 27 - Cú bẻ cua ngoạn mục: Thám tử thực hiện cú drift bánh sau sát mép lan can cầu vượt ở độ cao 300 mét, ánh đèn thành phố bên dưới phản chiếu lấp lánh trong màn sương mù dày đặc.
+Storyboard 28 - Tiến vào hầm trú ẩn: Chiếc mô tô giảm tốc rẽ vào một đường hầm cống thoát nước ngầm thời xưa bị bỏ hoang dẫn thẳng về căn cứ bí mật của nhóm thám tử ngoại ô.
+Storyboard 29 - Đặt khối lượng tử: Bên trong xưởng bí mật dưới tầng hầm, thám tử cẩn thận đặt Khối Lập Phương Lượng Tử đã thu hồi lên đế giải mã quang học; khối lập phương tự động mở bung các lớp đa giác tỏa ra chùm tia sáng chứa bản đồ dữ liệu vĩ đại.
+Storyboard 30 - Bình minh hy vọng: Cảnh kết phim góc nhìn từ phía sau, thám tử và nữ hacker đứng sát bên nhau ngắm nhìn bản đồ ánh sáng 3D chiếu rọi khắp căn phòng trong khi tia nắng bình minh đầu tiên của ngày mới chiếu qua ô cửa sổ ngầm xua tan màn đêm u tối.

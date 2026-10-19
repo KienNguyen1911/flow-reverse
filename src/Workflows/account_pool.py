@@ -270,6 +270,33 @@ class AccountPoolManager:
             self._log(f"[pool] không quét được browser_vault: {exc}")
         return out
 
+    def _save_config(self) -> None:
+        raw: dict = {}
+        try:
+            if self.config_path.exists():
+                raw = json.loads(self.config_path.read_text(encoding="utf-8"))
+                if not isinstance(raw, dict):
+                    raw = {}
+        except Exception:  # noqa: BLE001
+            raw = {}
+        raw["target_jobs_per_account"] = self.target_jobs_per_account
+        raw["max_active_browsers"] = self.max_active_browsers
+        raw.setdefault("port_base", self.port_base)
+        raw.setdefault("auto_discover", self.auto_discover)
+        if self._explicit_accounts:
+            raw["accounts"] = [
+                {"id": a.id, "profile_id": a.profile_id, "cdp_port": a.cdp_port,
+                 "enabled": a.enabled, **({"note": a.note} if a.note else {})}
+                for a in self.accounts
+            ]
+        else:
+            raw.setdefault("accounts", [])
+        try:
+            self.config_path.parent.mkdir(parents=True, exist_ok=True)
+            self.config_path.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except OSError as exc:  # noqa: BLE001
+            self._log(f"[pool] không ghi được config: {exc}")
+
     def update_config(self, target_jobs_per_account: Optional[int] = None,
                       max_active_browsers: Optional[int] = None) -> dict:
         """Persist tuning knobs (UI chỉnh ``target_jobs_per_account``)."""
@@ -285,35 +312,162 @@ class AccountPoolManager:
                     raise ValueError("max_active_browsers phải trong 1..16")
                 self.max_active_browsers = m
 
-            raw: dict = {}
-            try:
-                if self.config_path.exists():
-                    raw = json.loads(self.config_path.read_text(encoding="utf-8"))
-                    if not isinstance(raw, dict):
-                        raw = {}
-            except Exception:  # noqa: BLE001
-                raw = {}
-            raw["target_jobs_per_account"] = self.target_jobs_per_account
-            raw["max_active_browsers"] = self.max_active_browsers
-            raw.setdefault("port_base", self.port_base)
-            raw.setdefault("auto_discover", self.auto_discover)
-            if self._explicit_accounts:
-                raw["accounts"] = [
-                    {"id": a.id, "profile_id": a.profile_id, "cdp_port": a.cdp_port,
-                     "enabled": a.enabled, **({"note": a.note} if a.note else {})}
-                    for a in self.accounts
-                ]
-            else:
-                raw.setdefault("accounts", [])
-            try:
-                self.config_path.parent.mkdir(parents=True, exist_ok=True)
-                self.config_path.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            except OSError as exc:  # noqa: BLE001
-                self._log(f"[pool] không ghi được config: {exc}")
+            self._save_config()
             return {
                 "target_jobs_per_account": self.target_jobs_per_account,
                 "max_active_browsers": self.max_active_browsers,
             }
+
+    def next_suggested_port(self) -> int:
+        """Find the lowest available CDP port starting from port_base."""
+        with self._lock:
+            used = {a.cdp_port for a in self.accounts}
+            p = self.port_base
+            while p in used:
+                p += 1
+            return p
+
+    def add_account(
+        self,
+        account_id: str,
+        profile_id: Optional[str] = None,
+        cdp_port: Optional[int] = None,
+        enabled: bool = True,
+        note: str = "",
+        create_profile: bool = True,
+    ) -> AccountConfig:
+        """Add a new account/profile to the pool, optionally creating the vault profile."""
+        from ..BrowserHost.launch_profile import PROFILE_ID_RE, load_or_create_profile
+
+        aid = str(account_id or "").strip()
+        if not PROFILE_ID_RE.match(aid) or aid == "_template":
+            raise ValueError(f"ID account không hợp lệ: {aid!r} (chỉ dùng chữ, số, dấu gạch)")
+
+        pid = str(profile_id or aid).strip()
+        if not PROFILE_ID_RE.match(pid) or pid == "_template":
+            raise ValueError(f"Profile ID không hợp lệ: {pid!r}")
+
+        with self._lock:
+            if any(a.id == aid for a in self.accounts):
+                raise ValueError(f"Account ID {aid!r} đã tồn tại trong pool")
+
+            if cdp_port is None or int(cdp_port) <= 0:
+                port = self.next_suggested_port()
+            else:
+                port = int(cdp_port)
+                if any(a.cdp_port == port for a in self.accounts):
+                    raise ValueError(f"Cổng CDP :{port} đã được dùng bởi account khác")
+
+            if create_profile:
+                load_or_create_profile(pid, self.vault_dir)
+
+            acc = AccountConfig(
+                id=aid,
+                profile_id=pid,
+                cdp_port=port,
+                enabled=bool(enabled),
+                note=str(note or ""),
+            )
+            self.accounts.append(acc)
+            self._explicit_accounts = True
+            self._save_config()
+            self._save_state()
+            self._log(f"[pool] Đã thêm account mới: {aid} (profile={pid}, cdp_port={port})")
+            return acc
+
+    def update_account(
+        self,
+        account_id: str,
+        enabled: Optional[bool] = None,
+        note: Optional[str] = None,
+        cdp_port: Optional[int] = None,
+    ) -> AccountConfig:
+        """Update an existing account's status, note, or CDP port."""
+        with self._lock:
+            acc = self._account(account_id)
+            if acc is None:
+                raise KeyError(f"Account không tồn tại: {account_id}")
+
+            if cdp_port is not None:
+                new_port = int(cdp_port)
+                if new_port != acc.cdp_port and any(a.cdp_port == new_port and a.id != account_id for a in self.accounts):
+                    raise ValueError(f"Cổng CDP :{new_port} đã được dùng bởi account khác")
+                acc.cdp_port = new_port
+
+            if enabled is not None:
+                acc.enabled = bool(enabled)
+            if note is not None:
+                acc.note = str(note)
+
+            self._explicit_accounts = True
+            self._save_config()
+            self._log(f"[pool] Đã cập nhật account: {account_id}")
+            return acc
+
+    def remove_account(self, account_id: str, delete_vault: bool = False) -> dict:
+        """Remove an account from the pool, optionally deleting its browser_vault directory."""
+        import shutil
+
+        with self._lock:
+            acc = self._account(account_id)
+            if acc is None:
+                raise KeyError(f"Account không tồn tại: {account_id}")
+
+            try:
+                self.hibernate_account(account_id)
+            except Exception:
+                pass
+
+            self.accounts = [a for a in self.accounts if a.id != account_id]
+            self._clients.pop(account_id, None)
+            if account_id in self._state.get("accounts", {}):
+                self._state["accounts"].pop(account_id, None)
+
+            if delete_vault:
+                p_dir = self.vault_dir / acc.profile_id
+                if p_dir.exists() and p_dir.is_dir() and acc.profile_id != "_template":
+                    shutil.rmtree(p_dir, ignore_errors=True)
+
+            self._explicit_accounts = True
+            self._save_config()
+            self._save_state()
+            self._log(f"[pool] Đã xóa account: {account_id} (delete_vault={delete_vault})")
+            return {"ok": True, "removed": account_id}
+
+    def account_detail(self, account_id: str) -> dict:
+        """Probe an account's live CDP and Flow session status."""
+        a = self._account(account_id)
+        if a is None:
+            raise KeyError(f"Account không tồn tại: {account_id}")
+
+        alive = self.supervisor.is_alive(a.cdp_port, 1.0)
+        flow_status = None
+        if alive:
+            try:
+                cl = self.client_for(account_id)
+                st = cl.status()
+                flow_status = st.model_dump()
+            except Exception as exc:  # noqa: BLE001
+                flow_status = {"error": str(exc)}
+
+        st = self._account_state(account_id)
+        return {
+            "account": {
+                "id": a.id,
+                "profile_id": a.profile_id,
+                "cdp_port": a.cdp_port,
+                "cdp_url": self.supervisor.cdp_url(a.cdp_port),
+                "enabled": a.enabled,
+                "note": a.note,
+                "running": alive,
+                "managed": self.supervisor.is_managed(a.profile_id),
+                "status": "disabled" if not a.enabled else ("cooldown" if self.cooldown_remaining_s(a.id) > 0 else "ready"),
+                "total_completed": int(st.get("total_completed") or 0),
+                "total_rejected": int(st.get("total_rejected") or 0),
+                "total_failed": int(st.get("total_failed") or 0),
+            },
+            "flow": flow_status,
+        }
 
     # ------------------------------------------------------------------ #
     # Runtime state

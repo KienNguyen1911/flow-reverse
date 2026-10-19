@@ -45,7 +45,7 @@ function BatchResultCard({ job }: { job: Job }) {
         {r.dry_run ? <span className="text-dim">{r.dry_run} dry-run</span> : null}
       </div>
       <p className="text-[11.5px] text-mut">
-        N_alloc {r.n_alloc ?? "?"} · account: {r.accounts?.join(", ") || "—"}
+        N_alloc {r.n_alloc ?? "?"} - account: {r.accounts?.join(", ") || "khong co"}
         {r.output_dir ? <span className="font-mono"> · {r.output_dir}</span> : null}
       </p>
       <div className="slim-scroll max-h-[320px] overflow-y-auto flex flex-col">

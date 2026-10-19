@@ -71,7 +71,7 @@ export function ConfirmDialog({ payload, projectTitle, pool, onCancel, onConfirm
             <div>
               <span className="text-mut">Dự án: </span>
               <span className="font-medium">
-                {projectTitle || payload.project_id.slice(0, 8)}
+                {projectTitle || (payload.project_id ? payload.project_id.slice(0, 8) : "Tự động quản lý theo từng account")}
               </span>
             </div>
             {batch ? (

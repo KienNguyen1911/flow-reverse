@@ -344,4 +344,39 @@ def test_example_pool_config_is_loadable(tmp_path):
     data = json.loads(cfg.read_text(encoding="utf-8"))
     assert data["target_jobs_per_account"] == 25
     assert data["auto_discover"] is True
-    assert data["accounts"] == []
+    assert isinstance(data["accounts"], list)
+
+
+# --------------------------------------------------------------------------- #
+# Account management: add / update / remove / port suggest
+# --------------------------------------------------------------------------- #
+
+
+def test_add_account_and_suggest_port(tmp_path):
+    pool = make_pool(tmp_path, n_accounts=2)
+    assert pool.next_suggested_port() == 9224  # 9222 and 9223 used
+    new_acc = pool.add_account("acc_03", note="test 3", create_profile=False)
+    assert new_acc.id == "acc_03"
+    assert new_acc.cdp_port == 9224
+    assert len(pool.accounts) == 3
+    assert pool.next_suggested_port() == 9225
+
+    # Duplicate id raises ValueError
+    with pytest.raises(ValueError, match="đã tồn tại"):
+        pool.add_account("acc_03", create_profile=False)
+
+
+def test_update_account(tmp_path):
+    pool = make_pool(tmp_path, n_accounts=2)
+    updated = pool.update_account("acc_01", enabled=False, note="paused", cdp_port=9299)
+    assert updated.enabled is False
+    assert updated.note == "paused"
+    assert updated.cdp_port == 9299
+
+
+def test_remove_account(tmp_path):
+    pool = make_pool(tmp_path, n_accounts=2)
+    res = pool.remove_account("acc_01", delete_vault=False)
+    assert res["ok"] is True
+    assert [a.id for a in pool.accounts] == ["acc_02"]
+

@@ -1,4 +1,15 @@
-import type { BatchItemRequest, GalleryRun, Job, PoolInfo, Project, Status } from "./types";
+import type {
+  AccountDetail,
+  AddAccountPayload,
+  BatchItemRequest,
+  GalleryRun,
+  Job,
+  PoolAccount,
+  PoolInfo,
+  Project,
+  Status,
+  UpdateAccountPayload,
+} from "./types";
 
 async function j<T>(r: Response): Promise<T> {
   if (!r.ok) {
@@ -62,8 +73,27 @@ export const api = {
   poolAccount: (id: string, action: "wake" | "hibernate" | "reset") =>
     post(`/api/pool/accounts/${id}/${action}`, {}).then(j<{ ok?: boolean; reason?: string; errors?: unknown[] }>),
 
+  addPoolAccount: (p: AddAccountPayload) =>
+    post("/api/pool/accounts", p).then(j<{ ok: boolean; account: PoolAccount }>),
+
+  updatePoolAccount: (id: string, p: UpdateAccountPayload) =>
+    fetch(`/api/pool/accounts/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(p),
+    }).then(j<{ ok: boolean; account: PoolAccount }>),
+
+  removePoolAccount: (id: string, deleteVault: boolean = false) =>
+    fetch(`/api/pool/accounts/${id}?delete_vault=${deleteVault}`, { method: "DELETE" }).then(
+      j<{ ok: boolean; removed: string }>,
+    ),
+
+  poolAccountDetail: (id: string) => fetch(`/api/pool/accounts/${id}/detail`).then(j<AccountDetail>),
+
+  nextPoolPort: () => fetch("/api/pool/next_port").then(j<{ next_port: number }>),
+
   batch: (p: {
-    project_id: string;
+    project_id?: string;
     items?: BatchItemRequest[];
     storyboard_path?: string;
     aspect?: number;
@@ -71,4 +101,11 @@ export const api = {
     confirm?: boolean;
     dest_dir?: string;
   }) => post("/api/batch", p).then(j<{ job_id: string }>),
+
+  uploadReference: async (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const r = await fetch("/api/upload_reference", { method: "POST", body: fd });
+    return j<{ ok: boolean; path: string; filename: string; url: string; size: number }>(r);
+  },
 };

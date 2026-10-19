@@ -78,6 +78,23 @@ dialog.confirm-dialog {
   margin: auto;
 }
 
+/* Account manager modal. */
+dialog.account-modal {
+  border: 1px solid var(--color-line2);
+  border-radius: var(--radius-panel);
+  background: var(--color-panel);
+  color: var(--color-fg);
+  padding: 0;
+  width: min(720px, calc(100vw - 2rem));
+  max-height: calc(100vh - 4rem);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 0.6);
+  margin: auto;
+}
+dialog.account-modal::backdrop {
+  background: rgb(4 5 7 / 0.72);
+  backdrop-filter: blur(3px);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

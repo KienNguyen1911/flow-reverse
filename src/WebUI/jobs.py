@@ -330,7 +330,8 @@ class BatchRunner:
         self.pool = manager.pool
         self.job = job
         self.params = job.params
-        self.project_id = parse_project_ref(str(self.params.get("project_id") or ""))
+        raw_pid = self.params.get("project_id")
+        self.project_id = parse_project_ref(str(raw_pid)) if raw_pid else None
         self.dry_run = bool(self.params.get("dry_run"))
         self.aspect = int(self.params.get("aspect") or 3)
         self.item_pause_mean = float(self.params.get("item_pause_s") or 4.0)
@@ -362,8 +363,11 @@ class BatchRunner:
             p = Path(str(explicit))
             self._dest_dir = p if p.is_absolute() else ROOT / p
         else:
-            title = self.manager.store.title_of(self.project_id) or self.project_id[:8]
-            self._dest_dir = ROOT / "out" / "outputs" / self._slug(title)
+            if self.project_id:
+                title = self.manager.store.title_of(self.project_id) or self.project_id[:8]
+                self._dest_dir = ROOT / "out" / "outputs" / self._slug(title)
+            else:
+                self._dest_dir = ROOT / "out" / "outputs" / f"batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         return self._dest_dir
 
     def _export_output(self, it: BatchItem, src_file: str) -> Optional[str]:
@@ -440,8 +444,42 @@ class BatchRunner:
             raise ValueError(f"shot phụ thuộc {it.depends_on_shot_id!r} chưa có output")
         raise ValueError("i2i thiếu reference_image_path/depends_on_shot_id")
 
+    def _project_for_account(self, aid: str, client: FlowClient) -> str:
+        with self._progress_lock:
+            if not hasattr(self, "_account_projects"):
+                self._account_projects: dict[str, str] = {}
+            if aid in self._account_projects:
+                return self._account_projects[aid]
+
+            if self.project_id:
+                self._account_projects[aid] = self.project_id
+                return self.project_id
+
+            # Auto-resolve or create project for this account
+            self.job.add_event("step", f"[{aid}] tự động dò tìm dự án trên account...", {"account_id": aid})
+            try:
+                listed = client.list_projects()
+                if listed:
+                    pid = listed[0].id
+                    self.job.add_event("info", f"[{aid}] dùng dự án có sẵn: {listed[0].title or pid[:8]} ({pid[:8]}…)", {"account_id": aid})
+                    self._account_projects[aid] = pid
+                    return pid
+            except Exception as e:
+                self.job.add_event("warn", f"[{aid}] list_projects ({e}) — tạo dự án mới...", {"account_id": aid})
+
+            title = f"Batch {datetime.now().strftime('%d/%m %H:%M')}"
+            try:
+                proj = client.create_project(title)
+                self.job.add_event("info", f"[{aid}] tự động tạo dự án mới: '{title}' ({proj.id[:8]}…)", {"account_id": aid})
+                self._account_projects[aid] = proj.id
+                return proj.id
+            except Exception as exc:
+                self.job.add_event("error", f"[{aid}] không tạo được dự án tự động: {exc}", {"account_id": aid})
+                raise
+
     def _generate_for_item(self, it: BatchItem, acct: ActiveAccount, client: FlowClient):
         ev = self._ev_for(acct.config.id)
+        target_pid = self._project_for_account(acct.config.id, client)
         if it.mode == "i2i":
             ref_path = self._resolve_reference_path(it)
             sha = sha256_file(ref_path)
@@ -450,7 +488,7 @@ class BatchRunner:
                 self.job.add_event("step",
                     f"[{acct.config.id}] lazy upload ảnh tham chiếu lần đầu ({Path(ref_path).name}) — 0 credit",
                     {"account_id": acct.config.id, "sha256": sha})
-                tpl = client.upload_reference_image(self.project_id, ref_path, prompt_probe=it.prompt, on_event=ev)
+                tpl = client.upload_reference_image(target_pid, ref_path, prompt_probe=it.prompt, on_event=ev)
                 self.pool.registry.put(acct.config.id, tpl.model_dump())
             else:
                 tpl = ReferenceTemplate(**cached)
@@ -458,12 +496,12 @@ class BatchRunner:
                     f"[{acct.config.id}] trúng cache tham chiếu sha {sha[:8]}… (media≈{tpl.media_id}) — không upload lại",
                     {"account_id": acct.config.id, "sha256": sha})
             return client.generate_image(
-                self.project_id, it.prompt,
+                target_pid, it.prompt,
                 aspect=self.aspect, seed=it.seed, dry_run=self.dry_run,
                 reference=tpl, on_event=ev,
             )
         return client.generate_image(
-            self.project_id, it.prompt,
+            target_pid, it.prompt,
             aspect=self.aspect, seed=it.seed, dry_run=self.dry_run,
             on_event=ev,
         )
@@ -605,9 +643,9 @@ class BatchRunner:
         if J > MAX_BATCH_ITEMS:
             raise ValueError(f"batch quá lớn: {J} > {MAX_BATCH_ITEMS} (chia thành nhiều batch)")
 
-        self.by_shot = {it.shot_id: it for it in self.items if it.shot_id}
         modes = Counter(it.mode for it in self.items)
-        ev("info", f"BATCH: J={J} ảnh (t2i: {modes.get('t2i', 0)}, i2i: {modes.get('i2i', 0)}), project {self.project_id[:8]}…")
+        p_tag = (self.project_id[:8] + "…") if self.project_id else "auto-per-account"
+        ev("info", f"BATCH: J={J} ảnh (t2i: {modes.get('t2i', 0)}, i2i: {modes.get('i2i', 0)}), project: {p_tag}")
 
         n_avail = len(self.pool.available_accounts())
         self.n_alloc = self.pool.compute_allocation(J)
@@ -619,6 +657,8 @@ class BatchRunner:
         for e in errors:
             ev("warn", f"account {e['account_id']} không wake được: {e['error'][:220]}")
         self.n_alloc = len(self.working)
+        for a in self.working:
+            self.cooked[a.config.id] = threading.Event()
         self.pool.set_current_batch(self.job.id, J, self.n_alloc, [a.config.id for a in self.working])
         ev("info",
            f"N_alloc = min(N={len(self.pool.accounts)}, M_RAM={self.pool.max_active_browsers}, "
@@ -644,7 +684,8 @@ class BatchRunner:
                         live.append(it)
                 if not live:
                     continue
-                ev("step", f"wave {w + 1}/{len(waves)}: {len(live)} ảnh trên {len([a for a in self.working if not self.cooked[a.config.id].is_set()])} account")
+                active_workers = [a for a in self.working if not self.cooked.get(a.config.id, threading.Event()).is_set()]
+                ev("step", f"wave {w + 1}/{len(waves)}: {len(live)} ảnh trên {len(active_workers)} account")
                 self._run_wave(live)
                 self._touch_progress()
         finally:

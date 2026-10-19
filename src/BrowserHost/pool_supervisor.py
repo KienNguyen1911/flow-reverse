@@ -28,6 +28,7 @@ Usage:
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import time
@@ -155,13 +156,33 @@ class PoolSupervisor:
 
     # -- hibernate --------------------------------------------------------------- #
 
+    def find_pid_by_port(self, port: int) -> Optional[int]:
+        """Find the listening process PID on a port (Windows netstat fallback)."""
+        if sys.platform != "win32":
+            return None
+        try:
+            out = subprocess.run(
+                ["netstat", "-ano", "-p", "tcp"],
+                capture_output=True, text=True, timeout=5,
+            ).stdout or ""
+            pattern = re.compile(rf":{int(port)}\s+.*LISTENING\s+(\d+)", re.IGNORECASE)
+            for line in out.splitlines():
+                m = pattern.search(line)
+                if m:
+                    return int(m.group(1))
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
     def hibernate(self, profile_id: str, port: int, graceful_timeout_s: float = 6.0) -> dict:
-        """Close a pool-managed browser. Never touches user-launched browsers.
+        """Close a pool-managed browser, or any browser listening on `port`.
 
         Returns {"ok": bool, "reason": str}; ``reason == "not_managed"`` means
-        the browser was not started by the pool (leave it alone).
+        no process was found.
         """
         pid = self.read_pid(profile_id)
+        if not pid:
+            pid = self.find_pid_by_port(port)
         if not pid:
             return {"ok": False, "reason": "not_managed"}
         if not self.is_process_running(pid):

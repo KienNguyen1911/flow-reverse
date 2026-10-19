@@ -1,5 +1,5 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
-import { CircleNotch } from "@phosphor-icons/react";
+import { CircleNotch, Info } from "@phosphor-icons/react";
 
 export function Panel({ children, className = "" }: { children: ReactNode; className?: string }) {
   return <section className={`rounded-panel border border-line bg-panel ${className}`}>{children}</section>;
@@ -105,33 +105,107 @@ export function Chip({
   );
 }
 
+export function InfoTip({
+  content,
+  children,
+  side = "top",
+}: {
+  content: ReactNode;
+  children?: ReactNode;
+  side?: "top" | "bottom" | "right";
+}) {
+  return (
+    <span className="group relative inline-flex items-center cursor-help">
+      {children || (
+        <span className="text-mut hover:text-fg transition-colors">
+          <Info size={13} weight="bold" />
+        </span>
+      )}
+      <span
+        role="tooltip"
+        className={`pointer-events-none absolute z-50 invisible opacity-0 group-hover:visible group-hover:opacity-100 transition-all duration-150 rounded-ctl border border-line2 bg-panel px-2.5 py-1.5 text-[11.5px] leading-relaxed text-fg shadow-2xl whitespace-normal w-60 sm:w-72 ${
+          side === "top"
+            ? "bottom-full left-1/2 -translate-x-1/2 mb-1.5"
+            : side === "bottom"
+            ? "top-full left-1/2 -translate-x-1/2 mt-1.5"
+            : "left-full top-1/2 -translate-y-1/2 ml-1.5"
+        }`}
+      >
+        {content}
+      </span>
+    </span>
+  );
+}
+
 export function Field({
   label,
   htmlFor,
   hint,
+  info,
   right,
   children,
 }: {
   label: string;
   htmlFor?: string;
   hint?: ReactNode;
+  info?: ReactNode;
   right?: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-baseline justify-between gap-3">
-        <label htmlFor={htmlFor} className="text-[12.5px] font-semibold text-dim">
-          {label}
-        </label>
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-1.5">
+          <label htmlFor={htmlFor} className="text-[12.5px] font-semibold text-dim">
+            {label}
+          </label>
+          {info && <InfoTip content={info} />}
+        </div>
         {right}
       </div>
       {children}
-      {hint ? <p className="text-[11.5px] leading-relaxed text-mut">{hint}</p> : null}
+      {hint ? <p className="text-[11px] leading-relaxed text-mut">{hint}</p> : null}
     </div>
   );
 }
 
 export function Spinner({ size = 14, className = "" }: { size?: number; className?: string }) {
   return <CircleNotch className={`animate-spin ${className}`} size={size} />;
+}
+
+export function Tabs({
+  tabs,
+  active,
+  onChange,
+}: {
+  tabs: { key: string; label: string; icon?: ReactNode; badge?: string }[];
+  active: string;
+  onChange: (key: string) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1 overflow-x-auto border-b border-line2 bg-panel px-2 pt-1.5 slim-scroll">
+      {tabs.map((t) => {
+        const isActive = t.key === active;
+        return (
+          <button
+            key={t.key}
+            onClick={() => onChange(t.key)}
+            className={`flex items-center gap-1.5 border-b-2 px-3 py-2 text-[12.5px] font-semibold transition-colors whitespace-nowrap ${
+              isActive
+                ? "border-acc text-acc"
+                : "border-transparent text-dim hover:text-fg"
+            }`}
+          >
+            {t.icon}
+            <span>{t.label}</span>
+            {t.badge ? (
+              <span className="ml-0.5 rounded-full bg-acc/15 px-1.5 py-0.5 text-[10px] font-bold text-acc">
+                {t.badge}
+              </span>
+            ) : null}
+          </button>
+        );
+      })}
+    </div>
+  );
 }

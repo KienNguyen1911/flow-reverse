@@ -189,7 +189,7 @@ def strip_warning_flags(args: list[str]) -> list[str]:
     return kept
 
 
-def build_command(cfg: dict[str, Any], binary_path: str, user_data_dir: Path, port: int) -> list[str]:
+def build_command(cfg: dict[str, Any], binary_path: str, user_data_dir: Path, port: int, url: Optional[str] = None) -> list[str]:
     """Assemble the full Chromium argv: SDK stealth flags + CDP/session flags."""
     import cloakbrowser  # lazy: --help must work even without the package
 
@@ -208,9 +208,14 @@ def build_command(cfg: dict[str, Any], binary_path: str, user_data_dir: Path, po
         timezone=cfg.get("timezone_id"),
         locale=cfg.get("locale"),
         headless=False,  # headed: CDP tools need it and headed avoids headless tells
-        start_maximized=False,
+        start_maximized=True,
     )
-    return [binary_path, *strip_warning_flags(args)]
+    if "--new-window" not in args:
+        args.append("--new-window")
+    cmd = [binary_path, *strip_warning_flags(args)]
+    if url:
+        cmd.append(url)
+    return cmd
 
 
 def describe_binary() -> tuple[str, bool]:
@@ -278,7 +283,105 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         default=None,
         help="Write the launched browser PID to this file (used by pool_supervisor to hibernate the account later)",
     )
+    parser.add_argument(
+        "--url",
+        default="https://flow.google.com/",
+        help="Initial URL to navigate to (defaults to https://flow.google.com/)",
+    )
     return parser.parse_args(argv)
+
+
+if sys.platform == "win32":
+    import ctypes
+    import os
+    from ctypes import wintypes
+
+    class _STARTUPINFOW(ctypes.Structure):
+        _fields_ = [
+            ("cb", wintypes.DWORD),
+            ("lpReserved", wintypes.LPWSTR),
+            ("lpDesktop", wintypes.LPWSTR),
+            ("lpTitle", wintypes.LPWSTR),
+            ("dwX", wintypes.DWORD),
+            ("dwY", wintypes.DWORD),
+            ("dwXSize", wintypes.DWORD),
+            ("dwYSize", wintypes.DWORD),
+            ("dwXCountChars", wintypes.DWORD),
+            ("dwYCountChars", wintypes.DWORD),
+            ("dwFillAttribute", wintypes.DWORD),
+            ("dwFlags", wintypes.DWORD),
+            ("wShowWindow", wintypes.WORD),
+            ("cbReserved2", wintypes.WORD),
+            ("lpReserved2", ctypes.c_char_p),
+            ("hStdInput", wintypes.HANDLE),
+            ("hStdOutput", wintypes.HANDLE),
+            ("hStdError", wintypes.HANDLE),
+        ]
+
+    class _PROCESS_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("hProcess", wintypes.HANDLE),
+            ("hThread", wintypes.HANDLE),
+            ("dwProcessId", wintypes.DWORD),
+            ("dwThreadId", wintypes.DWORD),
+        ]
+
+    def _spawn_detached_win32(
+        command: list[str],
+        env: Optional[dict[str, str]] = None,
+        desktop: str = r"winsta0\default",
+    ) -> int:
+        cmd_str = subprocess.list2cmdline(command)
+        si = _STARTUPINFOW()
+        si.cb = ctypes.sizeof(_STARTUPINFOW)
+        si.lpDesktop = desktop
+        pi = _PROCESS_INFORMATION()
+
+        flags = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        env_block = None
+        if env is not None:
+            flags |= 0x00000400  # CREATE_UNICODE_ENVIRONMENT
+            full_env = dict(os.environ)
+            full_env.update(env)
+            env_str = "".join(f"{k}={full_env[k]}\0" for k in sorted(full_env.keys())) + "\0"
+            env_block = ctypes.c_wchar_p(env_str)
+
+        res = ctypes.windll.kernel32.CreateProcessW(
+            None, cmd_str, None, None, False, flags, env_block, None, ctypes.byref(si), ctypes.byref(pi)
+        )
+        if not res and desktop:
+            si.lpDesktop = None
+            res = ctypes.windll.kernel32.CreateProcessW(
+                None, cmd_str, None, None, False, flags, env_block, None, ctypes.byref(si), ctypes.byref(pi)
+            )
+        if not res:
+            err = ctypes.GetLastError()
+            raise OSError(f"CreateProcessW failed with error {err}")
+
+        pid = int(pi.dwProcessId)
+        ctypes.windll.kernel32.CloseHandle(pi.hProcess)
+        ctypes.windll.kernel32.CloseHandle(pi.hThread)
+        return pid
+
+
+def spawn_browser_process(command: list[str], env: Optional[dict[str, str]] = None) -> int:
+    """Launch the browser detached from the launcher process.
+
+    On Windows, uses CreateProcessW with lpDesktop='winsta0\\default' so the
+    window appears on the user's interactive desktop, not in a hidden sandbox desktop.
+    """
+    if sys.platform == "win32":
+        return _spawn_detached_win32(command, env=env)
+
+    proc = subprocess.Popen(
+        command,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return proc.pid
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -311,7 +414,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("[launch] !! cloakbrowser is not installed in this Python environment", file=sys.stderr)
         return 2
 
-    command = build_command(cfg, binary_path, user_data_dir, args.port)
+    command = build_command(cfg, binary_path, user_data_dir, args.port, url=args.url)
 
     print(f"[launch] profile      : {args.profile}")
     print(f"[launch] platform     : {cfg.get('platform')} | timezone: {cfg.get('timezone_id')} | locale: {cfg.get('locale')}")
@@ -333,18 +436,18 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     env = build_child_env()
     try:
-        process = subprocess.Popen(command, env=env)  # detached from Playwright by construction
+        pid = spawn_browser_process(command, env=env)
     except OSError as exc:
         print(f"[launch] !! failed to start browser: {exc}", file=sys.stderr)
         return 2
 
-    print(f"[launch] started      : pid={process.pid}")
+    print(f"[launch] started      : pid={pid}")
     print(f"[launch] CDP endpoint : http://127.0.0.1:{args.port}")
     if args.pid_file:
         try:
             pid_path = Path(args.pid_file)
             pid_path.parent.mkdir(parents=True, exist_ok=True)
-            pid_path.write_text(str(process.pid), encoding="utf-8")
+            pid_path.write_text(str(pid), encoding="utf-8")
             print(f"[launch] pid file     : {pid_path}")
         except OSError as exc:
             print(f"[launch] !! could not write pid file {args.pid_file!r}: {exc}", file=sys.stderr)

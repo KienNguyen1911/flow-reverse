@@ -41,6 +41,45 @@ export interface PoolAccount {
   last_error?: string | null;
 }
 
+export interface AddAccountPayload {
+  id: string;
+  profile_id?: string;
+  cdp_port?: number;
+  enabled?: boolean;
+  note?: string;
+  create_profile?: boolean;
+}
+
+export interface UpdateAccountPayload {
+  enabled?: boolean;
+  note?: string;
+  cdp_port?: number;
+}
+
+export interface AccountDetail {
+  account: {
+    id: string;
+    profile_id: string;
+    cdp_port: number;
+    cdp_url: string;
+    enabled: boolean;
+    note?: string | null;
+    running: boolean;
+    managed: boolean;
+    status: string;
+    total_completed: number;
+    total_rejected: number;
+    total_failed: number;
+  };
+  flow: {
+    cdp_ok?: boolean;
+    flow_tab_url?: string | null;
+    flow_project_id?: string | null;
+    browser?: string | null;
+    error?: string | null;
+  } | null;
+}
+
 export interface PoolBatchInfo {
   job_id: string;
   j: number;

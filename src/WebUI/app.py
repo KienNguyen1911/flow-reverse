@@ -26,11 +26,12 @@ from __future__ import annotations
 import argparse
 import json
 import webbrowser
+import time
 from pathlib import Path
 from typing import Optional
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -80,7 +81,7 @@ class BatchItemBody(BaseModel):
 
 
 class BatchBody(BaseModel):
-    project_id: str
+    project_id: Optional[str] = None
     items: list[BatchItemBody] = Field(default_factory=list)
     storyboard_path: Optional[str] = None
     aspect: int = 3
@@ -92,6 +93,21 @@ class BatchBody(BaseModel):
 class PoolConfigBody(BaseModel):
     target_jobs_per_account: Optional[int] = None
     max_active_browsers: Optional[int] = None
+
+
+class AddAccountBody(BaseModel):
+    id: str
+    profile_id: Optional[str] = None
+    cdp_port: Optional[int] = None
+    enabled: bool = True
+    note: Optional[str] = None
+    create_profile: bool = True
+
+
+class UpdateAccountBody(BaseModel):
+    enabled: Optional[bool] = None
+    note: Optional[str] = None
+    cdp_port: Optional[int] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -216,6 +232,72 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
         except KeyError as e:
             raise HTTPException(status_code=404, detail=str(e))
 
+    @app.get("/api/pool/next_port")
+    def api_pool_next_port():
+        return {"next_port": pool.next_suggested_port()}
+
+    @app.post("/api/pool/accounts")
+    def api_pool_add_account(body: AddAccountBody):
+        try:
+            acc = pool.add_account(
+                account_id=body.id,
+                profile_id=body.profile_id,
+                cdp_port=body.cdp_port,
+                enabled=body.enabled,
+                note=body.note or "",
+                create_profile=body.create_profile,
+            )
+            return {
+                "ok": True,
+                "account": {
+                    "id": acc.id,
+                    "profile_id": acc.profile_id,
+                    "cdp_port": acc.cdp_port,
+                    "enabled": acc.enabled,
+                    "note": acc.note,
+                },
+            }
+        except (ValueError, KeyError) as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.patch("/api/pool/accounts/{aid}")
+    def api_pool_update_account(aid: str, body: UpdateAccountBody):
+        try:
+            acc = pool.update_account(
+                account_id=aid,
+                enabled=body.enabled,
+                note=body.note,
+                cdp_port=body.cdp_port,
+            )
+            return {
+                "ok": True,
+                "account": {
+                    "id": acc.id,
+                    "profile_id": acc.profile_id,
+                    "cdp_port": acc.cdp_port,
+                    "enabled": acc.enabled,
+                    "note": acc.note,
+                },
+            }
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.delete("/api/pool/accounts/{aid}")
+    def api_pool_delete_account(aid: str, delete_vault: bool = False):
+        try:
+            return pool.remove_account(aid, delete_vault=delete_vault)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
+    @app.get("/api/pool/accounts/{aid}/detail")
+    def api_pool_account_detail(aid: str):
+        try:
+            return pool.account_detail(aid)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
     # -- projects ------------------------------------------------------------ #
 
     @app.get("/api/projects")
@@ -277,10 +359,12 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
 
     @app.post("/api/batch")
     def api_batch(body: BatchBody):
-        try:
-            pid = parse_project_ref(body.project_id)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+        pid = None
+        if body.project_id:
+            try:
+                pid = parse_project_ref(body.project_id)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
         items = [i.model_dump(exclude_none=True) for i in body.items]
         if not items and not body.storyboard_path:
             raise HTTPException(status_code=400, detail="Cần 'items' (danh sách shot) hoặc 'storyboard_path'.")
@@ -335,6 +419,32 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
         if not str(rp).startswith(str(base)) or not rp.is_file():
             raise HTTPException(status_code=404, detail="không tìm thấy file")
         return FileResponse(rp)
+
+    @app.post("/api/upload_reference")
+    async def api_upload_reference(file: UploadFile = File(...)):
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="Không có file")
+        ref_dir = ROOT / "out" / "references"
+        ref_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = f"{int(time.time()*1000)}_{Path(file.filename).name}"
+        dest_path = ref_dir / safe_name
+        content = await file.read()
+        dest_path.write_bytes(content)
+        rel_path = str(dest_path.relative_to(ROOT)).replace("\\", "/")
+        return {
+            "ok": True,
+            "path": rel_path,
+            "filename": safe_name,
+            "url": f"/api/references/{safe_name}",
+            "size": len(content),
+        }
+
+    @app.get("/api/references/{name}")
+    def api_get_reference(name: str):
+        ref_file = ROOT / "out" / "references" / name
+        if not ref_file.is_file():
+            raise HTTPException(status_code=404, detail="Không tìm thấy ảnh")
+        return FileResponse(ref_file)
 
     @app.get("/api/circuit/clear")
     def api_clear_circuit(account: Optional[str] = None):  # GET intentionally: idempotent reset, no secrets
