@@ -189,7 +189,9 @@ class AutoTryOnPipeline:
         if extra_images:
             for ei in extra_images:
                 ep = Path(ei).resolve()
-                if ep.is_file() and ep not in all_product_images and ep != garment_p:
+                if not ep.is_file() and not dry_run:
+                    raise FileNotFoundError(f"Không tìm thấy ảnh bổ sung: {ep}")
+                if ep not in all_product_images and (not garment_p or ep != garment_p):
                     extra_imgs.append(ep)
                     all_product_images.append(ep)
 
@@ -264,6 +266,15 @@ class AutoTryOnPipeline:
         else:
             client = FlowClient(cdp_url=self.cdp_url)
             proj_id = resolved_proj_id or "default"
+            # Format prompt for Flow: ensure character tag @nabi is explicitly present
+            flow_image_prompt = image_prompt
+            if "@nabi" not in flow_image_prompt.lower():
+                import re
+                if re.search(r"\bnabi\b", flow_image_prompt, re.IGNORECASE):
+                    flow_image_prompt = re.sub(r"\bnabi\b", "@nabi", flow_image_prompt, flags=re.IGNORECASE)
+                else:
+                    flow_image_prompt = f"@nabi {flow_image_prompt}".strip()
+
             # Attempt to upload reference image (garment sample) for i2i conditioning
             tpl = None
             if garment_p and garment_p.is_file():
@@ -272,7 +283,7 @@ class AutoTryOnPipeline:
                     tpl = client.upload_reference_image(
                         proj_id,
                         garment_p,
-                        prompt_probe=image_prompt[:60],
+                        prompt_probe=flow_image_prompt[:60],
                     )
                     self._log("info", f"Upload reference thành công (media≈{tpl.media_id})")
                 except Exception as e:
@@ -282,7 +293,7 @@ class AutoTryOnPipeline:
             # Generate image via FlowClient
             gen_res = client.generate_image(
                 project_id=proj_id,
-                prompt=image_prompt,
+                prompt=flow_image_prompt,
                 reference=tpl,
                 dry_run=False,
             )

@@ -151,8 +151,10 @@ def concatenate_two_videos(
     # Method 1: Concat demuxer
     list_file = out.parent / f"_concat_{int(time.time() * 1000)}.txt"
     try:
+        v1_esc = v1.as_posix().replace("'", "'\\''")
+        v2_esc = v2.as_posix().replace("'", "'\\''")
         list_file.write_text(
-            f"file '{v1.as_posix()}'\nfile '{v2.as_posix()}'\n",
+            f"file '{v1_esc}'\nfile '{v2_esc}'\n",
             encoding="utf-8",
         )
         cmd = [
@@ -186,7 +188,20 @@ def concatenate_two_videos(
             except Exception:
                 pass
 
-    # Method 2: filter_complex video-only concat
+    # Method 2: filter_complex with resolution & SAR normalization (handles different aspect ratios)
+    w, h = 1280, 720
+    try:
+        probe_res = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", str(v1)],
+            capture_output=True, text=True, timeout=10,
+        )
+        if probe_res.returncode == 0 and "x" in probe_res.stdout:
+            parts = probe_res.stdout.strip().split("x")
+            w, h = int(parts[0]), int(parts[1])
+    except Exception:
+        pass
+
+    filter_expr = f"[0:v]scale={w}:{h},setsar=1[v0];[1:v]scale={w}:{h},setsar=1[v1];[v0][v1]concat=n=2:v=1[v]"
     cmd_filter = [
         "ffmpeg",
         "-y",
@@ -195,7 +210,7 @@ def concatenate_two_videos(
         "-i",
         str(v2),
         "-filter_complex",
-        "[0:v][1:v]concat=n=2:v=1[v]",
+        filter_expr,
         "-map",
         "[v]",
         "-c:v",

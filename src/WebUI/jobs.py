@@ -39,7 +39,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from ..Bridge.flow_bridge import jitter
+from ..Bridge.flow_bridge import DEFAULT_CDP_URL, jitter
 from ..Workflows.account_pool import (
     AccountPoolManager,
     ActiveAccount,
@@ -942,34 +942,43 @@ class JobManager:
 
         params = job.params
         ev = job.add_event
-        account, client = self._acquire_and_client(job)
-        aid = account.config.id
+        dry_run = bool(params.get("dry_run", False))
 
-        target_pid = params.get("project_id")
-        cached_pid = self._account_projects.get(aid)
-        if cached_pid:
-            target_pid = cached_pid
-        elif not target_pid or aid not in self._account_projects:
-            try:
-                listed = client.list_projects()
-                if listed:
-                    pids = {p.id for p in listed}
-                    if target_pid and target_pid in pids:
-                        self._account_projects[aid] = target_pid
+        if dry_run:
+            aid = "dry_run"
+            target_pid = params.get("project_id") or "dry_run_project"
+            cdp_url = DEFAULT_CDP_URL
+            ev("info", "[dry_run] Chạy giả lập không cần kết nối tài khoản hay browser.")
+        else:
+            account, client = self._acquire_and_client(job)
+            aid = account.config.id
+            cdp_url = account.cdp_url
+
+            target_pid = params.get("project_id")
+            cached_pid = self._account_projects.get(aid)
+            if cached_pid:
+                target_pid = cached_pid
+            elif not target_pid or aid not in self._account_projects:
+                try:
+                    listed = client.list_projects()
+                    if listed:
+                        pids = {p.id for p in listed}
+                        if target_pid and target_pid in pids:
+                            self._account_projects[aid] = target_pid
+                        else:
+                            target_pid = listed[0].id
+                            self._account_projects[aid] = target_pid
+                            ev("info", f"[{aid}] tự động dùng dự án của account: {listed[0].title or target_pid[:8]} ({target_pid[:8]}…)")
                     else:
-                        target_pid = listed[0].id
+                        p = client.create_project("Automated Pipeline", on_event=ev)
+                        target_pid = p.id
                         self._account_projects[aid] = target_pid
-                        ev("info", f"[{aid}] tự động dùng dự án của account: {listed[0].title or target_pid[:8]} ({target_pid[:8]}…)")
-                else:
-                    p = client.create_project("Automated Pipeline", on_event=ev)
-                    target_pid = p.id
-                    self._account_projects[aid] = target_pid
-                    ev("info", f"[{aid}] tự động tạo dự án mới: {p.title} ({target_pid[:8]}…)")
-            except Exception as e:
-                ev("warn", f"[{aid}] không dò được dự án trên account: {e}")
+                        ev("info", f"[{aid}] tự động tạo dự án mới: {p.title} ({target_pid[:8]}…)")
+                except Exception as e:
+                    ev("warn", f"[{aid}] không dò được dự án trên account: {e}")
 
         pipeline = AutoTryOnPipeline(
-            cdp_url=account.cdp_url,
+            cdp_url=cdp_url,
             out_root=self.out_root.parent / "affiliate_runs",
             on_event=ev,
         )
@@ -981,7 +990,7 @@ class JobManager:
                 extra_images=params.get("extra_images"),
                 shopee_url=params.get("shopee_url"),
                 project_id=target_pid,
-                dry_run=bool(params.get("dry_run", False)),
+                dry_run=dry_run,
                 auto_stitch=bool(params.get("auto_stitch", True)),
                 override_image_prompt=params.get("image_prompt"),
                 override_video_prompt_1=params.get("video_prompt_1"),
@@ -991,8 +1000,10 @@ class JobManager:
             res_dict["account_id"] = aid
             job.result = res_dict
             job.set_state("succeeded")
-            self.pool.report_item_result(aid, "ok")
+            if not dry_run:
+                self.pool.report_item_result(aid, "ok")
         except Exception as exc:
-            self.pool.report_item_result(aid, "failed", error=f"{type(exc).__name__}: {exc}")
+            if not dry_run:
+                self.pool.report_item_result(aid, "failed", error=f"{type(exc).__name__}: {exc}")
             raise
 

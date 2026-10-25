@@ -517,7 +517,7 @@ const GROUPS: Group[] = [
         tryIt: true,
         curl: `curl -s ${BASE}/api/pool/next_port`,
         res: `{
-  "next_port": 9224
+  "next_port": 4024
 }`,
       },
       {

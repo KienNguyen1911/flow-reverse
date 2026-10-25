@@ -144,7 +144,9 @@ def test_parse_gemini_video_prompts_numbered():
 # --------------------------------------------------------------------------- #
 
 
-def _create_synthetic_video(path: Path, color: str = "green", duration_s: int = 1) -> None:
+def _create_synthetic_video(
+    path: Path, color: str = "green", duration_s: int = 1, size: str = "320x240"
+) -> None:
     """Helper to create small synthetic test video using FFmpeg."""
     cmd = [
         "ffmpeg",
@@ -152,7 +154,7 @@ def _create_synthetic_video(path: Path, color: str = "green", duration_s: int = 
         "-f",
         "lavfi",
         "-i",
-        f"color=c={color}:s=320x240:d={duration_s}",
+        f"color=c={color}:s={size}:d={duration_s}",
         "-c:v",
         "libx264",
         "-pix_fmt",
@@ -205,6 +207,32 @@ def test_concatenate_two_videos(tmp_path):
         assert 1.8 <= duration <= 2.2
     except Exception:
         pass
+
+
+def test_concatenate_two_videos_different_resolutions(tmp_path):
+    v1 = tmp_path / "clip1_landscape.mp4"
+    v2 = tmp_path / "clip2_portrait.mp4"
+    out = tmp_path / "concat_mismatch.mp4"
+
+    _create_synthetic_video(v1, color="red", duration_s=1, size="640x360")
+    _create_synthetic_video(v2, color="blue", duration_s=1, size="320x240")
+
+    result = concatenate_two_videos(v1, v2, out)
+    assert result.is_file()
+    assert result.stat().st_size > 2000
+
+
+def test_concatenate_two_videos_filename_with_quote(tmp_path):
+    v1 = tmp_path / "clip's_1.mp4"
+    v2 = tmp_path / "clip's 2.mp4"
+    out = tmp_path / "concat's output.mp4"
+
+    _create_synthetic_video(v1, color="red", duration_s=1)
+    _create_synthetic_video(v2, color="blue", duration_s=1)
+
+    result = concatenate_two_videos(v1, v2, out)
+    assert result.is_file()
+    assert result.stat().st_size > 2000
 
 
 # --------------------------------------------------------------------------- #
@@ -303,6 +331,27 @@ def test_pipeline_validation_errors(tmp_path):
             garment_path=tmp_path / "non_existent_garment.png",
             dry_run=False,
         )
+
+    # Missing extra image in real run raises FileNotFoundError
+    with pytest.raises(FileNotFoundError, match="Không tìm thấy ảnh bổ sung"):
+        dummy_model = tmp_path / "model.png"
+        dummy_garment = tmp_path / "garment.png"
+        dummy_garment.write_bytes(b"dummy")
+        pipeline.run(
+            model_path=dummy_model,
+            garment_path=dummy_garment,
+            extra_images=["non_existent_extra.png"],
+            dry_run=False,
+        )
+
+    # Dry-run with extra images populates them correctly
+    res_dry_extra = pipeline.run(
+        model_path=dummy_model,
+        garment_path=dummy_garment,
+        extra_images=["mock_extra_1.png", "mock_extra_2.png"],
+        dry_run=True,
+    )
+    assert len(res_dry_extra.shopee_images) == 3
 
 
 def test_auto_tryon_manual_transfer_model_dry_run(tmp_path):
@@ -461,6 +510,21 @@ def test_webui_tryon_api(tmp_path):
     assert res_runs.status_code == 200
     assert "runs" in res_runs.json()
     assert isinstance(res_runs.json()["runs"], list)
+
+    # 6. Verify background worker completes dry-run job cleanly
+    import time
+    job_id = res2.json()["job_id"]
+    completed_job = None
+    for _ in range(40):
+        time.sleep(0.1)
+        j = client.get(f"/api/jobs/{job_id}").json()
+        if j.get("state") in ("succeeded", "failed"):
+            completed_job = j
+            break
+    assert completed_job is not None
+    assert completed_job["state"] == "succeeded"
+    assert completed_job["result"]["status"] == "succeeded"
+    assert completed_job["result"]["dry_run"] is True
 
 
 def test_parse_shopee_ids_camel_case_and_hash():

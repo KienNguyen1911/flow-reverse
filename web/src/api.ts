@@ -108,4 +108,22 @@ export const api = {
     const r = await fetch("/api/upload_reference", { method: "POST", body: fd });
     return j<{ ok: boolean; path: string; filename: string; url: string; size: number }>(r);
   },
+
+  tryonStart: (p: {
+    garment_path?: string;
+    transfer_image?: string;
+    extra_images?: string[];
+    shopee_url?: string;
+    product_dir?: string;
+    model_path?: string;
+    project_id?: string;
+    dry_run?: boolean;
+    confirm?: boolean;
+    auto_stitch?: boolean;
+    image_prompt?: string;
+    video_prompt_1?: string;
+    video_prompt_2?: string;
+  }) => post("/api/tryon/start", p).then(j<{ job_id: string }>),
+
+  tryonRuns: () => fetch("/api/tryon/runs").then(j<{ runs: unknown[] }>),
 };
