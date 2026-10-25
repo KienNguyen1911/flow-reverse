@@ -40,9 +40,10 @@ def parse_gemini_image_prompt(raw_text: str) -> str:
 
     Handles:
     - Codeblocks: ```...```
+    - Segmented options: 'Bản 2:', 'Bản 1:', 'Option 2:', 'Option 1:'
+    - Labelled lines: 'Image Prompt:', 'Prompt (1):', 'Prompt:'
     - Quotations: "..."
-    - Prefixes: 'Image Prompt:', 'Prompt (1):', 'Prompt:'
-    - Markdown bolding: **Prompt:** ...
+    - Strips markdown annotations and conversational wrap-arounds.
     """
     if not raw_text or not raw_text.strip():
         return ""
@@ -56,7 +57,30 @@ def parse_gemini_image_prompt(raw_text: str) -> str:
         if len(candidate) > 20:
             return candidate
 
-    # 2. Look for labelled lines like "Prompt:", "Image Prompt:", "Prompt (1):"
+    # 2. Look for Vietnamese/English dual prompt versions: Bản 2 (prefer detailed) or Bản 1
+    m_ban2 = re.search(
+        r"(?:bản\s*2|option\s*2|phiên\s*bản\s*2)[^\n:]*[:\-–]?(.*?)(?=(?:💡|hướng\s*dẫn|lưu\s*ý|note:|$))",
+        text,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if m_ban2:
+        chunk = m_ban2.group(1).strip()
+        chunk = re.sub(r"^[^\n]*\n(?:markdown\s*\n)?", "", chunk, flags=re.IGNORECASE).strip()
+        if len(chunk) > 30:
+            return chunk
+
+    m_ban1 = re.search(
+        r"(?:bản\s*1|option\s*1|phiên\s*bản\s*1)[^\n:]*[:\-–]?(.*?)(?=(?:bản\s*2|option\s*2|💡|hướng\s*dẫn|lưu\s*ý|note:|$))",
+        text,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if m_ban1:
+        chunk = m_ban1.group(1).strip()
+        chunk = re.sub(r"^[^\n]*\n(?:markdown\s*\n)?", "", chunk, flags=re.IGNORECASE).strip()
+        if len(chunk) > 30:
+            return chunk
+
+    # 3. Look for labelled lines like "Prompt:", "Image Prompt:", "Prompt (1):"
     label_match = re.search(
         r"(?:(?:image\s+)?prompt(?:\s*\([0-9]+\))?|prompt\s*1)\s*[:\-–]\s*([^\n\r]+(?:\n(?!\n|\*|#).*)*)",
         text,
@@ -67,18 +91,21 @@ def parse_gemini_image_prompt(raw_text: str) -> str:
         if len(candidate) > 20:
             return candidate
 
-    # 3. Look for quoted paragraph
+    # 4. Look for quoted paragraph
     quoted = re.findall(r'"([^"]{30,})"', text, re.DOTALL)
     if quoted:
         return quoted[0].strip()
 
-    # 4. Fallback: filter out conversational intro/outro lines
+    # 5. Fallback: filter out conversational intro/outro lines and guidance
     lines = text.splitlines()
     filtered = []
     for line in lines:
         s = line.strip()
         if not s:
             continue
+        # Stop if reaching guidance or instructions
+        if re.match(r"^(?:💡|hướng\s*dẫn|lưu\s*ý\b|note\b|cách\s*dùng\b)", s, re.IGNORECASE):
+            break
         # Skip conversational openings
         if re.match(
             r"^(?:sure|here|certainly|dưới đây|đây là|tôi đã|chào|hello|hi\b|okay|ok\b)",
@@ -161,16 +188,21 @@ def _clean_prompt_chunk(chunk: str) -> str:
     s = re.sub(r"\*\*|\*|`", "", s)
     # Strip leading timestamps like [0-8s], (0-8s), 8 seconds:
     s = re.sub(r"^\s*[\(\[]?[0-8\s\-sS]+[\)\]]?\s*[:\-–]?\s*", "", s)
-    # Strip conversational sign-offs at the end without truncating valid prompt paragraphs
+    # Strip conversational sign-offs or guidance at the end
     lines = s.splitlines()
     filtered_lines = []
     for line in lines:
         line_s = line.strip()
-        if re.match(r"^(?:hope this helps|let me know|chúc bạn|lưu ý\b|note\b|tùy chọn\b|bạn có thể)", line_s, re.IGNORECASE):
+        if re.match(
+            r"^(?:hope this helps|let me know|chúc bạn|lưu\s*ý\b|note\b|tùy\s*chọn\b|bạn có thể|💡|hướng\s*dẫn)",
+            line_s,
+            re.IGNORECASE,
+        ):
             break
         filtered_lines.append(line)
     s = "\n".join(filtered_lines).strip()
     return s.strip('"').strip("'")
+
 
 
 # --------------------------------------------------------------------------- #
@@ -246,6 +278,12 @@ class GeminiNotebookBridge:
 
         self.page = target_page
         self.page.bring_to_front()
+        # Wait for input area to be hydrated and ready
+        try:
+            self.page.wait_for_selector("input-area-v2, div.ql-editor, rich-textarea", timeout=20000)
+            time.sleep(1.0)
+        except Exception:
+            pass
         self._log("info", f"Đã kết nối Gemini tab: {self.page.url}")
         return self
 
@@ -261,6 +299,72 @@ class GeminiNotebookBridge:
                 pass
             self._pw = None
 
+    def _find_upload_button_selector(self) -> Optional[str]:
+        """Locate working CSS selector for the upload / plus button."""
+        selectors = [
+            "simplified-input-menu button",
+            "gem-icon-button[arialabel*='tải lên' i] button",
+            "gem-icon-button[arialabel*='upload' i] button",
+            "button[aria-label*='Nội dung tải lên' i]",
+            "button[aria-label*='tải lên' i]",
+            "button[aria-label*='Upload' i]",
+            "button[aria-label*='Thêm' i]",
+            "button[aria-label*='Add' i]",
+            "button:has(mat-icon[fonticon='plus'])",
+        ]
+        for sel in selectors:
+            if self.page.query_selector(sel):
+                return sel
+        return None
+
+    def _open_upload_menu(self) -> None:
+        """Open upload menu using page.click() with auto-retry."""
+        sel = self._find_upload_button_selector()
+        if sel:
+            try:
+                btn = self.page.query_selector(sel)
+                if btn and btn.get_attribute("aria-expanded") == "true":
+                    return
+                self.page.click(sel, timeout=5000)
+                time.sleep(1.0)
+            except Exception as e:
+                self._log("warn", f"Lỗi click nút upload ({sel}): {e}")
+
+    def _find_file_input(self):
+        """Locate best matching input[type=file], prioritizing image accept."""
+        file_inputs = self.page.query_selector_all("input[type=file]")
+        if not file_inputs:
+            return None
+        for inp in file_inputs:
+            acc = (inp.get_attribute("accept") or "").lower()
+            if "image" in acc:
+                return inp
+        return file_inputs[0]
+
+    def _wait_for_upload_completion(self, expected_count: int, timeout_s: float = 25.0) -> None:
+        """Wait until uploaded files appear as preview chips and finish loading."""
+        t0 = time.time()
+        deadline = t0 + timeout_s
+        while time.time() < deadline:
+            time.sleep(1.0)
+            status = self.page.evaluate(
+                """() => {
+                    const previews = document.querySelectorAll('uploader-file-preview, .file-preview-chip, gem-media-attachment');
+                    const spinners = document.querySelectorAll('uploader-file-preview mat-progress-spinner, .file-preview-chip mat-progress-spinner, [xapfileselectordropzone] mat-progress-spinner');
+                    const sendBtn = document.querySelector('button[aria-label*="Gửi"], button[aria-label*="Send"]');
+                    const isSendDisabled = sendBtn ? (sendBtn.hasAttribute('disabled') || sendBtn.getAttribute('aria-disabled') === 'true') : false;
+                    return {
+                        count: previews.length,
+                        hasSpinners: spinners.length > 0,
+                        isSendDisabled: isSendDisabled
+                    };
+                }"""
+            )
+            if status and status.get("count", 0) >= expected_count and not status.get("hasSpinners"):
+                self._log("info", f"Các file đính kèm đã sẵn sàng ({status['count']} ảnh).")
+                return
+        self._log("warn", "Hết thời gian chờ preview file đính kèm, tiếp tục với câu lệnh...")
+
     def upload_files(self, file_paths: list[Path]) -> None:
         """Upload one or more files to the Gemini prompt input via input[type=file]."""
         for p in file_paths:
@@ -268,41 +372,37 @@ class GeminiNotebookBridge:
                 raise FileNotFoundError(f"Không tìm thấy file để upload: {p}")
 
         self._log("step", f"Đính kèm {len(file_paths)} ảnh vào Gemini...")
-        file_inputs = self.page.query_selector_all("input[type=file]")
-        if not file_inputs:
-            add_btn = self.page.query_selector(
-                "button[aria-label*='Add'], button[aria-label*='Upload'], "
-                "button[aria-label*='Thêm'], button[mattooltip*='Upload']"
-            )
-            if add_btn:
-                try:
-                    add_btn.click()
-                    time.sleep(1.0)
-                    file_inputs = self.page.query_selector_all("input[type=file]")
-                except Exception:
-                    pass
 
-        if not file_inputs:
+        # Wait for input area to be ready
+        try:
+            self.page.wait_for_selector("input-area-v2, div.ql-editor", timeout=15000)
+        except Exception:
+            pass
+
+        file_input = self._find_file_input()
+        if not file_input:
+            self._open_upload_menu()
+            for _ in range(6):
+                file_input = self._find_file_input()
+                if file_input:
+                    break
+                time.sleep(0.5)
+
+        if not file_input:
             raise GeminiBridgeError("Không tìm thấy input[type=file] trên giao diện Gemini.")
-
-        # Find best matching input (prefer image accept)
-        file_input = file_inputs[0]
-        for inp in file_inputs:
-            acc = inp.get_attribute("accept") or ""
-            if "image" in acc.lower() or "*" in acc:
-                file_input = inp
-                break
 
         file_input.set_input_files([str(p.resolve()) for p in file_paths])
         self._log("info", f"Đã upload {len(file_paths)} file: {[p.name for p in file_paths]}")
-        time.sleep(3.0)
+        self._wait_for_upload_completion(expected_count=len(file_paths), timeout_s=25.0)
 
-    def send_prompt(self, prompt_text: str, wait_timeout_s: float = 60.0) -> str:
+
+    def send_prompt(self, prompt_text: str, wait_timeout_s: float = 90.0) -> str:
         """Type prompt into Gemini editor, send it, and wait for generation to complete."""
         self._log("step", f"Nhập prompt: '{prompt_text}'")
 
         # Focus editor
         editor_selectors = [
+            "div.ql-editor[contenteditable='true']",
             "div.ql-editor",
             "rich-textarea",
             "div[contenteditable='true']",
@@ -319,26 +419,53 @@ class GeminiNotebookBridge:
             raise GeminiBridgeError("Không tìm thấy ô nhập prompt trên Gemini.")
 
         editor.click()
-        time.sleep(0.5)
+        time.sleep(0.3)
+        # Clear existing text
+        self.page.keyboard.press("Control+A")
+        self.page.keyboard.press("Backspace")
+        time.sleep(0.2)
 
-        # Handle @ mention if present
+        # Type prompt - handle @ mention activation
         if prompt_text.startswith("@"):
             parts = prompt_text.split(" ", 1)
             mention_tag = parts[0]
+            skill_name = mention_tag.lstrip("@")
             rest = parts[1] if len(parts) > 1 else ""
-            self.page.keyboard.type(mention_tag, delay=20)
+
+            self.page.keyboard.type(mention_tag, delay=35)
             time.sleep(0.8)
-            # Dismiss or select autocomplete mention popup if visible
-            self.page.keyboard.press("Tab")
-            time.sleep(0.3)
-            self.page.keyboard.type(" " + rest, delay=15)
+
+            # 1. First attempt to click the matching item in dropdown overlay
+            clicked = self.page.evaluate(
+                """(name) => {
+                    const els = Array.from(document.querySelectorAll('*')).filter(e => 
+                        e.childNodes.length === 1 && 
+                        e.childNodes[0].nodeType === Node.TEXT_NODE && 
+                        e.innerText.trim() === name
+                    );
+                    if (els.length > 0) {
+                        els[0].click();
+                        return true;
+                    }
+                    return false;
+                }""",
+                skill_name,
+            )
+
+            if not clicked:
+                # 2. Fallback to Enter key
+                self.page.keyboard.press("Enter")
+            time.sleep(0.6)
+
+            if rest:
+                self.page.keyboard.type(" " + rest, delay=15)
         else:
             self.page.keyboard.type(prompt_text, delay=15)
         time.sleep(1.0)
 
         # Count existing message nodes before send to avoid returning old responses
         before_count = self.page.evaluate(
-            "document.querySelectorAll('message-content, .model-response-text, .response-container-content').length"
+            "document.querySelectorAll('model-response').length"
         )
 
         # Press Enter or click Send button
@@ -359,17 +486,34 @@ class GeminiNotebookBridge:
         stable_count = 0
 
         while time.time() < deadline:
-            time.sleep(1.5)
-            # Fetch latest response text only if a new message has been added
+            time.sleep(2.0)
             state = self.page.evaluate(
                 """(expectedMin) => {
-                    const nodes = document.querySelectorAll('message-content, .model-response-text, .response-container-content');
-                    const isBusy = !!document.querySelector('button[aria-label*="Stop"], button[aria-label*="Dừng"], .generating-indicator, mat-progress-spinner');
-                    if (nodes.length <= expectedMin) {
-                        return {ready: false, text: '', count: nodes.length, busy: isBusy};
+                    const responses = document.querySelectorAll('model-response');
+                    const isNew = responses.length > expectedMin;
+                    const lastResp = responses.length > 0 ? responses[responses.length - 1] : null;
+
+                    // Busy check: stop button in input area or thinking animation inside last response
+                    const stopBtn = document.querySelector('input-area-v2 button[aria-label*="Stop"], input-area-v2 button[aria-label*="Dừng"], button.stop-button');
+                    const hasThinking = !!(lastResp && lastResp.querySelector('thinking-dots-animation, thinking-overlay, mat-progress-spinner'));
+                    const isBusy = !!stopBtn || hasThinking;
+
+                    if (!isNew && responses.length <= expectedMin) {
+                        return {ready: false, text: '', busy: isBusy};
                     }
-                    const text = nodes[nodes.length - 1].innerText || '';
-                    return {ready: true, text: text, count: nodes.length, busy: isBusy};
+
+                    if (!lastResp) {
+                        return {ready: false, text: '', busy: isBusy};
+                    }
+
+                    const msgContent = lastResp.querySelector('message-content') || lastResp.querySelector('.response-content') || lastResp;
+                    const text = (msgContent.innerText || '').trim();
+
+                    if (!text && isBusy) {
+                        return {ready: false, text: '', busy: true};
+                    }
+
+                    return {ready: true, text: text, busy: isBusy};
                 }""",
                 before_count,
             )
@@ -377,10 +521,14 @@ class GeminiNotebookBridge:
             if state and state.get("ready"):
                 latest_text = state.get("text", "").strip()
                 is_busy = state.get("busy", False)
-                if latest_text:
-                    if len(latest_text) == len(last_text) and len(latest_text) > 20 and not is_busy:
+                # Ensure the text is not just a skill tag header like 'Skills: try-on-prompter'
+                clean_check = re.sub(r"^(?:skills\s*:\s*[^\n]+|\s*)+", "", latest_text, flags=re.IGNORECASE).strip()
+                has_actual_content = len(clean_check) > 40
+
+                if latest_text and has_actual_content:
+                    if len(latest_text) == len(last_text) and not is_busy:
                         stable_count += 1
-                        if stable_count >= 2:  # stable across 2 polls (~3s)
+                        if stable_count >= 2:  # stable across 2 polls (~4s)
                             self._log("info", f"Gemini phản hồi xong ({len(latest_text)} ký tự).")
                             return latest_text
                     else:
@@ -390,6 +538,7 @@ class GeminiNotebookBridge:
         if last_text:
             return last_text
         raise GeminiBridgeError(f"Hết thời gian chờ Gemini ({wait_timeout_s}s).")
+
 
     def generate_image_prompt(
         self,

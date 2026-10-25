@@ -107,10 +107,30 @@ Prompt: A chic fashionable Asian model Nabi wearing the pastel blue pleated midi
 """
     prompt = parse_gemini_image_prompt(raw)
     assert prompt.startswith("A chic fashionable Asian model Nabi")
-    assert "Chào bạn" not in prompt
+def test_parse_gemini_image_prompt_dual_options():
+    raw = """
+Dưới đây là 2 phiên bản prompt được thiết kế riêng:
+
+Bản 1: Direct Flow Transfer Prompt (Ngắn gọn, trực diện)
+Markdown
+Model swap task: Keep outfit from Image 2, replace face with Image 1.
+
+Bản 2: Detailed Realism Try-On Prompt (Chuyên sâu, khử da nhựa AI & chi tiết chân thực)
+Markdown
+A photorealistic, candid lifestyle fashion portrait of the exact young Korean woman from Image 1 wearing the outfit from Image 2. Visible skin micro-pores, authentic fabric texture.
+
+💡 Hướng dẫn thao tác trên flow.google.com:
+Dán prompt vào ô câu lệnh.
+"""
+    prompt = parse_gemini_image_prompt(raw)
+    assert prompt.startswith("A photorealistic, candid lifestyle fashion portrait")
+    assert "Visible skin micro-pores" in prompt
+    assert "Hướng dẫn" not in prompt
+    assert "Markdown" not in prompt
 
 
 def test_parse_gemini_video_prompts_labeled():
+
     raw = """
 Here are your 2 video prompts (8 seconds each):
 

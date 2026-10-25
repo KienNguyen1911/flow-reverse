@@ -323,6 +323,17 @@ class FlowVideoBridge:
             time.sleep(poll_interval_s)
             elapsed = int(time.time() - t0)
 
+            # Hover over first tile in grid to ensure <video> tag is mounted with signed URL
+            bridge.eval_json(
+                """(() => {
+                    const firstCard = document.querySelector('.mat-context-menu-trigger, .tile-row, [class*="asset"], [class*="card"]');
+                    if (firstCard) {
+                        const event = new MouseEvent('mouseover', { 'view': window, 'bubbles': true, 'cancelable': true });
+                        firstCard.dispatchEvent(event);
+                    }
+                })()"""
+            )
+
             video_info = bridge.eval_json(
                 """(() => {
                     const videos = Array.from(document.querySelectorAll('video'));
