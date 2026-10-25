@@ -1,6 +1,6 @@
 """Flow Bench — FastAPI backend for the image-generation playground.
 
-Run:  python -m src.WebUI.app  [--port 8787] [--cdp-url http://127.0.0.1:9222] [--open]
+Run:  python -m src.WebUI.app  [--port 4000] [--cdp-url http://127.0.0.1:4022] [--open]
 
 Serves:
   /api/status            bridge/browser/tab status + breaker snapshot (no playwright)
@@ -108,6 +108,22 @@ class UpdateAccountBody(BaseModel):
     enabled: Optional[bool] = None
     note: Optional[str] = None
     cdp_port: Optional[int] = None
+
+
+class AutoTryOnBody(BaseModel):
+    garment_path: Optional[str] = None
+    transfer_image: Optional[str] = None
+    extra_images: Optional[list[str]] = None
+    shopee_url: Optional[str] = None
+    product_dir: Optional[str] = None
+    model_path: Optional[str] = "assets/nabi_model.png"
+    project_id: Optional[str] = None
+    dry_run: bool = False
+    auto_stitch: bool = True
+    image_prompt: Optional[str] = None
+    video_prompt_1: Optional[str] = None
+    video_prompt_2: Optional[str] = None
+    confirm: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -458,6 +474,36 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
             pool.reset_account(a.id)
         return {"ok": True, "accounts": [a.id for a in pool.accounts]}
 
+    # -- auto try-on ---------------------------------------------------------------- #
+
+    @app.post("/api/tryon/start")
+    def api_tryon_start(body: AutoTryOnBody):
+        if not body.garment_path and not body.transfer_image and not body.shopee_url and not body.product_dir:
+            raise HTTPException(
+                status_code=400,
+                detail="Cần cung cấp garment_path (hoặc transfer_image), product_dir hoặc shopee_url",
+            )
+        if not body.dry_run and not body.confirm:
+            raise HTTPException(status_code=400, detail="Chạy thật cần confirm=true.")
+        job = manager.submit("auto_tryon", body.model_dump())
+        return {"job_id": job.id}
+
+    @app.get("/api/tryon/runs")
+    def api_tryon_runs():
+        aff_dir = (out_dir or DEFAULT_OUT).parent / "affiliate_runs"
+        runs = []
+        if aff_dir.exists():
+            for d in sorted(aff_dir.iterdir(), reverse=True):
+                if not d.is_dir():
+                    continue
+                mf = d / "manifest.json"
+                if mf.exists():
+                    try:
+                        runs.append(json.loads(mf.read_text(encoding="utf-8")))
+                    except Exception:
+                        pass
+        return {"runs": runs}
+
     # -- static UI ------------------------------------------------------------------ #
 
     dist = Path(web_dist) if web_dist else DEFAULT_WEB_DIST
@@ -483,7 +529,7 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="flow_bench", description="Flow Bench playground server")
     ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=8787)
+    ap.add_argument("--port", type=int, default=4000)
     ap.add_argument("--cdp-url", default=DEFAULT_CDP_URL)
     ap.add_argument("--out", default=None)
     ap.add_argument("--open", action="store_true", help="mở UI trong browser mặc định")

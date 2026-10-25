@@ -13,7 +13,7 @@ Why (verified against the installed cloakbrowser 0.6.3 and playwright 1.62.0):
    hardcodes ``ignore_default_args``, so that default cannot be removed.
 3. Chromium ignores ``--remote-debugging-port`` whenever the pipe handler is
    active, so an SDK-launched browser can never expose
-   ``http://127.0.0.1:9222`` for browser-harness / Playwright
+   ``http://127.0.0.1:4022`` for browser-harness / Playwright
    ``connect_over_cdp`` to attach.
 4. cloakbrowser itself already runs the binary via plain subprocess for its
    ``--version`` probe, and exposes ``ensure_binary()`` / ``build_args()`` /
@@ -269,11 +269,11 @@ def wait_for_cdp(port: int, timeout_s: float) -> int:
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Launch a CloakBrowser profile from browser_vault with CDP port 9222.",
+        description="Launch a CloakBrowser profile from browser_vault with CDP port 4022.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--profile", required=True, help="Profile id under browser_vault/ (created from _template on first use)")
-    parser.add_argument("--port", type=int, default=9222, help="Remote debugging (CDP) port; discovery tools attach here")
+    parser.add_argument("--port", type=int, default=4022, help="Remote debugging (CDP) port; discovery tools attach here")
     parser.add_argument("--wait", action="store_true", help="Poll /json/version until the browser answers (recommended before attaching tools)")
     parser.add_argument("--wait-timeout", type=float, default=30.0, help="Seconds to wait with --wait")
     parser.add_argument("--dry-run", action="store_true", help="Print the exact command without starting the browser")

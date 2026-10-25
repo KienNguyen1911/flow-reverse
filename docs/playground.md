@@ -46,7 +46,7 @@
 ## 3. Khởi động server
 
 ```bash
-python -m src.WebUI.app              # http://127.0.0.1:8787
+python -m src.WebUI.app              # http://127.0.0.1:4000
 python -m src.WebUI.app --open       # mở UI luôn bằng browser mặc định
 # flags khác: --host, --port, --cdp-url (bind account đầu tiên), --out
 ```
@@ -177,14 +177,14 @@ Job history chỉ nằm trong RAM; restart server không mất ảnh/artifacts �
 Ví dụ chạy thật bằng script (sau khi tự chịu trách nhiệm credit):
 
 ```bash
-curl -X POST http://127.0.0.1:8787/api/generate -H "Content-Type: application/json" \
+curl -X POST http://127.0.0.1:4000/api/generate -H "Content-Type: application/json" \
   -d '{"project_id":"<uuid>","prompt":"một chú vịt vàng bơi hồ","dry_run":false,"confirm":true}'
 ```
 
 Batch nhiều ảnh (kể cả i2i + phụ thuộc) bằng storyboard JSON:
 
 ```bash
-curl -X POST http://127.0.0.1:8787/api/batch -H "Content-Type: application/json" \
+curl -X POST http://127.0.0.1:4000/api/batch -H "Content-Type: application/json" \
   -d '{"project_id":"<uuid>","storyboard_path":"configs/storyboard_100.json","dry_run":false,"confirm":true}'
 ```
 

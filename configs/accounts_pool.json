@@ -1,19 +1,25 @@
 {
   "target_jobs_per_account": 25,
   "max_active_browsers": 4,
-  "port_base": 9222,
+  "port_base": 4022,
   "auto_discover": true,
   "accounts": [
     {
       "id": "flow_main",
       "profile_id": "flow_main",
-      "cdp_port": 9222,
+      "cdp_port": 4022,
       "enabled": true
     },
     {
       "id": "aaaaa",
       "profile_id": "aaaaa",
-      "cdp_port": 9223,
+      "cdp_port": 4023,
+      "enabled": true
+    },
+    {
+      "id": "kiennd-study",
+      "profile_id": "kiennd-study",
+      "cdp_port": 4024,
       "enabled": true
     }
   ]

@@ -49,7 +49,7 @@ Chi tiết kỹ thuật đầy đủ: `docs/api_specs/flow_create_image.md` §7.
 ## 3. Cách làm hiện tại — “Bridge Mode” (đã kiểm chứng end-to-end)
 
 ```text
-CloakBrowser (profile flow_main, CDP :9222, đã login sẵn)
+CloakBrowser (profile flow_main, CDP :4022, đã login sẵn)
    │
 [1] Mở/điều hướng page tới flow.google.com (project đích)
    │
@@ -127,7 +127,7 @@ CloakBrowser (profile flow_main, CDP :9222, đã login sẵn)
 ```text
 src/
 ├── BrowserHost/
-│   └── launch_profile.py        # ĐÃ CÓ — khởi chạy CloakBrowser + CDP :9222 (giữ nguyên)
+│   └── launch_profile.py        # ĐÃ CÓ — khởi chạy CloakBrowser + CDP :4022 (giữ nguyên)
 ├── Bridge/
 │   └── flow_bridge.py           # ĐÃ VIẾT — Playwright connect_over_cdp: attach page, cài hook
 │                                #   (block+capture ogiZ0b, capture at), nav/type/click,
@@ -147,7 +147,7 @@ web/                             # ĐÃ VIẾT — frontend playground (React 19
 **API đã có:**
 
 ```python
-client = FlowClient(cdp_url="http://127.0.0.1:9222")   # attach vào CloakBrowser đang mở
+client = FlowClient(cdp_url="http://127.0.0.1:4022")   # attach vào CloakBrowser đang mở
 st    = client.status()                                 # health check (0 credit)
 projects = client.list_projects()                       # UpteDb — 0 credit
 p     = client.create_project("Batch 18/10")            # jHPbke — 0 credit (tạo project thật)

@@ -23,7 +23,7 @@ Bốn lớp độc lập (chi tiết chuẩn hoá tại [`AGENTS.md`](AGENTS.md)
 
 | Lớp | Công cụ | Vai trò |
 | :--- | :--- | :--- |
-| **1. Browser Runtime** | CloakBrowser | Profile cô lập (`browser_vault/`), seed/locale/timezone cố định, mở cổng CDP `:9222` |
+| **1. Browser Runtime** | CloakBrowser | Profile cô lập (`browser_vault/`), seed/locale/timezone cố định, mở cổng CDP `:4022` |
 | **2. Discovery** | Playwright sniffer + payload differ | Thu trace mạng (XHR/fetch/WS), differential analysis → đặc tả tại `docs/api_specs/` |
 | **3. Bridge** | Playwright `connect_over_cdp` | Hook fetch trong page: chặn request `ogiZ0b` của app (0 credit) để "mượn" token tươi + `at` + `_reqid`; dựng body riêng (prompt/seed/UUID chữ hoa); fire in-page; long-poll; tải signed CDN URL |
 | **4. Production** | Python + FastAPI + React | `FlowClient` (CLI), WebUI backend, playground web, pool N account (launch theo nhu cầu + hot spare); batch t2i/i2i theo storyboard; circuit breaker per account, jitter + exponential backoff |
@@ -48,7 +48,7 @@ CLI / Web UI ──▶ FlowClient ──▶ FlowBridge (CDP) ──▶ tab Flow 
 ```bash
 pip install playwright fastapi uvicorn pydantic requests cloakbrowser
 
-# 1) Mở trình duyệt với profile đã đăng nhập Google (cổng CDP :9222) — hoặc để server tự đánh thức khi cần
+# 1) Mở trình duyệt với profile đã đăng nhập Google (cổng CDP :4022) — hoặc để server tự đánh thức khi cần
 python src/BrowserHost/launch_profile.py --profile flow_main --wait
 
 # 2) CLI (0 credit với status / list-projects / --dry-run)
@@ -58,7 +58,7 @@ python -m src.Workflows.flow_client generate --project <uuid> --prompt "a red ap
 
 # 3) Playground web (Flow Bench)
 cd web && npm install && npm run build && cd ..
-python -m src.WebUI.app --port 8787 --open
+python -m src.WebUI.app --port 4000 --open
 ```
 
 Tài liệu: [cẩm nang học tập reverse API](docs/reverse_api_study_guide.md) · [đặc tả protocol](docs/api_specs/) · [hướng dẫn playground](docs/playground.md) · [báo cáo tổng hợp](docs/phase4_report.md)

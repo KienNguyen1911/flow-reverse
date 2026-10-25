@@ -20,9 +20,9 @@ Policy notes (AGENTS.md §1, plan §1.3):
 
 Usage:
     sup = PoolSupervisor()
-    sup.ensure_running("acc_01", 9222)     # attach or launch + wait for CDP
-    sup.is_alive(9222)                     # cheap HTTP probe
-    sup.hibernate("acc_01", 9222)          # graceful -> forced close (managed only)
+    sup.ensure_running("acc_01", 4022)     # attach or launch + wait for CDP
+    sup.is_alive(4022)                     # cheap HTTP probe
+    sup.hibernate("acc_01", 4022)          # graceful -> forced close (managed only)
 """
 
 from __future__ import annotations

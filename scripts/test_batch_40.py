@@ -234,8 +234,8 @@ def main():
     parser.add_argument(
         "--api-url",
         type=str,
-        default="http://127.0.0.1:8787",
-        help="Địa chỉ WebUI server API (mặc định: http://127.0.0.1:8787)",
+        default="http://127.0.0.1:4000",
+        help="Địa chỉ WebUI server API (mặc định: http://127.0.0.1:4000)",
     )
     parser.add_argument(
         "--project",

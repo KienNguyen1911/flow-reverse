@@ -28,13 +28,13 @@ Khi nhận yêu cầu tích hợp một luồng công việc web hoặc cập nh
    - `platform` (khớp với OS thực tế, mặc định `"windows"`).
    - `timezone_id`, `locale`, và cấu hình `proxy` (nếu có).
    - Cờ bảo vệ rò rỉ mạng: `--webrtc-ip-handling-policy=disable_non_proxied_udp`.
-3. Khởi chạy `CloakBrowser` ở chế độ có giao diện (`headless=False`) và mở cổng debug nội bộ (`--remote-debugging-port=9222`) khi cần cho các công cụ phân tích gắn vào.
+3. Khởi chạy `CloakBrowser` ở chế độ có giao diện (`headless=False`) và mở cổng debug nội bộ (`--remote-debugging-port=4022`) khi cần cho các công cụ phân tích gắn vào.
 
 ### Giai đoạn 2: Khám phá Giao diện & Thu thập Dấu vết Mạng (UI-to-Network Correlation)
 Khi cần tìm hiểu cấu trúc request/response của một thao tác trên trang web:
 1. **Gắn bộ lắng nghe (Network Sniffer):** Sử dụng Playwright `page.on("request")` và `page.on("response")` để ghi lại các gói tin thuộc nhóm `xhr`, `fetch` hoặc `websocket` vào file `./traces/raw_trace_<timestamp>.json`.
 2. **Kích hoạt thao tác qua `browser-use`:**
-   - Kết nối `browser-use` vào cổng CDP `http://127.0.0.1:9222`.
+   - Kết nối `browser-use` vào cổng CDP `http://127.0.0.1:4022`.
    - Giao nhiệm vụ cụ thể cho `browser-use` thực hiện thao tác trên UI (ví dụ: thực hiện 2 lần với 1 tham số thay đổi trên giao diện để phục vụ việc so sánh diff).
 3. **Đánh dấu mốc thời gian (Action Tagging):** Ghi nhận timestamp trước và sau mỗi bước của `browser-use` để ánh xạ chính xác: *Thao tác UI X -> Sinh ra Request mạng Y*.
 

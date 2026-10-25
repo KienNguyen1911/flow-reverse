@@ -66,14 +66,14 @@ class DummySupervisor:
 def make_pool(tmp_path: Path, n_accounts: int = 4, state: dict | None = None,
               alive=()) -> AccountPoolManager:
     accounts = [
-        {"id": f"acc_{i + 1:02d}", "profile_id": f"acc_{i + 1:02d}", "cdp_port": 9222 + i}
+        {"id": f"acc_{i + 1:02d}", "profile_id": f"acc_{i + 1:02d}", "cdp_port": 4022 + i}
         for i in range(n_accounts)
     ]
     cfg = tmp_path / "accounts_pool.json"
     cfg.write_text(json.dumps({
         "target_jobs_per_account": 25,
         "max_active_browsers": 4,
-        "port_base": 9222,
+        "port_base": 4022,
         "accounts": accounts,
     }), encoding="utf-8")
     state_path = tmp_path / "pool_state.json"
@@ -181,12 +181,12 @@ def test_selection_excludes(tmp_path):
 
 
 def test_ensure_working_set_wakes_only_selected(tmp_path):
-    pool = make_pool(tmp_path, n_accounts=4, alive=(9222,))  # acc_01 already up
+    pool = make_pool(tmp_path, n_accounts=4, alive=(4022,))  # acc_01 already up
     active, errors = pool.ensure_working_set(pool.select_working_set(2))
     assert errors == []
     assert [a.config.id for a in active] == ["acc_01", "acc_02"]
     launched = [p for _pid, p in pool.supervisor.launched]
-    assert launched == [9223]  # acc_01 attached, acc_02 woken on demand
+    assert launched == [4023]  # acc_01 attached, acc_02 woken on demand
 
 
 def test_promote_standby_skips_working_set(tmp_path):
@@ -354,12 +354,12 @@ def test_example_pool_config_is_loadable(tmp_path):
 
 def test_add_account_and_suggest_port(tmp_path):
     pool = make_pool(tmp_path, n_accounts=2)
-    assert pool.next_suggested_port() == 9224  # 9222 and 9223 used
+    assert pool.next_suggested_port() == 4024  # 4022 and 4023 used
     new_acc = pool.add_account("acc_03", note="test 3", create_profile=False)
     assert new_acc.id == "acc_03"
-    assert new_acc.cdp_port == 9224
+    assert new_acc.cdp_port == 4024
     assert len(pool.accounts) == 3
-    assert pool.next_suggested_port() == 9225
+    assert pool.next_suggested_port() == 4025
 
     # Duplicate id raises ValueError
     with pytest.raises(ValueError, match="đã tồn tại"):
@@ -368,10 +368,10 @@ def test_add_account_and_suggest_port(tmp_path):
 
 def test_update_account(tmp_path):
     pool = make_pool(tmp_path, n_accounts=2)
-    updated = pool.update_account("acc_01", enabled=False, note="paused", cdp_port=9299)
+    updated = pool.update_account("acc_01", enabled=False, note="paused", cdp_port=4099)
     assert updated.enabled is False
     assert updated.note == "paused"
-    assert updated.cdp_port == 9299
+    assert updated.cdp_port == 4099
 
 
 def test_remove_account(tmp_path):

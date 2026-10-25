@@ -739,6 +739,7 @@ class JobManager:
         self._worker = threading.Thread(target=self._run_forever, name="flow-job-worker", daemon=True)
         self._worker.start()
         self._current_id: Optional[str] = None
+        self._account_projects: dict[str, str] = {}
 
     # -- API ---------------------------------------------------------------- #
 
@@ -816,6 +817,9 @@ class JobManager:
         if kind == "create_project":
             self._run_project_op(job)
             return
+        if kind == "auto_tryon":
+            self._run_auto_tryon(job)
+            return
         raise ValueError(f"unknown job kind: {kind}")
 
     # -- single-account jobs ---------------------------------------------------- #
@@ -830,13 +834,64 @@ class JobManager:
         ev = job.add_event
         account, client = self._acquire_and_client(job)
         aid = account.config.id
+        target_pid = params.get("project_id")
+        cached_pid = self._account_projects.get(aid)
+        if cached_pid:
+            target_pid = cached_pid
+        elif not target_pid or aid not in self._account_projects:
+            try:
+                listed = client.list_projects()
+                if listed:
+                    pids = {p.id for p in listed}
+                    if target_pid and target_pid in pids:
+                        self._account_projects[aid] = target_pid
+                    else:
+                        target_pid = listed[0].id
+                        self._account_projects[aid] = target_pid
+                        ev("info", f"[{aid}] tự động dùng dự án của account: {listed[0].title or target_pid[:8]} ({target_pid[:8]}…)")
+                else:
+                    p = client.create_project("Automated Pipeline", on_event=ev)
+                    target_pid = p.id
+                    self._account_projects[aid] = target_pid
+                    ev("info", f"[{aid}] tự động tạo dự án mới: {p.title} ({target_pid[:8]}…)")
+            except Exception as e:
+                ev("warn", f"[{aid}] không dò được dự án trên account: {e}")
+
+        tpl = None
+        ref_path = params.get("reference_image_path")
+        if ref_path:
+            p = Path(ref_path)
+            candidate_paths = [
+                p,
+                ROOT / p,
+                ROOT / "out" / "references" / p.name,
+            ]
+            resolved_file = None
+            for cand in candidate_paths:
+                if cand.is_file():
+                    resolved_file = cand.resolve()
+                    break
+            if resolved_file is None:
+                raise FileNotFoundError(f"Không tìm thấy file ảnh tham chiếu tại: {ref_path}")
+
+            sha = sha256_file(str(resolved_file))
+            cached = self.pool.registry.get(aid, sha)
+            if cached is None:
+                ev("step", f"lazy upload ảnh tham chiếu ({resolved_file.name}) — 0 credit")
+                tpl = client.upload_reference_image(target_pid, str(resolved_file), prompt_probe=params["prompt"], on_event=ev)
+                self.pool.registry.put(aid, tpl.model_dump())
+            else:
+                tpl = ReferenceTemplate(**cached)
+                ev("info", f"trúng cache tham chiếu sha {sha[:8]}… (media≈{tpl.media_id})")
+
         try:
             res = client.generate_image(
-                params["project_id"],
+                target_pid,
                 params["prompt"],
                 aspect=int(params.get("aspect") or 3),
                 seed=params.get("seed"),
                 dry_run=dry_run,
+                reference=tpl,
                 on_event=ev,
             )
         except Exception as exc:
@@ -880,3 +935,64 @@ class JobManager:
         except Exception as exc:
             self.pool.report_item_result(account.config.id, "failed", error=f"{type(exc).__name__}: {exc}")
             raise
+
+    def _run_auto_tryon(self, job: Job) -> None:
+        from dataclasses import asdict
+        from ..Workflows.auto_tryon_pipeline import AutoTryOnPipeline
+
+        params = job.params
+        ev = job.add_event
+        account, client = self._acquire_and_client(job)
+        aid = account.config.id
+
+        target_pid = params.get("project_id")
+        cached_pid = self._account_projects.get(aid)
+        if cached_pid:
+            target_pid = cached_pid
+        elif not target_pid or aid not in self._account_projects:
+            try:
+                listed = client.list_projects()
+                if listed:
+                    pids = {p.id for p in listed}
+                    if target_pid and target_pid in pids:
+                        self._account_projects[aid] = target_pid
+                    else:
+                        target_pid = listed[0].id
+                        self._account_projects[aid] = target_pid
+                        ev("info", f"[{aid}] tự động dùng dự án của account: {listed[0].title or target_pid[:8]} ({target_pid[:8]}…)")
+                else:
+                    p = client.create_project("Automated Pipeline", on_event=ev)
+                    target_pid = p.id
+                    self._account_projects[aid] = target_pid
+                    ev("info", f"[{aid}] tự động tạo dự án mới: {p.title} ({target_pid[:8]}…)")
+            except Exception as e:
+                ev("warn", f"[{aid}] không dò được dự án trên account: {e}")
+
+        pipeline = AutoTryOnPipeline(
+            cdp_url=account.cdp_url,
+            out_root=self.out_root.parent / "affiliate_runs",
+            on_event=ev,
+        )
+        try:
+            res = pipeline.run(
+                model_path=params.get("model_path") or "assets/nabi_model.png",
+                garment_path=params.get("garment_path") or params.get("transfer_image"),
+                product_dir=params.get("product_dir"),
+                extra_images=params.get("extra_images"),
+                shopee_url=params.get("shopee_url"),
+                project_id=target_pid,
+                dry_run=bool(params.get("dry_run", False)),
+                auto_stitch=bool(params.get("auto_stitch", True)),
+                override_image_prompt=params.get("image_prompt"),
+                override_video_prompt_1=params.get("video_prompt_1"),
+                override_video_prompt_2=params.get("video_prompt_2"),
+            )
+            res_dict = asdict(res)
+            res_dict["account_id"] = aid
+            job.result = res_dict
+            job.set_state("succeeded")
+            self.pool.report_item_result(aid, "ok")
+        except Exception as exc:
+            self.pool.report_item_result(aid, "failed", error=f"{type(exc).__name__}: {exc}")
+            raise
+

@@ -13,7 +13,7 @@ import {
 } from "@phosphor-icons/react";
 import { Spinner } from "./ui";
 
-const BASE = "http://127.0.0.1:8787";
+const BASE = "http://127.0.0.1:4000";
 
 type Method = "GET" | "POST" | "PATCH" | "DELETE";
 
@@ -52,7 +52,7 @@ const PY_START = `import time
 
 import requests
 
-BASE = "http://127.0.0.1:8787"
+BASE = "http://127.0.0.1:4000"
 
 
 def wait_job(job_id: str, timeout_s: int = 300) -> dict:
@@ -146,7 +146,7 @@ const GROUPS: Group[] = [
         tryIt: true,
         curl: `curl -s ${BASE}/api/status`,
         res: `{
-  "cdp_url": "http://127.0.0.1:9222",
+  "cdp_url": "http://127.0.0.1:4022",
   "cdp_ok": true,
   "browser": "Chrome/131",
   "flow_tab_url": "https://labs.google/fx/tools/image-fx",
@@ -359,7 +359,7 @@ const GROUPS: Group[] = [
     {
       "id": "flow_main",
       "profile_id": "flow_main",
-      "cdp_port": 9222,
+      "cdp_port": 4022,
       "enabled": true,
       "running": true,
       "status": "ready",
@@ -406,20 +406,20 @@ const GROUPS: Group[] = [
         ],
         body: `{
   "id": "acc_02",
-  "cdp_port": 9223,
+  "cdp_port": 4023,
   "enabled": true,
   "note": "Acc dự phòng",
   "create_profile": true
 }`,
         curl: `curl -s -X POST ${BASE}/api/pool/accounts \\
   -H "content-type: application/json" \\
-  -d '{"id":"acc_02","cdp_port":9223,"enabled":true,"note":"Acc dự phòng"}'`,
+  -d '{"id":"acc_02","cdp_port":4023,"enabled":true,"note":"Acc dự phòng"}'`,
         res: `{
   "ok": true,
   "account": {
     "id": "acc_02",
     "profile_id": "acc_02",
-    "cdp_port": 9223,
+    "cdp_port": 4023,
     "enabled": true,
     "note": "Acc dự phòng"
   }
@@ -433,7 +433,7 @@ const GROUPS: Group[] = [
         body: `{
   "enabled": false,
   "note": "Tạm nghỉ",
-  "cdp_port": 9225
+  "cdp_port": 4025
 }`,
         curl: `curl -s -X PATCH ${BASE}/api/pool/accounts/acc_02 \\
   -H "content-type: application/json" \\
@@ -443,7 +443,7 @@ const GROUPS: Group[] = [
   "account": {
     "id": "acc_02",
     "profile_id": "acc_02",
-    "cdp_port": 9223,
+    "cdp_port": 4023,
     "enabled": false,
     "note": "Tạm nghỉ"
   }
@@ -474,8 +474,8 @@ const GROUPS: Group[] = [
   "account": {
     "id": "flow_main",
     "profile_id": "flow_main",
-    "cdp_port": 9222,
-    "cdp_url": "http://127.0.0.1:9222",
+    "cdp_port": 4022,
+    "cdp_url": "http://127.0.0.1:4022",
     "enabled": true,
     "running": true,
     "managed": true,

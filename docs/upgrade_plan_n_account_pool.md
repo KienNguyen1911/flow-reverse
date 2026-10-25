@@ -83,9 +83,9 @@ Toàn bộ ảnh xuất ra được đặt tên tự động:
 ```
 flow-reverse/
 ├── browser_vault/                      # Tự động quét N thư mục profile hiện có
-│   ├── acc_01/                         # Cổng CDP: 9222 + Seed cố định
-│   ├── acc_02/                         # Cổng CDP: 9223 + Seed cố định
-│   └── acc_N/                          # Cổng CDP: 9222 + (N - 1)
+│   ├── acc_01/                         # Cổng CDP: 4022 + Seed cố định
+│   ├── acc_02/                         # Cổng CDP: 4023 + Seed cố định
+│   └── acc_N/                          # Cổng CDP: 4022 + (N - 1)
 ├── configs/
 │   ├── accounts_pool.json              # Cấu hình target_jobs_per_account (25), max_active_browsers, accounts[]
 │   ├── reference_media_cache.json      # Lưu: account_id -> {sha256(file): media_id}

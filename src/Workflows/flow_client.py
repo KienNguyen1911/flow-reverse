@@ -198,7 +198,7 @@ def sha256_file(path: Path | str, chunk: int = 1 << 20) -> str:
 
 
 class FlowClient:
-    """High-level client: attach to the running CloakBrowser (CDP :9222)."""
+    """High-level client: attach to the running CloakBrowser (CDP :4022)."""
 
     def __init__(
         self,

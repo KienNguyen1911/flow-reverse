@@ -45,7 +45,7 @@ Ghi chú:
 - **macOS/Linux:** sau Bước 5, sửa `platform` trong `browser_vault/<profile>/config.json` cho khớp OS thật
   (AGENTS.md yêu cầu không giả lập platform khác vì dễ lộ mismatch fingerprint).
 - Python cài từ python.org; nếu lệnh `python` mở Microsoft Store hoặc không tồn tại, dùng `py -3.11` thay thế.
-- Các cổng dùng trong dự án: `9222` (CDP của CloakBrowser), `8787` (Flow Bench WebUI), `5173` (Vite dev — chỉ khi dev frontend).
+- Các cổng dùng trong dự án: `4022` (CDP của CloakBrowser), `4000` (Flow Bench WebUI), `4001` (Vite dev — chỉ khi dev frontend).
 
 ## 2. Cài Python dependencies
 
@@ -117,8 +117,8 @@ cd ..
 
 **Kiểm tra:** tồn tại `web/dist/index.html`.
 
-Ghi chú dev frontend (không bắt buộc): `npm run dev` chạy Vite tại `http://127.0.0.1:5173`,
-proxy `/api` → `http://127.0.0.1:8787` (xem `web/vite.config.ts`). Sửa frontend thì build lại — server không cần restart.
+Ghi chú dev frontend (không bắt buộc): `npm run dev` chạy Vite tại `http://127.0.0.1:4001`,
+proxy `/api` → `http://127.0.0.1:4000` (xem `web/vite.config.ts`). Sửa frontend thì build lại — server không cần restart.
 
 ## 5. Lần chạy đầu — tạo profile & đăng nhập Google (⚠️ THỦ CÔNG)
 
@@ -131,7 +131,7 @@ python src/BrowserHost/launch_profile.py --profile flow_main --wait
   profile đang dùng (đổi seed = đổi danh tính fingerprint).
 - Muốn xem trước lệnh mà không mở trình duyệt: thêm `--dry-run`.
 - **Chỉ mở một trình duyệt trên mỗi profile** (Chrome khóa `user_data_dir`); sniffer/Playwright chỉ được
-  attach vào cùng cổng CDP 9222.
+  attach vào cùng cổng CDP 4022.
 
 > ⛔ **DỪNG LẠI — nhờ người dùng làm thủ công:**
 > 1. Trong cửa sổ CloakBrowser vừa mở, **đăng nhập tài khoản Google**.
@@ -143,7 +143,7 @@ python src/BrowserHost/launch_profile.py --profile flow_main --wait
 **Kiểm tra:** CDP đã sẵn sàng —
 
 ```bash
-curl.exe http://127.0.0.1:9222/json/version     # JSON có trường "Browser"
+curl.exe http://127.0.0.1:4022/json/version     # JSON có trường "Browser"
 ```
 
 ## 6. Smoke test bridge (0 credit)
@@ -159,25 +159,25 @@ python -m src.Workflows.flow_client list-projects # mở tab Flow, đọc danh s
 ## 7. Khởi động Flow Bench (WebUI)
 
 ```bash
-python -m src.WebUI.app --port 8787 --open
+python -m src.WebUI.app --port 4000 --open
 ```
 
 **Kiểm tra:**
 
 ```bash
-curl.exe http://127.0.0.1:8787/api/status    # HTTP 200, cdp_ok: true, có "breaker"
+curl.exe http://127.0.0.1:4000/api/status    # HTTP 200, cdp_ok: true, có "breaker"
 ```
 
-Mở `http://127.0.0.1:8787` — UI "Flow Bench" phải hiện ra. Nếu báo *"UI chưa build"* → quay lại Bước 4.
+Mở `http://127.0.0.1:4000` — UI "Flow Bench" phải hiện ra. Nếu báo *"UI chưa build"* → quay lại Bước 4.
 
 ## 8. Checklist nghiệm thu (agent xác nhận đủ trước khi kết luận)
 
 - [ ] `python -c "import playwright, fastapi, uvicorn, pydantic, requests, cloakbrowser"` → in `deps OK`
 - [ ] `python -m cloakbrowser info` → `Installed: True`
 - [ ] `web/dist/index.html` tồn tại
-- [ ] `curl.exe http://127.0.0.1:9222/json/version` → browser phản hồi (sau Bước 5)
+- [ ] `curl.exe http://127.0.0.1:4022/json/version` → browser phản hồi (sau Bước 5)
 - [ ] `python -m src.Workflows.flow_client status` → exit 0, `cdp_ok: true`
-- [ ] `curl.exe http://127.0.0.1:8787/api/status` → HTTP 200, `cdp_ok: true`
+- [ ] `curl.exe http://127.0.0.1:4000/api/status` → HTTP 200, `cdp_ok: true`
 - [ ] Người dùng đã đăng nhập Google và mở được `flow.google.com`
 - [ ] **Chưa tiêu credit nào** (không chạy generate thật trong quá trình cài)
 
@@ -202,7 +202,7 @@ python discovery/payload_differ.py traces/raw_trace_<A>.jsonl traces/raw_trace_<
 ```
 
 - Điều khiển UI bằng LLM trong pha khám phá cần `browser-use` (tuỳ chọn): `python -m pip install browser-use`,
-  attach vào CDP `http://127.0.0.1:9222`. **Không** đưa vào vòng lặp production (AGENTS.md mục 1).
+  attach vào CDP `http://127.0.0.1:4022`. **Không** đưa vào vòng lặp production (AGENTS.md mục 1).
 - Chi tiết quy trình: `discovery/README.md`. Script `discovery/test_generate_2_images.py` là bản legacy
   (dùng browser-harness) — không cần cài để vận hành.
 
@@ -214,13 +214,13 @@ python discovery/payload_differ.py traces/raw_trace_<A>.jsonl traces/raw_trace_<
 | `npm` not found / *"npm.ps1 cannot be loaded"* (PowerShell) | Cài Node.js LTS, hoặc chạy trong cmd / dùng `npm.cmd` |
 | Build frontend lỗi do Node quá cũ | Nâng Node lên ^20.19.0 || ≥ 22.12.0 (Vite 8) |
 | `[launch] !! cloakbrowser is not installed` (exit 2) | Sai môi trường Python (venv khác?) → kích hoạt đúng venv rồi `pip install cloakbrowser` |
-| `--wait` báo "CDP endpoint not ready" | Tăng `--wait-timeout`, hoặc firewall chặn cổng 9222; kiểm tra `curl.exe http://127.0.0.1:9222/json/version` |
+| `--wait` báo "CDP endpoint not ready" | Tăng `--wait-timeout`, hoặc firewall chặn cổng 4022; kiểm tra `curl.exe http://127.0.0.1:4022/json/version` |
 | UI báo *"UI chưa build"* | Chưa chạy Bước 4 (`cd web && npm run build`) |
-| Lỗi *"port already in use"* khi chạy WebUI | Đổi cổng: `python -m src.WebUI.app --port 8788` |
+| Lỗi *"port already in use"* khi chạy WebUI | Đổi cổng: `python -m src.WebUI.app --port 4001` |
 | UI báo *"Browser offline"* | CloakBrowser chưa mở / CDP chết → chạy lại Bước 5 |
-| `423` khi tạo ảnh | Breaker đang cooldown (lý do hiện trong banner). Kiểm tra phiên đăng nhập trước, rồi `curl.exe http://127.0.0.1:8787/api/circuit/clear` |
+| `423` khi tạo ảnh | Breaker đang cooldown (lý do hiện trong banner). Kiểm tra phiên đăng nhập trước, rồi `curl.exe http://127.0.0.1:4000/api/circuit/clear` |
 | `401/403` | Phiên Google hỏng → đăng nhập lại trong CloakBrowser (Bước 5) |
-| Mở trình duyệt thứ hai trên cùng profile bị lỗi | Chrome khóa `user_data_dir` — chỉ dùng `launch_profile.py`, các tool khác attach qua CDP 9222 |
+| Mở trình duyệt thứ hai trên cùng profile bị lỗi | Chrome khóa `user_data_dir` — chỉ dùng `launch_profile.py`, các tool khác attach qua CDP 4022 |
 | Job báo "không tìm thấy ô prompt" | UI Flow đổi cấu trúc → cập nhật selector trong `src/Bridge/flow_bridge.py` (xem `docs/playground.md` mục 7) |
 
 Tham chiếu thêm: `docs/playground.md` (vận hành Flow Bench) · `docs/api_specs/` (đặc tả protocol) ·

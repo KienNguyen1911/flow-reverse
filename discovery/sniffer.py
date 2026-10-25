@@ -1,7 +1,7 @@
 """Playwright network sniffer for the Google Flow reverse-engineering workflow.
 
 Attaches to an ALREADY-RUNNING browser (CloakBrowser launched by
-``src/BrowserHost/launch_profile.py``, CDP port 9222 by default) and writes one
+``src/BrowserHost/launch_profile.py``, CDP port 4022 by default) and writes one
 JSON event per line (JSONL) into ``traces/raw_trace_<UTC>.jsonl``. Run it as a
 standalone process while another agent drives the UI (browser-harness); it is
 read-only: it only listens to Playwright events and never navigates or mutates
@@ -38,7 +38,7 @@ Deliberate behaviour choices:
 
 Usage:
     python discovery/sniffer.py
-    python discovery/sniffer.py --cdp-url http://127.0.0.1:9222 \
+    python discovery/sniffer.py --cdp-url http://127.0.0.1:4022 \
         --out-dir traces --types xhr,fetch,websocket --max-body 262144
 
 Stop with Ctrl+C: the trace file is flushed/closed and a per-kind summary is
@@ -421,8 +421,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--cdp-url",
-        default="http://127.0.0.1:9222",
-        help="CDP endpoint of the running browser (launch_profile.py opens port 9222)",
+        default="http://127.0.0.1:4022",
+        help="CDP endpoint of the running browser (launch_profile.py opens port 4022)",
     )
     parser.add_argument("--out-dir", default="traces", help="Directory for raw_trace_<UTC>.jsonl")
     parser.add_argument(

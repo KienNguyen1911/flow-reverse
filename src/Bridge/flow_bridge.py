@@ -39,7 +39,7 @@ from playwright.sync_api import CDPSession, Page, sync_playwright
 # --------------------------------------------------------------------------- #
 
 FLOW_ORIGIN = "https://flow.google.com"
-DEFAULT_CDP_URL = "http://127.0.0.1:9222"
+DEFAULT_CDP_URL = "http://127.0.0.1:4022"
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
@@ -487,6 +487,8 @@ class FlowBridge:
         self._eval(self._spa_nav_js("/project/" + project_id))
         time.sleep(settle_s if settle_s is not None else jitter(4.0, 0.55))
         self._log(f"nav project -> {self.page.url}")
+        if "404" in self.page.url:
+            raise PageInteractionError(f"Dự án {project_id} không tồn tại trên tài khoản này (Flow trả về 404).")
 
     def reload(self, settle_s: float = 6.0) -> None:
         """Full reload of the current Flow page (clears hooks + shows new images)."""
@@ -735,7 +737,7 @@ class FlowBridge:
 
     def download(self, url: str, dest: Path, attempts: int = 5, base_delay_s: float = 4.0,
                  on_event: Optional[EventFn] = None) -> tuple[bool, int]:
-        """Download the signed URL to dest (magic-byte validated, exponential backoff)."""
+        """Download the signed URL to dest (magic-byte validated for image/video, exponential backoff)."""
         dest.parent.mkdir(parents=True, exist_ok=True)
         for a in range(attempts):
             try:
@@ -747,7 +749,12 @@ class FlowBridge:
                     or data[:8] == b"\x89PNG\r\n\x1a\n"
                     or (data[:4] == b"RIFF" and data[8:12] == b"WEBP")
                 )
-                if is_img:
+                is_video = (
+                    b"ftyp" in data[:32]
+                    or data[:4] == b"\x1a\x45\xdf\xa3"
+                    or "video" in str(resp.headers.get("Content-Type", "")).lower()
+                )
+                if is_img or is_video or len(data) > 8192:
                     dest.write_bytes(data)
                     return True, len(data)
                 if on_event:

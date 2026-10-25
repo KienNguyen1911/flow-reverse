@@ -1,7 +1,7 @@
 """End-to-end test: generate N images (default 2) via the proven in-page bridge flow.
 
 What it does (per image), reusing the exact mechanism validated in experiments E7/E8:
-  1. Attach to the running CloakBrowser via CDP (browser-harness, port 9222).
+  1. Attach to the running CloakBrowser via CDP (browser-harness, port 4022).
   2. Install an idempotent fetch hook in the page:
        - blocks the app's own ogiZ0b request (so it costs 0 credit),
        - captures its URL + body (which carries the fresh reCAPTCHA token).
@@ -23,7 +23,7 @@ Usage:
   python discovery/test_generate_2_images.py --yes           # skip confirmation prompt
 
 Requirements:
-  - CloakBrowser running with --remote-debugging-port=9222 (src/BrowserHost/launch_profile.py)
+  - CloakBrowser running with --remote-debugging-port=4022 (src/BrowserHost/launch_profile.py)
   - The active tab logged in on https://flow.google.com
 """
 
@@ -45,7 +45,7 @@ except Exception:
     pass
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent  # project root (script sits in discovery/)
-CDP_URL = "http://127.0.0.1:9222"
+CDP_URL = "http://127.0.0.1:4022"
 ENV = dict(os.environ, BU_CDP_URL=CDP_URL)
 
 DEFAULT_PROJECT = "3b368b0d-2e22-4ba0-9f8e-c17e698ddcb9"  # test project (teapots)
@@ -424,7 +424,7 @@ def main():
     print(check.strip()[:400])
     if "flow.google.com" not in check:
         print("!! WARNING: no flow.google.com tab visible via CDP. "
-              "Make sure CloakBrowser is running (port 9222) and the Flow tab is active.")
+              "Make sure CloakBrowser is running (port 4022) and the Flow tab is active.")
 
     if not args.dry_run and not args.yes and sys.stdin.isatty():
         ans = input("Continue? (~%d credit if all succeed) [y/N] " % len(prompts))

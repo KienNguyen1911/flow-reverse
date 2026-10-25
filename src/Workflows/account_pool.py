@@ -48,7 +48,7 @@ DEFAULT_PID_DIR = ROOT / "out" / "pids"
 
 Q_TARGET_DEFAULT = 25
 MAX_RAM_DEFAULT = 4
-PORT_BASE_DEFAULT = 9222
+PORT_BASE_DEFAULT = 4022
 
 
 class PoolUnavailableError(RuntimeError):

@@ -105,7 +105,7 @@ Trong quá trình phát triển, một vấn đề nan giải xuất hiện: **T
 
 **Nguyên nhân gốc rễ (Root Cause):**
 1. Playwright driver luôn tự động đẩy cờ `--remote-debugging-pipe` vào Chromium `argv` và chủ động từ chối cờ pipe/CDP do người gọi truyền vào.
-2. Khi handler pipe đang hoạt động, Chromium **hoàn toàn bỏ qua cờ `--remote-debugging-port`**, khiến endpoint `http://127.0.0.1:9222` không thể mở ra cho các tiến trình khác kết nối vào.
+2. Khi handler pipe đang hoạt động, Chromium **hoàn toàn bỏ qua cờ `--remote-debugging-port`**, khiến endpoint `http://127.0.0.1:4022` không thể mở ra cho các tiến trình khác kết nối vào.
 
 **Giải pháp triển khai trong `launch_profile.py`:**
 - Sử dụng SDK CloakBrowser để chuẩn bị binary tàng hình (`ensure_binary()`) và sinh tập cờ fingerprint chuẩn (`build_args()`), nhưng **khởi chạy binary trực tiếp qua `subprocess.Popen`** độc lập thay vì thông qua Playwright launch wrapper.
@@ -331,7 +331,7 @@ Từ các phát hiện thực nghiệm trên, mã nguồn vận hành chính th�
 ### 7.1. Chu trình vận hành Bridge Mode ([`src/Bridge/flow_bridge.py`](file:///D:/Dev/rev-flow/src/Bridge/flow_bridge.py))
 
 ```text
-[1] Attach Playwright via CDP (http://127.0.0.1:9222) vào Tab Flow
+[1] Attach Playwright via CDP (http://127.0.0.1:4022) vào Tab Flow
                           │
 [2] Bơm Fetch Hook vào Page Context (window.__flowHook)
     • Lắng nghe request có rpcids=ogiZ0b
@@ -646,9 +646,9 @@ Dưới đây là cẩm nang từng bước để bạn áp dụng cho bất k�
 - **Câu hỏi chẩn đoán:** URL vừa được cấp phát, tại sao lại bị từ chối?
 - **Đáp án:** Kiểm tra lại cách trích xuất URL. Nếu trích xuất bằng Regex từ chuỗi raw payload, ký tự `=` trong URL bị Google encode thành `\u003d`. Chuỗi URL bị cắt cụt làm sai chữ ký số. Cần dùng `json.loads()` để giải mã unicode trước khi tải.
 
-### Tình huống 3: Playwright không thể kết nối vào cổng 9222
-- **Hiện tượng:** Bạn khởi chạy Chromium bằng lệnh `playwright.chromium.launch(args=["--remote-debugging-port=9222"])`, nhưng script bên ngoài gọi `connect_over_cdp("http://127.0.0.1:9222")` báo lỗi connection refused.
-- **Câu hỏi chẩn đoán:** Tại sao cổng 9222 không mở?
+### Tình huống 3: Playwright không thể kết nối vào cổng 4022
+- **Hiện tượng:** Bạn khởi chạy Chromium bằng lệnh `playwright.chromium.launch(args=["--remote-debugging-port=4022"])`, nhưng script bên ngoài gọi `connect_over_cdp("http://127.0.0.1:4022")` báo lỗi connection refused.
+- **Câu hỏi chẩn đoán:** Tại sao cổng 4022 không mở?
 - **Đáp án:** Driver của Playwright luôn ngầm chèn cờ `--remote-debugging-pipe`. Khi cờ pipe tồn tại, Chromium tự động tắt cổng HTTP CDP. Bạn phải khởi chạy trình duyệt thông qua `subprocess.Popen` trực tiếp để có toàn quyền kiểm soát tham số dòng lệnh.
 
 ### Tình huống 4: Yêu cầu Replay bị lỗi HTTP 400 Bad Request ngay lập tức
