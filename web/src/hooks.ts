@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import type { GalleryRun, Job, PoolInfo, Project, Status } from "./types";
+import type { GalleryRun, Job, PoolInfo, Project, Status, TryOnRunManifest } from "./types";
 
 const TERMINAL: ReadonlySet<string> = new Set(["succeeded", "failed", "rejected"]);
 
@@ -162,3 +162,30 @@ export function useGallery() {
 
   return { runs, loading, error, refresh };
 }
+
+/** History of try-on video runs. */
+export function useTryOnRuns() {
+  const [runs, setRuns] = useState<TryOnRunManifest[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = async (quiet = false) => {
+    if (!quiet) setLoading(true);
+    try {
+      const r = await api.tryonRuns();
+      setRuns(r.runs);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  return { runs, loading, error, refresh };
+}
+

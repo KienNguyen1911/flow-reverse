@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import webbrowser
 import time
 from pathlib import Path
@@ -462,6 +463,63 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
             raise HTTPException(status_code=404, detail="Không tìm thấy ảnh")
         return FileResponse(ref_file)
 
+    @app.post("/api/upload")
+    async def api_upload(file: UploadFile = File(...)):
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="Không có file")
+        raw_name = Path(file.filename).name
+        stem = Path(raw_name).stem
+        ext = Path(raw_name).suffix.lower()
+        if ext not in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
+            raise HTTPException(status_code=400, detail="Chỉ hỗ trợ file ảnh (.png, .jpg, .jpeg, .webp)")
+
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="File ảnh rỗng")
+        MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
+        if len(content) > MAX_UPLOAD_SIZE:
+            raise HTTPException(status_code=400, detail="Dung lượng ảnh vượt quá giới hạn 50MB")
+
+        clean_stem = re.sub(r"[^a-zA-Z0-9_\u0080-\uffff-]", "_", stem)
+        if not clean_stem:
+            clean_stem = "upload"
+        safe_name = f"{int(time.time()*1000)}_{clean_stem}{ext}"
+
+        upload_dir = (out_dir.parent if out_dir else (ROOT / "out")) / "uploads"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        dest_path = upload_dir / safe_name
+        dest_path.write_bytes(content)
+
+        try:
+            rel_path = str(dest_path.relative_to(ROOT)).replace("\\", "/")
+        except ValueError:
+            rel_path = str(dest_path).replace("\\", "/")
+
+        return {
+            "ok": True,
+            "path": rel_path,
+            "filename": safe_name,
+            "url": f"/api/uploads/{safe_name}",
+            "size": len(content),
+        }
+
+    @app.get("/api/uploads/{name:path}")
+    def api_get_upload(name: str):
+        upload_dir = (out_dir.parent if out_dir else (ROOT / "out")) / "uploads"
+        base = upload_dir.resolve()
+        p = (base / name).resolve()
+        if not p.is_relative_to(base) or not p.is_file():
+            raise HTTPException(status_code=404, detail="Không tìm thấy file upload")
+        return FileResponse(p)
+
+    @app.get("/api/assets/{name:path}")
+    def api_get_asset(name: str):
+        base = (ROOT / "assets").resolve()
+        p = (base / name).resolve()
+        if not p.is_relative_to(base) or not p.is_file():
+            raise HTTPException(status_code=404, detail="Không tìm thấy asset")
+        return FileResponse(p)
+
     @app.get("/api/circuit/clear")
     def api_clear_circuit(account: Optional[str] = None):  # GET intentionally: idempotent reset, no secrets
         if account:
@@ -488,6 +546,29 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
         job = manager.submit("auto_tryon", body.model_dump())
         return {"job_id": job.id}
 
+    @app.get("/api/tryon/files/{run_id}/{filename:path}")
+    def api_tryon_file(run_id: str, filename: str):
+        aff_dir = (out_dir or DEFAULT_OUT).parent / "affiliate_runs"
+        base = aff_dir.resolve()
+        target = (base / run_id / filename).resolve()
+        if not target.is_relative_to(base) or not target.is_file():
+            raise HTTPException(status_code=404, detail="Không tìm thấy file")
+        media_type = None
+        lower = filename.lower()
+        if lower.endswith(".mp4"):
+            media_type = "video/mp4"
+        elif lower.endswith(".png"):
+            media_type = "image/png"
+        elif lower.endswith(".jpg") or lower.endswith(".jpeg"):
+            media_type = "image/jpeg"
+        elif lower.endswith(".webp"):
+            media_type = "image/webp"
+        elif lower.endswith(".json"):
+            media_type = "application/json"
+        elif lower.endswith(".txt"):
+            media_type = "text/plain; charset=utf-8"
+        return FileResponse(target, media_type=media_type)
+
     @app.get("/api/tryon/runs")
     def api_tryon_runs():
         aff_dir = (out_dir or DEFAULT_OUT).parent / "affiliate_runs"
@@ -499,7 +580,25 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
                 mf = d / "manifest.json"
                 if mf.exists():
                     try:
-                        runs.append(json.loads(mf.read_text(encoding="utf-8")))
+                        data = json.loads(mf.read_text(encoding="utf-8"))
+                        rid = data.get("run_id") or d.name
+                        data["run_id"] = rid
+                        ff_name = Path(data.get("first_frame_path", "")).name or "first_frame.png"
+                        if (d / ff_name).exists():
+                            data["first_frame_url"] = f"/api/tryon/files/{rid}/{ff_name}"
+                        v1_name = Path(data.get("video_1_path", "")).name or "video_1.mp4"
+                        if (d / v1_name).exists():
+                            data["video_1_url"] = f"/api/tryon/files/{rid}/{v1_name}"
+                        lf_name = Path(data.get("last_frame_path", "")).name or "last_frame_video_1.png"
+                        if (d / lf_name).exists():
+                            data["last_frame_url"] = f"/api/tryon/files/{rid}/{lf_name}"
+                        v2_name = Path(data.get("video_2_path", "")).name or "video_2.mp4"
+                        if (d / v2_name).exists():
+                            data["video_2_url"] = f"/api/tryon/files/{rid}/{v2_name}"
+                        fv_name = Path(data.get("final_video_path", "")).name or "final_tryon_video_16s.mp4"
+                        if (d / fv_name).exists():
+                            data["final_video_url"] = f"/api/tryon/files/{rid}/{fv_name}"
+                        runs.append(data)
                     except Exception:
                         pass
         return {"runs": runs}

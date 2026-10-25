@@ -998,6 +998,17 @@ class JobManager:
             )
             res_dict = asdict(res)
             res_dict["account_id"] = aid
+            rid = res.run_id
+            if res.first_frame_path and Path(res.first_frame_path).exists():
+                res_dict["first_frame_url"] = f"/api/tryon/files/{rid}/{Path(res.first_frame_path).name}"
+            if res.video_1_path and Path(res.video_1_path).exists():
+                res_dict["video_1_url"] = f"/api/tryon/files/{rid}/{Path(res.video_1_path).name}"
+            if res.last_frame_path and Path(res.last_frame_path).exists():
+                res_dict["last_frame_url"] = f"/api/tryon/files/{rid}/{Path(res.last_frame_path).name}"
+            if res.video_2_path and Path(res.video_2_path).exists():
+                res_dict["video_2_url"] = f"/api/tryon/files/{rid}/{Path(res.video_2_path).name}"
+            if res.final_video_path and Path(res.final_video_path).exists():
+                res_dict["final_video_url"] = f"/api/tryon/files/{rid}/{Path(res.final_video_path).name}"
             job.result = res_dict
             job.set_state("succeeded")
             if not dry_run:

@@ -8,6 +8,7 @@ import type {
   PoolInfo,
   Project,
   Status,
+  TryOnRunManifest,
   UpdateAccountPayload,
 } from "./types";
 
@@ -109,6 +110,13 @@ export const api = {
     return j<{ ok: boolean; path: string; filename: string; url: string; size: number }>(r);
   },
 
+  upload: async (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const r = await fetch("/api/upload", { method: "POST", body: fd });
+    return j<{ ok: boolean; path: string; filename: string; url: string; size: number }>(r);
+  },
+
   tryonStart: (p: {
     garment_path?: string;
     transfer_image?: string;
@@ -125,5 +133,5 @@ export const api = {
     video_prompt_2?: string;
   }) => post("/api/tryon/start", p).then(j<{ job_id: string }>),
 
-  tryonRuns: () => fetch("/api/tryon/runs").then(j<{ runs: unknown[] }>),
+  tryonRuns: () => fetch("/api/tryon/runs").then(j<{ runs: TryOnRunManifest[] }>),
 };

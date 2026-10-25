@@ -595,3 +595,130 @@ def test_flow_bridge_download_video_and_image(tmp_path, monkeypatch):
     assert video_dest.is_file()
 
 
+def test_api_upload_and_serve(tmp_path):
+    from fastapi.testclient import TestClient
+    from src.WebUI.app import create_app
+
+    out_dir = tmp_path / "out" / "playground"
+    out_dir.mkdir(parents=True)
+    app = create_app(cdp_url="http://127.0.0.1:4022", out_dir=out_dir)
+    client = TestClient(app)
+
+    # 1. Upload an image
+    file_bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+    res = client.post(
+        "/api/upload",
+        files={"file": ("test_model.png", file_bytes, "image/png")},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True
+    assert "filename" in data
+    assert "url" in data
+    assert "path" in data
+
+    # 2. Retrieve the uploaded image
+    get_res = client.get(data["url"])
+    assert get_res.status_code == 200
+    assert get_res.content == file_bytes
+
+
+def test_api_tryon_files_serving(tmp_path):
+    from fastapi.testclient import TestClient
+    from src.WebUI.app import create_app
+
+    out_dir = tmp_path / "out" / "playground"
+    aff_dir = tmp_path / "out" / "affiliate_runs"
+    run_dir = aff_dir / "tryon_test_123"
+    run_dir.mkdir(parents=True)
+
+    dummy_mp4 = b"\x00\x00\x00\x1cftypisom" + b"\x00" * 50
+    (run_dir / "final_tryon_video_16s.mp4").write_bytes(dummy_mp4)
+    (run_dir / "first_frame.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    manifest = {
+        "run_id": "tryon_test_123",
+        "status": "succeeded",
+        "product_title": "Test Dress",
+    }
+    (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    app = create_app(cdp_url="http://127.0.0.1:4022", out_dir=out_dir)
+    client = TestClient(app)
+
+    # Check files endpoint
+    res_v = client.get("/api/tryon/files/tryon_test_123/final_tryon_video_16s.mp4")
+    assert res_v.status_code == 200
+    assert res_v.content == dummy_mp4
+
+    res_img = client.get("/api/tryon/files/tryon_test_123/first_frame.png")
+    assert res_img.status_code == 200
+    assert res_img.content == b"\x89PNG\r\n\x1a\n"
+
+    # Check runs listing has enriched URLs
+    res_runs = client.get("/api/tryon/runs")
+    assert res_runs.status_code == 200
+    runs = res_runs.json()["runs"]
+    assert len(runs) >= 1
+    found = next((r for r in runs if r.get("run_id") == "tryon_test_123"), None)
+    assert found is not None
+    assert found.get("final_video_url") == "/api/tryon/files/tryon_test_123/final_tryon_video_16s.mp4"
+    assert found.get("first_frame_url") == "/api/tryon/files/tryon_test_123/first_frame.png"
+
+
+def test_api_upload_sanitization_and_validation(tmp_path):
+    from fastapi.testclient import TestClient
+    from src.WebUI.app import create_app
+
+    out_dir = tmp_path / "out" / "playground"
+    out_dir.mkdir(parents=True)
+    app = create_app(cdp_url="http://127.0.0.1:4022", out_dir=out_dir)
+    client = TestClient(app)
+
+    # 1. Filename with special URL characters (#, spaces, quotes)
+    file_bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+    res = client.post(
+        "/api/upload",
+        files={"file": ("my photo #1 (sample).png", file_bytes, "image/png")},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert "#" not in data["filename"]
+    # Can fetch successfully without 404 URL fragmentation
+    get_res = client.get(data["url"])
+    assert get_res.status_code == 200
+    assert get_res.content == file_bytes
+
+    # 2. Reject non-image extension
+    res_bad = client.post(
+        "/api/upload",
+        files={"file": ("exploit.exe", b"binary", "application/octet-stream")},
+    )
+    assert res_bad.status_code == 400
+
+    # 3. Reject empty file
+    res_empty = client.post(
+        "/api/upload",
+        files={"file": ("empty.png", b"", "image/png")},
+    )
+    assert res_empty.status_code == 400
+
+
+def test_api_path_traversal_prevention(tmp_path):
+    from fastapi.testclient import TestClient
+    from src.WebUI.app import create_app
+
+    out_dir = tmp_path / "out" / "playground"
+    out_dir.mkdir(parents=True)
+    app = create_app(cdp_url="http://127.0.0.1:4022", out_dir=out_dir)
+    client = TestClient(app)
+
+    # Path traversal on /api/uploads
+    res1 = client.get("/api/uploads/../../secret.txt")
+    assert res1.status_code in (400, 404)
+
+    # Path traversal on /api/tryon/files
+    res2 = client.get("/api/tryon/files/run1/../../secret.txt")
+    assert res2.status_code in (400, 404)
+
+
+

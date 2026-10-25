@@ -226,3 +226,31 @@ export interface GalleryRun {
   file_bytes?: number | null;
   status?: string | null;
 }
+
+export interface TryOnRunManifest {
+  run_id: string;
+  status: "succeeded" | "failed" | string;
+  product_title?: string;
+  dest_dir?: string;
+  shopee_images?: string[];
+  model_image_path?: string;
+  garment_image_path?: string;
+  image_prompt?: string;
+  first_frame_path?: string | null;
+  video_prompt_1?: string;
+  video_prompt_2?: string;
+  video_1_path?: string | null;
+  last_frame_path?: string | null;
+  video_2_path?: string | null;
+  final_video_path?: string | null;
+  elapsed_s?: number;
+  dry_run?: boolean;
+  error?: string | null;
+  account_id?: string | null;
+  first_frame_url?: string | null;
+  video_1_url?: string | null;
+  last_frame_url?: string | null;
+  video_2_url?: string | null;
+  final_video_url?: string | null;
+}
+

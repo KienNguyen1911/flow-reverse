@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { BookOpen, Code, Images, Sparkle, Users } from "@phosphor-icons/react";
+import { BookOpen, Code, FilmStrip, Images, Sparkle, Users } from "@phosphor-icons/react";
 import { motion, useReducedMotion } from "motion/react";
 import { api } from "./api";
 import { useGallery, useJob, usePool, useProjects, useStatus } from "./hooks";
@@ -13,10 +13,11 @@ import { GuidePanel } from "./components/GuidePanel";
 import { JobConsole } from "./components/JobConsole";
 import { Tabs } from "./components/ui";
 import { TopBar } from "./components/TopBar";
+import { TryOnPanel } from "./components/TryOnPanel";
 
 const PROJECT_KEY = "fb_project";
 
-type TabKey = "compose" | "gallery" | "accounts" | "guide" | "docs";
+type TabKey = "compose" | "tryon" | "gallery" | "accounts" | "guide" | "docs";
 
 function msg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -54,7 +55,12 @@ export default function App() {
   const onTerminal = useMemo(
     () => (j: Job) => {
       if (j.kind === "generate" || j.kind === "batch_generate") refreshGallery(true);
-      if (j.kind === "generate" || j.kind === "dry_run" || j.kind === "batch_generate") {
+      if (
+        j.kind === "generate" ||
+        j.kind === "dry_run" ||
+        j.kind === "batch_generate" ||
+        j.kind === "auto_tryon"
+      ) {
         refreshStatus();
         refreshPool();
       }
@@ -76,13 +82,13 @@ export default function App() {
     else localStorage.removeItem(PROJECT_KEY);
   }, [selectedId]);
 
-  // Keyboard shortcuts: Alt+1-4 to switch tabs
+  // Keyboard shortcuts: Alt+1-6 to switch tabs
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (!e.altKey) return;
-      const idx = ["1", "2", "3", "4", "5"].indexOf(e.key);
+      const idx = ["1", "2", "3", "4", "5", "6"].indexOf(e.key);
       if (idx === -1) return;
-      const tabs: TabKey[] = ["compose", "gallery", "accounts", "guide", "docs"];
+      const tabs: TabKey[] = ["compose", "tryon", "gallery", "accounts", "guide", "docs"];
       setActiveTab(tabs[idx]);
     };
     window.addEventListener("keydown", handler);
@@ -141,15 +147,16 @@ export default function App() {
 
   const tabs = useMemo(
     () => [
-      { key: "compose" as TabKey, label: "Tao anh", icon: <Sparkle size={15} /> },
-      { key: "gallery" as TabKey, label: "Thu vien", icon: <Images size={15} /> },
+      { key: "compose" as TabKey, label: "Tạo ảnh", icon: <Sparkle size={15} /> },
+      { key: "tryon" as TabKey, label: "Video Thử Đồ", icon: <FilmStrip size={15} /> },
+      { key: "gallery" as TabKey, label: "Thư viện", icon: <Images size={15} /> },
       {
         key: "accounts" as TabKey,
-        label: "Tai khoan",
+        label: "Tài khoản",
         icon: <Users size={15} />,
         badge: pool && activeCount > 0 ? String(activeCount) : undefined,
       },
-      { key: "guide" as TabKey, label: "Huong dan", icon: <BookOpen size={15} /> },
+      { key: "guide" as TabKey, label: "Hướng dẫn", icon: <BookOpen size={15} /> },
       { key: "docs" as TabKey, label: "Docs API", icon: <Code size={15} /> },
     ],
     [pool, activeCount],
@@ -226,6 +233,23 @@ export default function App() {
                   <JobConsole job={job} onUseProject={setSelectedId} />
                 </div>
               </div>
+            </motion.div>
+          )}
+
+          {activeTab === "tryon" && (
+            <motion.div
+              initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.25, ease: "easeOut" }}
+            >
+              <TryOnPanel
+                projects={projects}
+                selectedProjectId={selectedId}
+                busy={busy}
+                pool={pool}
+                activeJob={job}
+                onStartJob={startJob}
+              />
             </motion.div>
           )}
 

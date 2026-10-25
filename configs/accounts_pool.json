@@ -14,13 +14,13 @@
       "id": "aaaaa",
       "profile_id": "aaaaa",
       "cdp_port": 4023,
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "kiennd-study",
       "profile_id": "kiennd-study",
       "cdp_port": 4024,
-      "enabled": true
+      "enabled": false
     }
   ]
 }
