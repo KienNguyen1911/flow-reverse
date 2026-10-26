@@ -1107,6 +1107,9 @@ class FlowVideoBridge:
             self._log("step", f"Nâng cấp video {vid_norm[:8]}... lên 1080p qua RPC {VIDEO_UPSAMPLE_RPC} (veo_3_1_upsampler_1080p)...")
             self.install_video_hook(bridge)
             bridge._eval("window.__videoHook.cap = null; window.__blockVideoGen = true;")
+            if not bridge.prompt_value().strip():
+                bridge.type_prompt("A fashion model smiling naturally, 8 seconds.")
+                time.sleep(0.3)
             bridge.click_generate(timeout_s=12.0)
             cap = self.wait_video_capture(bridge, timeout_s=20.0)
             self.disarm_video_hook(bridge)

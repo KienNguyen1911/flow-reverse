@@ -376,6 +376,7 @@ class AutoTryOnPipeline:
                     timeout_s=300.0,
                     project_id=resolved_proj_id,
                     aspect_ratio=aspect_ratio,
+                    resolution="1080p",
                 )
             except Exception as e:
                 self._log(
@@ -392,6 +393,7 @@ class AutoTryOnPipeline:
                     project_id=resolved_proj_id,
                     aspect_ratio=aspect_ratio,
                     aggressive_sanitize=True,
+                    resolution="1080p",
                 )
 
         # ------------------------------------------------------------------- #
@@ -422,6 +424,7 @@ class AutoTryOnPipeline:
                     timeout_s=300.0,
                     project_id=resolved_proj_id,
                     aspect_ratio=aspect_ratio,
+                    resolution="1080p",
                 )
             except Exception as e:
                 self._log(
@@ -438,6 +441,7 @@ class AutoTryOnPipeline:
                     project_id=resolved_proj_id,
                     aspect_ratio=aspect_ratio,
                     aggressive_sanitize=True,
+                    resolution="1080p",
                 )
 
         # ------------------------------------------------------------------- #
