@@ -846,6 +846,30 @@ def test_build_video_args_and_parse_video_app_capture():
     assert ext_sf_id == sf_id
     assert isinstance(ext_crop, list) and len(ext_crop) == 4
 
+    # 4. 1080p upsample builder (p0UkFb / veo_3_1_upsampler_1080p)
+    from src.Bridge.flow_video_bridge import (
+        VIDEO_UPSAMPLE_1080P_MODEL_KEY,
+        build_video_upsample_1080p_args,
+    )
+
+    up_args = build_video_upsample_1080p_args(
+        project_id=project_id,
+        video_media_id="4bc92435-2cfc-4ffb-a324-bc4881f7ebce",
+        item_id="e53cd578-66f8-4a44-ae0f-4a4213700916",
+        recaptcha_token=fake_token,
+        aspect_ratio="9:16",
+        u1="7ed15d62-5b1b-4414-9533-ebc844794743",
+        gen_id="cd997f6a-20d9-41ee-8221-533dc8591cda",
+    )
+    up_spec = up_args[0][0]
+    assert len(up_spec) == 32
+    assert up_spec[0] == [None, "4bc92435-2cfc-4ffb-a324-bc4881f7ebce"]
+    assert up_spec[2] == VIDEO_ASPECT_PORTRAIT
+    assert up_spec[4] == [None, "e53cd578-66f8-4a44-ae0f-4a4213700916", None, None, "7ED15D62-5B1B-4414-9533-EBC844794743"]
+    assert up_spec[6] == 2
+    assert up_spec[31] == VIDEO_UPSAMPLE_1080P_MODEL_KEY
+    assert up_args[2] == ["CD997F6A-20D9-41EE-8221-533DC8591CDA"]
+
 
 def test_parse_jwpduf_status_succeeded_and_failed():
     """Verify jwpduf status decoder handles succeeded, failed (celebrity policy filter), and pending."""

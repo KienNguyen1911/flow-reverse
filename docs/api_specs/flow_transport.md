@@ -125,8 +125,9 @@ def parse_response(body: str) -> list[dict]:
 | `ogiZ0b` | ~5.7KB | **Tạo ảnh (submit)** | Bắn lúc click nút "Bắt đầu tạo"; response (sau ~22s) chứa ảnh hoàn chỉnh |
 | `maseQ` | ~87KB | **Upload ảnh tham chiếu / starting frame** | Bắn lúc paste/upload ảnh vào project; trả về `MediaItem` chứa `media_id` mới |
 | `eb1hJf` | ~3.2KB | **Tạo video (submit `abra_i2v_8s`)** | Bắn lúc tạo video; chứa `starting_frame_media_id`, `prompt`, `aspect`, `recaptcha_token`; trả về `video_media_id` |
-| `jwpduf` | ~197B | **Poll trạng thái render video** | args `[null, null, [[video_media_id]]]`; trả về trạng thái `1` (xong) hoặc `4` (lỗi + mã `PUBLIC_ERROR_...`) |
-| `as29s` | ~170B | **Mint signed CDN URL 6h cho media** | args `[media_id]`; trả về `https://flow-content.google/video/<id>?Expires=...` (hoặc `/image/...`) |
+| `p0UkFb` | ~2.9KB | **Nâng cấp video lên 1080p (`veo_3_1_upsampler_1080p`)** | Bắn khi nâng cấp 720p → 1080p; sinh ra `<video_media_id>_upsampled` (`1080x1920` / `1920x1080`) |
+| `jwpduf` | ~197B | **Poll trạng thái render video** | args `[null, null, [[video_media_id]]]`; trả về `rec[5][8]=[3]` (xong) hoặc `[4, ...]` (lỗi + mã `PUBLIC_ERROR_...`) |
+| `as29s` | ~170B | **Mint signed CDN URL 6h cho media** | args `[media_id]` (hoặc `[<id>_upsampled]`); trả về `https://flow-content.google/video/<id>?Expires=...` |
 | `UpteDb` | 190B | **Danh sách projects** | args `["projects/*", 21, null, null, null, null, [1]]`; response = mảng project + thumbnail |
 | `Zzl0ze` | 213B | **Nội dung project** (items + media + voices) | args `["projects/<uuid>", null, null, null, [1]]` |
 | `ngNC2` | 199B | **Trạng thái project** (title, cover, tools) | args `["tools/PINHOLE/projects/<uuid>"]` |

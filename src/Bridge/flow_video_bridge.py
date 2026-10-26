@@ -66,12 +66,14 @@ LogFn = Callable[[str, str], None]
 # --------------------------------------------------------------------------- #
 
 VIDEO_SUBMIT_RPC = "eb1hJf"
+VIDEO_UPSAMPLE_RPC = "p0UkFb"
 VIDEO_POLL_RPC = "jwpduf"
 VIDEO_MEDIA_URL_RPC = "as29s"
 VIDEO_UPLOAD_RPC = "maseQ"
 PROJECT_ITEMS_RPC = "Zzl0ze"
 
 VIDEO_MODEL_KEY = "abra_i2v_8s"
+VIDEO_UPSAMPLE_1080P_MODEL_KEY = "veo_3_1_upsampler_1080p"
 VIDEO_TOOL_ID = 22
 
 VIDEO_ASPECT_PORTRAIT = 1   # 9:16
@@ -81,6 +83,7 @@ DEFAULT_CROP_916 = [0.003875968992248069, None, 0.9961240310077519, 1]
 DEFAULT_CROP_169 = [0.0, None, 1.0, 1]
 
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+_MEDIA_ID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?:_upsampled|_4k)?$")
 _TOKEN_RE = re.compile(r"^0cAFcWeA[A-Za-z0-9_\-]{400,}$")
 
 # In-page fetch hook for Video Bridge Mode:
@@ -308,6 +311,50 @@ def build_video_args(
     return [[video_spec], ref, [gen_id, 2]]
 
 
+def build_video_upsample_1080p_args(
+    project_id: str,
+    video_media_id: str,
+    item_id: str,
+    recaptcha_token: str,
+    *,
+    aspect_ratio: str = "9:16",
+    u1: Optional[str] = None,
+    gen_id: Optional[str] = None,
+) -> list:
+    """Assemble the deterministic p0UkFb args payload for 1080p video upsampling (`veo_3_1_upsampler_1080p`).
+
+    Creates media_id `<video_media_id>_upsampled` (1080x1920 for 9:16 or 1920x1080 for 16:9).
+    """
+    aspect_enum = VIDEO_ASPECT_PORTRAIT if "9:16" in str(aspect_ratio) else VIDEO_ASPECT_LANDSCAPE
+    u1 = (u1 or str(uuid.uuid4())).upper()
+    gen_id = (gen_id or str(uuid.uuid4())).upper()
+    pid = project_id.strip().lower()
+    vid = video_media_id.strip().lower()
+    iid = item_id.strip().lower()
+
+    spec: list[Any] = [None] * 32
+    spec[0] = [None, vid]
+    spec[2] = int(aspect_enum)
+    spec[4] = [None, iid, None, None, u1]
+    spec[6] = 2
+    spec[31] = VIDEO_UPSAMPLE_1080P_MODEL_KEY
+
+    ref = [
+        None,
+        VIDEO_TOOL_ID,
+        None,
+        None,
+        None,
+        pid,
+        None,
+        None,
+        None,
+        None,
+        [recaptcha_token, 1],
+    ]
+    return [[spec], ref, [gen_id]]
+
+
 def build_jwpduf_args(video_media_id: str) -> list:
     """Args for jwpduf (0-credit video render status & error poll)."""
     return [None, None, [[video_media_id.strip().lower()]]]
@@ -330,7 +377,7 @@ def extract_media_records(data: Any, project_id: Optional[str] = None) -> list[l
         if (
             len(o) >= 6
             and isinstance(o[0], str)
-            and _UUID_RE.match(o[0])
+            and _MEDIA_ID_RE.match(o[0])
             and isinstance(o[1], str)
             and _UUID_RE.match(o[1])
             and (o[2] is None or (isinstance(o[2], str) and _UUID_RE.match(o[2])))
@@ -998,6 +1045,109 @@ class FlowVideoBridge:
 
         raise BridgeError(f"Không lấy được signed video URL qua as29s/Zzl0ze cho {video_media_id}.")
 
+    def upsample_and_fetch_1080p_url_rpc(
+        self,
+        bridge: FlowBridge,
+        video_media_id: str,
+        item_id: Optional[str],
+        project_id: str,
+        aspect_ratio: str = "9:16",
+        timeout_s: float = 120.0,
+    ) -> Optional[str]:
+        """Upsample a succeeded 720p video to 1080p via RPC `p0UkFb` (`veo_3_1_upsampler_1080p`) and return its 6h signed URL.
+
+        Workflow (`docs/api_specs/flow_create_video.md` §2.5):
+        1. Checks if `<video_media_id>_upsampled` is already available via `as29s`.
+        2. Otherwise, resolves `item_id` (if missing) via `as29s([video_media_id])`, borrows a fresh
+           0-credit reCAPTCHA token via `VIDEO_HOOK_JS` + `click_generate`, and fires `p0UkFb`.
+        3. Polls `jwpduf` for `<video_media_id>_upsampled` until `rec[5][8] == [3]`.
+        4. Calls `as29s([f"{video_media_id}_upsampled"])` to mint the 6h signed 1080p MP4 URL.
+        """
+        vid_norm = video_media_id.strip().lower()
+        upsampled_id = vid_norm if vid_norm.endswith("_upsampled") else f"{vid_norm}_upsampled"
+        ctx = bridge.session_ctx(timeout_s=10.0)
+
+        # 1. Fast check: is `<video_media_id>_upsampled` already ready?
+        try:
+            url_check = build_rpc_url_from_template(ctx.url_template, VIDEO_MEDIA_URL_RPC, ctx.reqid + 270000)
+            body_check = encode_video_batchexecute_form(VIDEO_MEDIA_URL_RPC, build_as29s_args(upsampled_id), ctx.at)
+            fr_check = bridge.fire(url_check, body_check, timeout_s=20.0, poll_s=0.4)
+            p_check = parse_batchexecute_text(fr_check.text)
+            if p_check.get("ok"):
+                st_check = parse_jwpduf_status(p_check.get("data"), video_media_id=upsampled_id)
+                if st_check["state"] == "succeeded":
+                    existing_url = extract_signed_video_url(p_check.get("data"))
+                    if existing_url:
+                        self._log("info", f"Bản 1080p ({upsampled_id[:12]}...) đã có sẵn! ({st_check.get('file_bytes') or '?'} bytes)")
+                        return existing_url
+        except Exception:
+            pass
+
+        # 2. Ensure we have item_id for p0UkFb
+        resolved_item_id = item_id
+        if not resolved_item_id:
+            try:
+                url_base = build_rpc_url_from_template(ctx.url_template, VIDEO_MEDIA_URL_RPC, ctx.reqid + 271000)
+                body_base = encode_video_batchexecute_form(VIDEO_MEDIA_URL_RPC, build_as29s_args(vid_norm), ctx.at)
+                fr_base = bridge.fire(url_base, body_base, timeout_s=20.0, poll_s=0.4)
+                p_base = parse_batchexecute_text(fr_base.text)
+                if p_base.get("ok"):
+                    recs = extract_media_records(p_base.get("data"), project_id=project_id)
+                    if recs and len(recs[0]) > 2 and recs[0][2]:
+                        resolved_item_id = str(recs[0][2]).lower()
+            except Exception:
+                pass
+
+        if not resolved_item_id:
+            self._log("warn", f"Không tìm thấy item_id cho {vid_norm}, bỏ qua nâng cấp 1080p.")
+            return None
+
+        # 3. Borrow a 0-credit reCAPTCHA token via decoy click_generate and fire p0UkFb
+        try:
+            self._log("step", f"Nâng cấp video {vid_norm[:8]}... lên 1080p qua RPC {VIDEO_UPSAMPLE_RPC} (veo_3_1_upsampler_1080p)...")
+            self.install_video_hook(bridge)
+            bridge._eval("window.__videoHook.cap = null; window.__blockVideoGen = true;")
+            bridge.click_generate(timeout_s=12.0)
+            cap = self.wait_video_capture(bridge, timeout_s=20.0)
+            self.disarm_video_hook(bridge)
+
+            app_reqid = extract_app_reqid(cap["url"])
+            tok, at_param, _, _ = parse_video_app_capture(cap["body"])
+            up_args = build_video_upsample_1080p_args(
+                project_id=project_id,
+                video_media_id=vid_norm,
+                item_id=resolved_item_id,
+                recaptcha_token=tok,
+                aspect_ratio=aspect_ratio,
+            )
+            up_reqid = (app_reqid + 150000) if app_reqid is not None else (ctx.reqid + 275000)
+            up_url = build_rpc_url_from_template(cap["url"], VIDEO_UPSAMPLE_RPC, up_reqid)
+            up_body = encode_video_batchexecute_form(VIDEO_UPSAMPLE_RPC, up_args, at_param)
+
+            fr_up = bridge.fire(up_url, up_body, timeout_s=45.0, poll_s=0.6)
+            p_up = parse_batchexecute_text(fr_up.text)
+            if not p_up.get("ok"):
+                self._log("warn", f"RPC {VIDEO_UPSAMPLE_RPC} trả về not-ok ({p_up.get('reason')}), dùng bản 720p.")
+                return None
+
+            self._log("info", f"Đã kích hoạt nâng cấp 1080p ({upsampled_id})! Đang poll jwpduf...")
+            st_up = self.poll_video_rpc(
+                bridge,
+                video_media_id=upsampled_id,
+                project_id=project_id,
+                timeout_s=timeout_s,
+                poll_interval_s=3.5,
+            )
+            if st_up["state"] == "succeeded":
+                return st_up.get("signed_url") or self.fetch_signed_video_url_rpc(
+                    bridge, video_media_id=upsampled_id, project_id=project_id
+                )
+        except Exception as e:
+            self.disarm_video_hook(bridge)
+            self._log("warn", f"Nâng cấp 1080p gặp lỗi ({e}), tự động fallback về bản 720p gốc.")
+
+        return None
+
     def download_video_verified(
         self,
         bridge: FlowBridge,
@@ -1168,6 +1318,7 @@ class FlowVideoBridge:
         aspect_ratio: str = "9:16",
         aggressive_sanitize: bool = False,
         seed: Optional[int] = None,
+        resolution: str = "1080p",
     ) -> Path:
         """Protocol-level ("Bridge Mode") Video generation on Google Flow (`eb1hJf` + `jwpduf` + `as29s`).
 
@@ -1349,10 +1500,22 @@ class FlowVideoBridge:
                         "Hãy thử đổi ảnh mẫu / khung hình đầu khác hoặc chỉnh lại prompt."
                     )
 
-                # 7. Video succeeded! Mint 6-hour signed CDN URL via as29s (0 credit) & download MP4
-                signed_url = poll_res.get("signed_url") or self.fetch_signed_video_url_rpc(
-                    br, video_media_id=video_media_id, project_id=active_pid
-                )
+                # 7. Video succeeded! If resolution == "1080p", upsample via p0UkFb (`veo_3_1_upsampler_1080p`) first
+                signed_url: Optional[str] = None
+                if "1080" in str(resolution):
+                    signed_url = self.upsample_and_fetch_1080p_url_rpc(
+                        br,
+                        video_media_id=video_media_id,
+                        item_id=poll_res.get("item_id"),
+                        project_id=active_pid,
+                        aspect_ratio=target_aspect,
+                        timeout_s=120.0,
+                    )
+
+                if not signed_url:
+                    signed_url = poll_res.get("signed_url") or self.fetch_signed_video_url_rpc(
+                        br, video_media_id=video_media_id, project_id=active_pid
+                    )
                 downloaded = self.download_video_verified(br, signed_url, dest_p)
                 br.reload(settle_s=4.0)
                 return downloaded

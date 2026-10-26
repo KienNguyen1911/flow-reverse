@@ -16,8 +16,9 @@ Khác với tạo ảnh (`ogiZ0b` giữ kết nối HTTP long-poll ~18–24s r�
 | :--- | :--- | :--- | :--- |
 | **1. Upload Starting Frame** | **`maseQ`** | **0 credit** | Tải ảnh khung hình đầu (`base64`) lên dự án, trả về `MediaItem` chứa `starting_frame_media_id` (UUIDv4). Tự động kích hoạt khi bắn sự kiện `ClipboardEvent('paste')` vào `div.ProseMirror`. |
 | **2. Submit Video Job** | **`eb1hJf`** | **~1–2 credit** (0 nếu chặn/reject) | Gửi yêu cầu render video (`abra_i2v_8s`) kèm `starting_frame_media_id`, `prompt`, `aspect_enum`, `seed`, và token reCAPTCHA Enterprise (`0cAFcWeA...`). Phản hồi tức thì (<1s) trả về `video_media_id`. |
-| **3. Poll Render Status** | **`jwpduf`** | **0 credit** | Truy vấn trạng thái render của `[video_media_id]` mỗi ~4s. Trả về trạng thái chính xác (`1` = hoàn tất, `4` = lỗi kèm mã lỗi chi tiết như `PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED`). |
-| **4. Mint Signed Video URL** | **`as29s`** | **0 credit** | Đổi `video_media_id` đã hoàn tất sang **Signed CDN URL hiệu lực 6 giờ** (`https://flow-content.google/video/<video_media_id>?Expires=...&KeyName=labs-flow-prod-cdn-key&Signature=...`) để tải file MP4 gốc (`ftypisom`) không cần cookie. |
+| **3. Poll Render Status** | **`jwpduf`** | **0 credit** | Truy vấn trạng thái render của `[video_media_id]` (hoặc `[<video_media_id>_upsampled]`) mỗi ~4s. Trả về trạng thái chính xác (`rec[5][8]=[3]` = hoàn tất, `[4, ...]` = lỗi kèm mã lỗi chi tiết như `PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED`). |
+| **4. Upsample 720p → 1080p** | **`p0UkFb`** | **0 credit** *(trên gói Pro)* | Kích hoạt model `"veo_3_1_upsampler_1080p"` để nâng cấp video gốc 720p (`720x1280`) lên **1080p (`1080x1920` / `1920x1080`)** với ID tất định `<video_media_id>_upsampled` (~7.5–10.2 MB / clip 8s). |
+| **5. Mint Signed Video URL** | **`as29s`** | **0 credit** | Đổi `<video_media_id>_upsampled` (hoặc `video_media_id`) đã hoàn tất sang **Signed CDN URL hiệu lực 6 giờ** (`https://flow-content.google/video/<id>?Expires=...&KeyName=labs-flow-prod-cdn-key&Signature=...`) để tải file MP4 gốc (`ftypisom`) không cần cookie. |
 
 ---
 
@@ -227,6 +228,45 @@ Khi `jwpduf` báo `rec[5][8] == [3]` (hoàn tất), gọi `as29s` để lấy UR
   ```
   - Đây là **Signed URL 6 giờ**, tải trực tiếp qua HTTP `GET` (không cần cookie), trả về `Content-Type: video/mp4`, magic bytes `\x00\x00\x00 ftypisom` (dung lượng đầy đủ ~4.0–4.6 MB cho video 8s, cao hơn hẳn bản preview nén 1.9 MB trên thẻ `<video>` DOM `=mm,22,15`).
 - **Fallback URL (`Zzl0ze` / FIFE stream):** Nếu cần tải qua URL `https://lh3.googleusercontent.com/asb/<token>` hoặc `https://flow.google.com/asb/<token>`, phải nối hậu tố FIFE **`=mm,22,15`** và gửi kèm cookie phiên (`context.request.get`).
+
+---
+
+### 2.5 RPC `p0UkFb` — Nâng cấp Độ phân giải Video 720p lên 1080p (`veo_3_1_upsampler_1080p`)
+
+Mặc định `eb1hJf` (`abra_i2v_8s`) tạo ra video gốc ở độ phân giải **720p (`720x1280` hoặc `1280x720`, ~4.0–4.6 MB)**. Để tải bản **1080p (`1080x1920` hoặc `1920x1080`, ~7.4–10.2 MB)**:
+
+1. **Định danh Media 1080p:** Mọi video được nâng cấp 1080p có `media_id` cố định là **`<video_media_id>_upsampled`** (ví dụ: `"29a57c63-3425-4355-aa47-ef4c72de010a_upsampled"`).
+2. **Kiểm tra nhanh qua `as29s`:** Gọi `as29s(["<video_media_id>_upsampled"])`. Nếu bản 1080p đã tồn tại (`rec[5][8] == [3]`), phản hồi trả về ngay Signed URL 6h của file 1080p:
+   `https://flow-content.google/video/<video_media_id>_upsampled?Expires=...&KeyName=labs-flow-prod-cdn-key&Signature=...`
+3. **Kích hoạt Upsample qua `p0UkFb` (khi chưa có sẵn):**
+   - `args` gồm 3 phần tử `[[spec], ref, [gen_id]]`, trong đó `spec` là mảng cố định **32 phần tử** (`len(spec) == 32`):
+     ```json
+     [
+       [
+         [
+           [null, "<video_media_id>"],
+           null,
+           1,
+           null,
+           [null, "<item_id>", null, null, "<UUID_1_UPPERCASE>"],
+           null,
+           2,
+           null, null, null, null, null, null, null, null, null, null, null, null,
+           null, null, null, null, null, null, null, null, null, null, null, null,
+           "veo_3_1_upsampler_1080p"
+         ]
+       ],
+       [null, 22, null, null, null, "<project_id>", null, null, null, null, ["<recaptcha_token_0cAFcWeA...>", 1]],
+       ["<GEN_ID_UUID_UPPERCASE>"]
+     ]
+     ```
+   - Trong đó:
+     - `spec[0]`: `[null, "<video_media_id>"]` (ID video 720p gốc).
+     - `spec[2]`: `aspect_enum` (`1` = `9:16`, `2` = `16:9`).
+     - `spec[4]`: `[null, "<item_id>", null, null, "<UUID_1>"]` (`item_id` lấy từ `jwpduf` tại `rec[2]`).
+     - `spec[6]`: `2`.
+     - `spec[31]`: `"veo_3_1_upsampler_1080p"` (bắt buộc ở đúng chỉ số `31`, tức có đúng 24 phần tử `null` giữa `spec[6]` và `spec[31]`).
+   - Sau khi `p0UkFb` trả về `200 OK`, gọi `jwpduf` với `[null, null, [["<video_media_id>_upsampled"]]]` mỗi 3.5s cho tới khi `rec[5][8] == [3]` (~12–20s), rồi gọi `as29s(["<video_media_id>_upsampled"])` để lấy Signed URL 1080p.
 
 ---
 
