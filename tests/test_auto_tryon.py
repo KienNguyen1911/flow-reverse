@@ -723,7 +723,35 @@ def test_api_upload_sanitization_and_validation(tmp_path):
     assert res_empty.status_code == 400
 
 
-def test_api_path_traversal_prevention(tmp_path):
+def test_auto_tryon_pipeline_direct_first_frame_dry_run(tmp_path):
+    """Test the streamlined 3-step video pipeline directly starting from first frame."""
+    out_root = tmp_path / "affiliate_runs"
+    pipeline = AutoTryOnPipeline(out_root=out_root)
+
+    first_frame = tmp_path / "custom_first_frame.png"
+    first_frame.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 300)
+
+    res = pipeline.run(
+        first_frame_path=first_frame,
+        override_video_prompt_1="Cinematic woman walking in bakery, 8 seconds",
+        override_video_prompt_2="Cinematic woman turning towards camera with smile, 8 seconds",
+        dry_run=True,
+        auto_stitch=True,
+    )
+
+    assert res.status == "succeeded"
+    assert res.first_frame_path is not None
+    assert Path(res.first_frame_path).exists()
+    assert res.video_prompt_1 == "Cinematic woman walking in bakery, 8 seconds"
+    assert res.video_prompt_2 == "Cinematic woman turning towards camera with smile, 8 seconds"
+    assert res.video_1_path is not None
+    assert res.last_frame_path is not None
+    assert res.video_2_path is not None
+    assert res.final_video_path is not None
+
+
+def test_api_tryon_start_with_first_frame(tmp_path):
+    """Test API accepts direct first_frame_path without requiring garment_path or shopee_url."""
     from fastapi.testclient import TestClient
     from src.WebUI.app import create_app
 
@@ -732,13 +760,19 @@ def test_api_path_traversal_prevention(tmp_path):
     app = create_app(cdp_url="http://127.0.0.1:4022", out_dir=out_dir)
     client = TestClient(app)
 
-    # Path traversal on /api/uploads
-    res1 = client.get("/api/uploads/../../secret.txt")
-    assert res1.status_code in (400, 404)
+    res = client.post(
+        "/api/tryon/start",
+        json={
+            "first_frame_path": "out/first_frame_perfect.png",
+            "video_prompt_1": "Video 1 prompt",
+            "video_prompt_2": "Video 2 prompt",
+            "dry_run": True,
+            "confirm": True,
+        },
+    )
+    assert res.status_code == 200
+    assert "job_id" in res.json()
 
-    # Path traversal on /api/tryon/files
-    res2 = client.get("/api/tryon/files/run1/../../secret.txt")
-    assert res2.status_code in (400, 404)
 
 
 

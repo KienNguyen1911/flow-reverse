@@ -118,6 +118,7 @@ export const api = {
   },
 
   tryonStart: (p: {
+    first_frame_path?: string;
     garment_path?: string;
     transfer_image?: string;
     extra_images?: string[];
@@ -131,6 +132,7 @@ export const api = {
     image_prompt?: string;
     video_prompt_1?: string;
     video_prompt_2?: string;
+    aspect_ratio?: string;
   }) => post("/api/tryon/start", p).then(j<{ job_id: string }>),
 
   tryonRuns: () => fetch("/api/tryon/runs").then(j<{ runs: TryOnRunManifest[] }>),

@@ -398,6 +398,14 @@ class FlowBridge:
             except Exception:  # noqa: BLE001
                 pass
         self._cdp = self.context.new_cdp_session(self.page)
+        try:
+            win_info = self._cdp.send("Browser.getWindowForTarget")
+            win_id = win_info.get("windowId")
+            bounds = win_info.get("bounds") or {}
+            if win_id and bounds.get("windowState") == "minimized":
+                self._cdp.send("Browser.setWindowBounds", {"windowId": win_id, "bounds": {"windowState": "maximized"}})
+        except Exception:  # noqa: BLE001
+            pass
         return self.page
 
     def close(self) -> None:

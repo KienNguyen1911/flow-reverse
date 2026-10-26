@@ -111,7 +111,7 @@ class AutoTryOnPipeline:
 
     def run(
         self,
-        model_path: Path | str,
+        model_path: Optional[Path | str] = None,
         garment_path: Optional[Path | str] = None,
         transfer_image: Optional[Path | str] = None,
         product_dir: Optional[Path | str] = None,
@@ -123,275 +123,322 @@ class AutoTryOnPipeline:
         override_image_prompt: Optional[str] = None,
         override_video_prompt_1: Optional[str] = None,
         override_video_prompt_2: Optional[str] = None,
+        first_frame_path: Optional[Path | str] = None,
+        aspect_ratio: str = "9:16",
     ) -> TryOnPipelineResult:
-        """Run the complete end-to-end automated try-on pipeline."""
+        """Run the automated try-on video pipeline (or direct video-chain from first frame)."""
         t0 = time.time()
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         run_id = f"tryon_{ts}"
         run_dir = self.out_root / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
 
-        model_p = Path(model_path).resolve()
-        if not model_p.is_file() and not dry_run:
-            raise FileNotFoundError(f"Không tìm thấy ảnh người mẫu Nabi: {model_p}")
-
-        self._log("step", f"=== Khởi động Auto Try-On Pipeline ({run_id}) ===", {"dry_run": dry_run})
-
         # ------------------------------------------------------------------- #
-        # Step 1: Ingest model, chosen transfer model / garment & extra images
+        # Shortcut Branch: Direct Video-Chain when First Frame is provided
         # ------------------------------------------------------------------- #
-        self._log("step", "BƯỚC 1: Chuẩn bị ảnh người mẫu và mẫu mặc thử (transfer model)...")
-        garment_arg = garment_path or transfer_image
-        garment_p: Optional[Path] = None
-        all_product_images: list[Path] = []
-        extra_imgs: list[Path] = []
-        product_title = "Fashion Outfit"
+        is_direct_first_frame = bool(first_frame_path)
+        if is_direct_first_frame:
+            ff_p = Path(first_frame_path).resolve()
+            if not ff_p.is_file() and not dry_run:
+                raise FileNotFoundError(f"Không tìm thấy ảnh First Frame: {ff_p}")
+            self._log("step", f"=== Khởi động Video Chain Pipeline ({run_id}) ===", {"dry_run": dry_run})
+            self._log("info", f"Sử dụng First Frame Image trực tiếp: {ff_p.name}")
 
-        if garment_arg:
-            garment_p = Path(garment_arg).resolve()
-            if not garment_p.is_file() and not dry_run:
-                raise FileNotFoundError(f"Không tìm thấy ảnh mẫu mặc thử / transfer model: {garment_p}")
-            all_product_images.append(garment_p)
-            product_title = garment_p.stem
+            dest_ff = run_dir / "first_frame.png"
+            if ff_p != dest_ff:
+                shutil.copy(ff_p, dest_ff)
+            first_frame_path = dest_ff
 
-            # Optional extra product images from directory if provided
-            if product_dir:
-                pdir = Path(product_dir).resolve()
-                if pdir.is_dir():
-                    for f in sorted(pdir.iterdir()):
-                        if f.is_file() and f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
-                            if f.resolve() != garment_p:
-                                extra_imgs.append(f)
-                                all_product_images.append(f)
-
-        elif product_dir:
-            product_info = self.shopee_downloader.load_local_images(Path(product_dir))
-            garment_p = product_info.primary_garment_path
-            all_product_images = list(product_info.downloaded_paths)
-            product_title = product_info.title
-            extra_imgs = [p for p in all_product_images if p != garment_p]
-
-        elif shopee_url:
-            product_info = self.shopee_downloader.process_url(
-                shopee_url,
-                dest_subdir=run_id,
-                on_event=self._bridge_log,
-            )
-            garment_p = product_info.primary_garment_path
-            all_product_images = list(product_info.downloaded_paths)
-            product_title = product_info.title
-            extra_imgs = [p for p in all_product_images if p != garment_p]
-
+            product_title = ff_p.stem
+            v_prompt_1 = override_video_prompt_1 or "A cinematic natural fashion video, 8 seconds"
+            v_prompt_2 = override_video_prompt_2 or "A cinematic seamless continuation video, 8 seconds"
+            image_prompt = override_image_prompt or ""
+            all_product_images = [first_frame_path]
+            garment_p = first_frame_path
+            model_p = first_frame_path
+            resolved_proj_id = project_id
         else:
-            raise ValueError("Phải cung cấp ít nhất --garment-path (hoặc --transfer-image), hoặc --product-dir, hoặc --shopee-url")
+            model_p = Path(model_path or "assets/nabi_model.png").resolve()
+            if not model_p.is_file() and not dry_run:
+                raise FileNotFoundError(f"Không tìm thấy ảnh người mẫu Nabi: {model_p}")
 
-        # Include explicit extra_images if passed
-        if extra_images:
-            for ei in extra_images:
-                ep = Path(ei).resolve()
-                if not ep.is_file() and not dry_run:
-                    raise FileNotFoundError(f"Không tìm thấy ảnh bổ sung: {ep}")
-                if ep not in all_product_images and (not garment_p or ep != garment_p):
-                    extra_imgs.append(ep)
-                    all_product_images.append(ep)
+            self._log("step", f"=== Khởi động Auto Try-On Pipeline ({run_id}) ===", {"dry_run": dry_run})
 
-        if not garment_p and not dry_run:
-            raise ValueError("Không tìm thấy ảnh mẫu áo/quần mặc thử từ sản phẩm.")
+            # ------------------------------------------------------------------- #
+            # Step 1: Ingest model, chosen transfer model / garment & extra images
+            # ------------------------------------------------------------------- #
+            self._log("step", "BƯỚC 1: Chuẩn bị ảnh người mẫu và mẫu mặc thử (transfer model)...")
+            garment_arg = garment_path or transfer_image
+            garment_p = None
+            all_product_images = []
+            extra_imgs = []
+            product_title = "Fashion Outfit"
 
-        self._log(
-            "info",
-            f"Đã chuẩn bị ảnh người mẫu: {model_p.name}, mẫu thử: {garment_p.name if garment_p else 'N/A'}, "
-            f"tổng cộng {len(all_product_images)} ảnh sản phẩm/bổ sung.",
-        )
+            if garment_arg:
+                garment_p = Path(garment_arg).resolve()
+                if not garment_p.is_file() and not dry_run:
+                    raise FileNotFoundError(f"Không tìm thấy ảnh mẫu mặc thử / transfer model: {garment_p}")
+                all_product_images.append(garment_p)
+                product_title = garment_p.stem
 
-        # ------------------------------------------------------------------- #
-        # Step 2: Gemini Nabi Studio -> Image Prompt (1)
-        # ------------------------------------------------------------------- #
-        self._log("step", "BƯỚC 2: Gọi Gemini Nabi Studio tạo Image Prompt (1)...")
-        image_prompt: str = ""
+                # Optional extra product images from directory if provided
+                if product_dir:
+                    pdir = Path(product_dir).resolve()
+                    if pdir.is_dir():
+                        for f in sorted(pdir.iterdir()):
+                            if f.is_file() and f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
+                                if f.resolve() != garment_p:
+                                    extra_imgs.append(f)
+                                    all_product_images.append(f)
 
-        if override_image_prompt:
-            image_prompt = override_image_prompt
-            self._log("info", f"Dùng prompt ảnh chỉ định sẵn: '{image_prompt[:100]}...'")
-        elif dry_run:
-            image_prompt = (
-                f"Full-body fashion portrait of Nabi model wearing {product_title[:60]}, "
-                f"studio lighting, highly detailed fabric texture, 8k, photorealistic"
-            )
-            self._log("info", f"[DRY-RUN] Sinh prompt ảnh mẫu: '{image_prompt}'")
-        else:
-            with GeminiNotebookBridge(cdp_url=self.cdp_url, log=self._bridge_log) as gemini:
-                image_prompt = gemini.generate_image_prompt(
-                    model_p,
-                    garment_p,
-                    extra_images=extra_imgs if extra_imgs else None,
+            elif product_dir:
+                product_info = self.shopee_downloader.load_local_images(Path(product_dir))
+                garment_p = product_info.primary_garment_path
+                all_product_images = list(product_info.downloaded_paths)
+                product_title = product_info.title
+                extra_imgs = [p for p in all_product_images if p != garment_p]
+
+            elif shopee_url:
+                product_info = self.shopee_downloader.process_url(
+                    shopee_url,
+                    dest_subdir=run_id,
+                    on_event=self._bridge_log,
                 )
+                garment_p = product_info.primary_garment_path
+                all_product_images = list(product_info.downloaded_paths)
+                product_title = product_info.title
+                extra_imgs = [p for p in all_product_images if p != garment_p]
 
-        (run_dir / "image_prompt.txt").write_text(image_prompt, encoding="utf-8")
-
-        # ------------------------------------------------------------------- #
-        # Step 3: Google Flow -> First Frame Image
-        # ------------------------------------------------------------------- #
-        self._log("step", "BƯỚC 3: Tạo First Frame Image trên Google Flow...")
-        first_frame_path = run_dir / "first_frame.png"
-
-        # Resolve Flow project ID dynamically if not specified
-        resolved_proj_id = project_id
-        if not dry_run and not resolved_proj_id:
-            try:
-                client = FlowClient(cdp_url=self.cdp_url)
-                st = client.status()
-                if st.flow_project_id:
-                    resolved_proj_id = st.flow_project_id
-                    self._log("info", f"Tự động dùng dự án đang mở trên Flow: {resolved_proj_id}")
-                else:
-                    listed = client.list_projects()
-                    if listed:
-                        resolved_proj_id = listed[0].id
-                        self._log("info", f"Tự động dùng dự án có sẵn: {listed[0].title} ({resolved_proj_id[:8]}…)")
-                    else:
-                        new_p = client.create_project("Affiliate Try-On")
-                        resolved_proj_id = new_p.id
-                        self._log("info", f"Tự động tạo dự án mới: {new_p.title} ({resolved_proj_id[:8]}…)")
-            except Exception as e:
-                self._log("warn", f"Không thể tự động phát hiện project trên Flow: {e}")
-
-        if dry_run:
-            # Create dummy first frame for dry-run verification
-            self._log("info", "[DRY-RUN] Giả lập tạo First Frame Image...")
-            if garment_p and garment_p.is_file():
-                shutil.copy(garment_p, first_frame_path)
             else:
-                first_frame_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 200)
-        else:
-            client = FlowClient(cdp_url=self.cdp_url)
-            proj_id = resolved_proj_id or "default"
-            # Format prompt for Flow: ensure character tag @nabi is explicitly present
-            flow_image_prompt = image_prompt
-            if "@nabi" not in flow_image_prompt.lower():
-                import re
-                if re.search(r"\bnabi\b", flow_image_prompt, re.IGNORECASE):
-                    flow_image_prompt = re.sub(r"\bnabi\b", "@nabi", flow_image_prompt, flags=re.IGNORECASE)
-                else:
-                    flow_image_prompt = f"@nabi {flow_image_prompt}".strip()
+                raise ValueError("Phải cung cấp ít nhất --garment-path (hoặc --transfer-image), hoặc --product-dir, hoặc --shopee-url")
 
-            # Attempt to upload reference image (garment sample) for i2i conditioning
-            tpl = None
-            if garment_p and garment_p.is_file():
-                try:
-                    self._log("step", f"Tải ảnh mẫu thử lên Flow làm reference template: {garment_p.name}")
-                    tpl = client.upload_reference_image(
-                        proj_id,
+            # Include explicit extra_images if passed
+            if extra_images:
+                for ei in extra_images:
+                    ep = Path(ei).resolve()
+                    if not ep.is_file() and not dry_run:
+                        raise FileNotFoundError(f"Không tìm thấy ảnh bổ sung: {ep}")
+                    if ep not in all_product_images and (not garment_p or ep != garment_p):
+                        extra_imgs.append(ep)
+                        all_product_images.append(ep)
+
+            if not garment_p and not dry_run:
+                raise ValueError("Không tìm thấy ảnh mẫu áo/quần mặc thử từ sản phẩm.")
+
+            self._log(
+                "info",
+                f"Đã chuẩn bị ảnh người mẫu: {model_p.name}, mẫu thử: {garment_p.name if garment_p else 'N/A'}, "
+                f"tổng cộng {len(all_product_images)} ảnh sản phẩm/bổ sung.",
+            )
+
+            # ------------------------------------------------------------------- #
+            # Step 2: Gemini Nabi Studio -> Image Prompt (1)
+            # ------------------------------------------------------------------- #
+            self._log("step", "BƯỚC 2: Gọi Gemini Nabi Studio tạo Image Prompt (1)...")
+            image_prompt = ""
+
+            if override_image_prompt:
+                image_prompt = override_image_prompt
+                self._log("info", f"Dùng prompt ảnh chỉ định sẵn: '{image_prompt[:100]}...'")
+            elif dry_run:
+                image_prompt = (
+                    f"Full-body fashion portrait of Nabi model wearing {product_title[:60]}, "
+                    f"studio lighting, highly detailed fabric texture, 8k, photorealistic"
+                )
+                self._log("info", f"[DRY-RUN] Sinh prompt ảnh mẫu: '{image_prompt}'")
+            else:
+                with GeminiNotebookBridge(cdp_url=self.cdp_url, log=self._bridge_log) as gemini:
+                    image_prompt = gemini.generate_image_prompt(
+                        model_p,
                         garment_p,
-                        prompt_probe=flow_image_prompt[:60],
+                        extra_images=extra_imgs if extra_imgs else None,
                     )
-                    self._log("info", f"Upload reference thành công (media≈{tpl.media_id})")
+
+            (run_dir / "image_prompt.txt").write_text(image_prompt, encoding="utf-8")
+
+            # ------------------------------------------------------------------- #
+            # Step 3: Google Flow -> First Frame Image
+            # ------------------------------------------------------------------- #
+            self._log("step", "BƯỚC 3: Tạo First Frame Image trên Google Flow...")
+            first_frame_path = run_dir / "first_frame.png"
+
+            # Resolve Flow project ID dynamically if not specified
+            resolved_proj_id = project_id
+            if not dry_run and not resolved_proj_id:
+                try:
+                    client = FlowClient(cdp_url=self.cdp_url)
+                    st = client.status()
+                    if st.flow_project_id:
+                        resolved_proj_id = st.flow_project_id
+                        self._log("info", f"Tự động dùng dự án đang mở trên Flow: {resolved_proj_id}")
+                    else:
+                        listed = client.list_projects()
+                        if listed:
+                            resolved_proj_id = listed[0].id
+                            self._log("info", f"Tự động dùng dự án có sẵn: {listed[0].title} ({resolved_proj_id[:8]}…)")
+                        else:
+                            new_p = client.create_project("Affiliate Try-On")
+                            resolved_proj_id = new_p.id
+                            self._log("info", f"Tự động tạo dự án mới: {new_p.title} ({resolved_proj_id[:8]}…)")
                 except Exception as e:
-                    self._log("warn", f"Upload reference không thành công ({e}), tiếp tục với text2image...")
-                    tpl = None
+                    self._log("warn", f"Không thể tự động phát hiện project trên Flow: {e}")
 
-            # Generate image via FlowClient
-            gen_res = client.generate_image(
-                project_id=proj_id,
-                prompt=flow_image_prompt,
-                reference=tpl,
-                dry_run=False,
-            )
-            if gen_res.status != "ok" or not gen_res.image or not gen_res.image.file_path:
-                raise RuntimeError(f"Tạo First Frame trên Flow thất bại: {gen_res.reason} ({gen_res.hint})")
-            shutil.copy(gen_res.image.file_path, first_frame_path)
-            self._log("info", f"First Frame đã lưu: {first_frame_path.name}")
+            if dry_run:
+                self._log("info", "[DRY-RUN] Giả lập tạo First Frame Image...")
+                if garment_p and garment_p.is_file():
+                    shutil.copy(garment_p, first_frame_path)
+                else:
+                    first_frame_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 200)
+            else:
+                client = FlowClient(cdp_url=self.cdp_url)
+                proj_id = resolved_proj_id or "default"
+                flow_image_prompt = image_prompt
+                if "@nabi" not in flow_image_prompt.lower():
+                    import re
+                    if re.search(r"\bnabi\b", flow_image_prompt, re.IGNORECASE):
+                        flow_image_prompt = re.sub(r"\bnabi\b", "@nabi", flow_image_prompt, flags=re.IGNORECASE)
+                    else:
+                        flow_image_prompt = f"@nabi {flow_image_prompt}".strip()
 
-        # ------------------------------------------------------------------- #
-        # Step 4: Gemini Nabi Studio -> 2 Video Prompts (8s each)
-        # ------------------------------------------------------------------- #
-        self._log("step", "BƯỚC 4: Gọi Gemini Nabi Studio tạo 2 Video Prompt (8s)...")
-        v_prompt_1: str = ""
-        v_prompt_2: str = ""
+                tpl = None
+                if garment_p and garment_p.is_file():
+                    try:
+                        self._log("step", f"Tải ảnh mẫu thử lên Flow làm reference template: {garment_p.name}")
+                        tpl = client.upload_reference_image(
+                            proj_id,
+                            garment_p,
+                            prompt_probe=flow_image_prompt[:60],
+                        )
+                        self._log("info", f"Upload reference thành công (media≈{tpl.media_id})")
+                    except Exception as e:
+                        self._log("warn", f"Upload reference không thành công ({e}), tiếp tục với text2image...")
+                        tpl = None
 
-        if override_video_prompt_1 and override_video_prompt_2:
-            v_prompt_1 = override_video_prompt_1
-            v_prompt_2 = override_video_prompt_2
-            self._log("info", "Dùng video prompts chỉ định sẵn.")
-        elif dry_run:
-            v_prompt_1 = (
-                "Nabi stands elegantly, smooth camera slow zoom in, gentle movement showing garment drape, 8 seconds"
-            )
-            v_prompt_2 = (
-                "Nabi turns slightly to showcase side profile and back of the outfit, natural fashion pose, 8 seconds"
-            )
-            self._log("info", f"[DRY-RUN] Sinh video prompt 1: '{v_prompt_1[:80]}...'")
-            self._log("info", f"[DRY-RUN] Sinh video prompt 2: '{v_prompt_2[:80]}...'")
-        else:
-            with GeminiNotebookBridge(cdp_url=self.cdp_url, log=self._bridge_log) as gemini:
-                v_prompt_1, v_prompt_2 = gemini.generate_video_prompts(first_frame_path)
+                gen_res = client.generate_image(
+                    project_id=proj_id,
+                    prompt=flow_image_prompt,
+                    reference=tpl,
+                    dry_run=False,
+                )
+                if gen_res.status != "ok" or not gen_res.image or not gen_res.image.file_path:
+                    raise RuntimeError(f"Tạo First Frame trên Flow thất bại: {gen_res.reason} ({gen_res.hint})")
+                shutil.copy(gen_res.image.file_path, first_frame_path)
+                self._log("info", f"First Frame đã lưu: {first_frame_path.name}")
 
-        prompts_meta = {
-            "image_prompt": image_prompt,
-            "video_prompt_1": v_prompt_1,
-            "video_prompt_2": v_prompt_2,
-        }
-        (run_dir / "prompts.json").write_text(json.dumps(prompts_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+            # ------------------------------------------------------------------- #
+            # Step 4: Gemini Nabi Studio -> 2 Video Prompts (8s each)
+            # ------------------------------------------------------------------- #
+            self._log("step", "BƯỚC 4: Gọi Gemini Nabi Studio tạo 2 Video Prompt (8s)...")
+            v_prompt_1 = ""
+            v_prompt_2 = ""
+
+            if override_video_prompt_1 and override_video_prompt_2:
+                v_prompt_1 = override_video_prompt_1
+                v_prompt_2 = override_video_prompt_2
+                self._log("info", "Dùng video prompts chỉ định sẵn.")
+            elif dry_run:
+                v_prompt_1 = (
+                    "Nabi stands elegantly, smooth camera slow zoom in, gentle movement showing garment drape, 8 seconds"
+                )
+                v_prompt_2 = (
+                    "Nabi turns slightly to showcase side profile and back of the outfit, natural fashion pose, 8 seconds"
+                )
+                self._log("info", f"[DRY-RUN] Sinh video prompt 1: '{v_prompt_1[:80]}...'")
+                self._log("info", f"[DRY-RUN] Sinh video prompt 2: '{v_prompt_2[:80]}...'")
+            else:
+                with GeminiNotebookBridge(cdp_url=self.cdp_url, log=self._bridge_log) as gemini:
+                    v_prompt_1, v_prompt_2 = gemini.generate_video_prompts(first_frame_path)
+
+            prompts_meta = {
+                "image_prompt": image_prompt,
+                "video_prompt_1": v_prompt_1,
+                "video_prompt_2": v_prompt_2,
+            }
+            (run_dir / "prompts.json").write_text(json.dumps(prompts_meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
         # ------------------------------------------------------------------- #
         # Step 5: Google Flow -> Video 1 (8s)
         # ------------------------------------------------------------------- #
-        self._log("step", "BƯỚC 5: Tạo Video 1 (8s) từ First Frame + Video Prompt 1...")
+        step_1_lbl = "BƯỚC 1/4" if is_direct_first_frame else "BƯỚC 5"
+        self._log("step", f"{step_1_lbl}: Tạo Video 1 (8s) từ First Frame + Video Prompt 1...")
         video_1_path = run_dir / "video_1.mp4"
 
         if dry_run:
             self._log("info", "[DRY-RUN] Giả lập tạo Video 1...")
             self._generate_dummy_video(video_1_path, duration_s=2)
         else:
-            with FlowBridge(self.cdp_url) as br:
-                if resolved_proj_id:
-                    br.nav_home()
-                    br.nav_project(resolved_proj_id)
-                    try:
-                        br.wait_composer(timeout_s=30.0)
-                    except Exception:
-                        pass
-                initial = self.flow_video.snapshot_videos(br)
-                self.flow_video.attach_video_starting_frame(br, first_frame_path)
-                self.flow_video.trigger_video_generation(br, v_prompt_1, duration_s=8)
-                self.flow_video.poll_for_video_completion(br, video_1_path, known_urls=initial.get("urls"), timeout_s=300.0)
+            try:
+                self.flow_video.generate_video_flow(
+                    frame_path=first_frame_path,
+                    prompt_text=v_prompt_1,
+                    dest_path=video_1_path,
+                    duration_s=8,
+                    timeout_s=300.0,
+                    project_id=resolved_proj_id,
+                    aspect_ratio=aspect_ratio,
+                )
+            except Exception as e:
+                self._log("warn", f"generate_video_flow Video 1 gặp sự cố ({e}), đang thử lại lần 2...")
+                time.sleep(2.0)
+                self.flow_video.generate_video_flow(
+                    frame_path=first_frame_path,
+                    prompt_text=v_prompt_1,
+                    dest_path=video_1_path,
+                    duration_s=8,
+                    timeout_s=300.0,
+                    project_id=resolved_proj_id,
+                    aspect_ratio=aspect_ratio,
+                )
 
         # ------------------------------------------------------------------- #
         # Step 6: Extract Last Frame from Video 1
         # ------------------------------------------------------------------- #
-        self._log("step", "BƯỚC 6: Trích xuất chính xác Last Frame từ Video 1...")
+        step_2_lbl = "BƯỚC 2/4" if is_direct_first_frame else "BƯỚC 6"
+        self._log("step", f"{step_2_lbl}: Trích xuất chính xác Last Frame từ Video 1...")
         last_frame_path = run_dir / "last_frame_video_1.png"
         extract_last_video_frame(video_1_path, last_frame_path, log=self._bridge_log)
 
         # ------------------------------------------------------------------- #
         # Step 7: Google Flow -> Video 2 (8s) using Last Frame as First Frame
         # ------------------------------------------------------------------- #
-        self._log("step", "BƯỚC 7: Tạo Video 2 (8s) từ Last Frame + Video Prompt 2...")
+        step_3_lbl = "BƯỚC 3/4" if is_direct_first_frame else "BƯỚC 7"
+        self._log("step", f"{step_3_lbl}: Tạo Video 2 (8s) từ Last Frame + Video Prompt 2...")
         video_2_path = run_dir / "video_2.mp4"
 
         if dry_run:
             self._log("info", "[DRY-RUN] Giả lập tạo Video 2...")
             self._generate_dummy_video(video_2_path, duration_s=2)
         else:
-            with FlowBridge(self.cdp_url) as br:
-                if resolved_proj_id:
-                    br.nav_home()
-                    br.nav_project(resolved_proj_id)
-                    try:
-                        br.wait_composer(timeout_s=30.0)
-                    except Exception:
-                        pass
-                initial = self.flow_video.snapshot_videos(br)
-                self.flow_video.attach_video_starting_frame(br, last_frame_path)
-                self.flow_video.trigger_video_generation(br, v_prompt_2, duration_s=8)
-                self.flow_video.poll_for_video_completion(br, video_2_path, known_urls=initial.get("urls"), timeout_s=300.0)
+            try:
+                self.flow_video.generate_video_flow(
+                    frame_path=last_frame_path,
+                    prompt_text=v_prompt_2,
+                    dest_path=video_2_path,
+                    duration_s=8,
+                    timeout_s=300.0,
+                    project_id=resolved_proj_id,
+                    aspect_ratio=aspect_ratio,
+                )
+            except Exception as e:
+                self._log("warn", f"generate_video_flow Video 2 gặp sự cố ({e}), đang thử lại lần 2...")
+                time.sleep(2.0)
+                self.flow_video.generate_video_flow(
+                    frame_path=last_frame_path,
+                    prompt_text=v_prompt_2,
+                    dest_path=video_2_path,
+                    duration_s=8,
+                    timeout_s=300.0,
+                    project_id=resolved_proj_id,
+                    aspect_ratio=aspect_ratio,
+                )
 
         # ------------------------------------------------------------------- #
         # Step 8: Automatic 16s Video Stitching
         # ------------------------------------------------------------------- #
         final_video_path: Optional[Path] = None
         if auto_stitch:
-            self._log("step", "BƯỚC 8: Nối Video 1 + Video 2 thành Video 16s hoàn chỉnh...")
+            step_4_lbl = "BƯỚC 4/4" if is_direct_first_frame else "BƯỚC 8"
+            self._log("step", f"{step_4_lbl}: Nối Video 1 + Video 2 thành Video 16s hoàn chỉnh...")
             final_video_path = run_dir / "final_tryon_video_16s.mp4"
             concatenate_two_videos(video_1_path, video_2_path, final_video_path, log=self._bridge_log)
 

@@ -937,8 +937,14 @@ class JobManager:
             raise
 
     def _run_auto_tryon(self, job: Job) -> None:
+        import importlib
         from dataclasses import asdict
-        from ..Workflows.auto_tryon_pipeline import AutoTryOnPipeline
+        from ..Bridge import flow_video_bridge
+        from ..Workflows import auto_tryon_pipeline
+
+        importlib.reload(flow_video_bridge)
+        importlib.reload(auto_tryon_pipeline)
+        AutoTryOnPipeline = auto_tryon_pipeline.AutoTryOnPipeline
 
         params = job.params
         ev = job.add_event
@@ -984,6 +990,7 @@ class JobManager:
         )
         try:
             res = pipeline.run(
+                first_frame_path=params.get("first_frame_path"),
                 model_path=params.get("model_path") or "assets/nabi_model.png",
                 garment_path=params.get("garment_path") or params.get("transfer_image"),
                 product_dir=params.get("product_dir"),
@@ -995,6 +1002,7 @@ class JobManager:
                 override_image_prompt=params.get("image_prompt"),
                 override_video_prompt_1=params.get("video_prompt_1"),
                 override_video_prompt_2=params.get("video_prompt_2"),
+                aspect_ratio=params.get("aspect_ratio", "9:16"),
             )
             res_dict = asdict(res)
             res_dict["account_id"] = aid

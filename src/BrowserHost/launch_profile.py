@@ -335,6 +335,8 @@ if sys.platform == "win32":
         si = _STARTUPINFOW()
         si.cb = ctypes.sizeof(_STARTUPINFOW)
         si.lpDesktop = desktop
+        si.dwFlags = 0x00000001  # STARTF_USESHOWWINDOW
+        si.wShowWindow = 3       # SW_SHOWMAXIMIZED
         pi = _PROCESS_INFORMATION()
 
         flags = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP

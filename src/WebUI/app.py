@@ -112,6 +112,7 @@ class UpdateAccountBody(BaseModel):
 
 
 class AutoTryOnBody(BaseModel):
+    first_frame_path: Optional[str] = None
     garment_path: Optional[str] = None
     transfer_image: Optional[str] = None
     extra_images: Optional[list[str]] = None
@@ -124,6 +125,7 @@ class AutoTryOnBody(BaseModel):
     image_prompt: Optional[str] = None
     video_prompt_1: Optional[str] = None
     video_prompt_2: Optional[str] = None
+    aspect_ratio: str = "9:16"
     confirm: bool = False
 
 
@@ -536,10 +538,16 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
 
     @app.post("/api/tryon/start")
     def api_tryon_start(body: AutoTryOnBody):
-        if not body.garment_path and not body.transfer_image and not body.shopee_url and not body.product_dir:
+        if (
+            not body.first_frame_path
+            and not body.garment_path
+            and not body.transfer_image
+            and not body.shopee_url
+            and not body.product_dir
+        ):
             raise HTTPException(
                 status_code=400,
-                detail="Cần cung cấp garment_path (hoặc transfer_image), product_dir hoặc shopee_url",
+                detail="Cần cung cấp first_frame_path hoặc garment_path/transfer_image/product_dir/shopee_url",
             )
         if not body.dry_run and not body.confirm:
             raise HTTPException(status_code=400, detail="Chạy thật cần confirm=true.")
