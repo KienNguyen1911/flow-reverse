@@ -774,5 +774,246 @@ def test_api_tryon_start_with_first_frame(tmp_path):
     assert "job_id" in res.json()
 
 
+# --------------------------------------------------------------------------- #
+# 6. Protocol-Level Video Bridge ("Bridge Mode") Tests
+# --------------------------------------------------------------------------- #
+
+
+def test_build_video_args_and_parse_video_app_capture():
+    """Verify deterministic eb1hJf payload construction and decoy capture parsing."""
+    from src.Bridge.flow_video_bridge import (
+        VIDEO_ASPECT_LANDSCAPE,
+        VIDEO_ASPECT_PORTRAIT,
+        VIDEO_MODEL_KEY,
+        VIDEO_SUBMIT_RPC,
+        VIDEO_TOOL_ID,
+        build_video_args,
+        encode_video_batchexecute_form,
+        extract_starting_frame_from_eb1hjf_args,
+        parse_video_app_capture,
+    )
+
+    project_id = "006f6e93-2d22-4a3d-9b03-1a902a50fd10"
+    sf_id = "2b1457d2-d1c8-4c56-a1d8-947caab2bf78"
+    fake_token = "0cAFcWeA" + ("X" * 600)
+    at_param = "AN15vP19_test_xsrf:1776676810412"
+
+    # 1. Portrait 9:16 with explicit int32 seed
+    args_916 = build_video_args(
+        project_id=project_id,
+        prompt="A fashion model walking naturally in a sunlit courtyard, 8 seconds.",
+        recaptcha_token=fake_token,
+        starting_frame_media_id=sf_id,
+        aspect_ratio="9:16",
+        seed=567281629,
+        u1="aaaa1111-2222-4333-8444-555566667777",
+        u2="bbbb1111-2222-4333-8444-555566667777",
+        gen_id="cccc1111-2222-4333-8444-555566667777",
+    )
+
+    spec = args_916[0][0]
+    assert spec[0] == [None, None, [[["A fashion model walking naturally in a sunlit courtyard, 8 seconds."]]]]
+    assert spec[1] == VIDEO_MODEL_KEY
+    assert spec[2] == VIDEO_ASPECT_PORTRAIT
+    assert spec[3] == 567281629
+    assert spec[4][1] == sf_id
+    # u1, u2, gen_id must be uppercase
+    assert spec[5][4] == "AAAA1111-2222-4333-8444-555566667777"
+    assert spec[5][5] == "BBBB1111-2222-4333-8444-555566667777"
+    assert args_916[1][1] == VIDEO_TOOL_ID
+    assert args_916[1][5] == project_id
+    assert args_916[1][10] == [fake_token, 1]
+    assert args_916[2] == ["CCCC1111-2222-4333-8444-555566667777", 2]
+
+    # 2. Landscape 16:9
+    args_169 = build_video_args(
+        project_id=project_id,
+        prompt="Landscape shot",
+        recaptcha_token=fake_token,
+        starting_frame_media_id=sf_id,
+        aspect_ratio="16:9",
+        seed=12345,
+    )
+    assert args_169[0][0][2] == VIDEO_ASPECT_LANDSCAPE
+
+    # 3. Round-trip encode & parse_video_app_capture
+    body = encode_video_batchexecute_form(VIDEO_SUBMIT_RPC, args_916, at_param)
+    tok_out, at_out, inner_out, rpcid_out = parse_video_app_capture(body)
+    assert tok_out == fake_token
+    assert at_out == at_param
+    assert rpcid_out == VIDEO_SUBMIT_RPC
+    ext_sf_id, ext_crop = extract_starting_frame_from_eb1hjf_args(inner_out)
+    assert ext_sf_id == sf_id
+    assert isinstance(ext_crop, list) and len(ext_crop) == 4
+
+
+def test_parse_jwpduf_status_succeeded_and_failed():
+    """Verify jwpduf status decoder handles succeeded, failed (celebrity policy filter), and pending."""
+    from src.Bridge.flow_video_bridge import (
+        extract_signed_video_url,
+        extract_video_submit_media_id,
+        parse_jwpduf_status,
+    )
+
+    project_id = "006f6e93-2d22-4a3d-9b03-1a902a50fd10"
+    vid_ok = "bc8dc03e-c0ae-4733-af18-dbbe5a1be38a"
+    vid_fail = "ff8738b7-ccdb-4aa5-b5a4-0e34b761dc0b"
+    item_id = "8bd0628c-6e6c-4919-ba26-d3e4848d04bb"
+
+    # 1. Succeeded jwpduf payload
+    jwpduf_ok_data = [
+        None,
+        None,
+        [
+            [
+                vid_ok,
+                project_id,
+                item_id,
+                None,
+                None,
+                [
+                    None,
+                    [1776675273, 475210000],
+                    None,
+                    item_id,
+                    None,
+                    "c6781f90-27d9-4ff2-89c7-e7b1b32200a5",
+                    None,
+                    [1776675361, 868018000],
+                    [3],
+                    1,
+                    2,
+                    1,
+                    None,
+                    4595285,
+                ],
+                None,
+                [[1, 567281629, None, None, None, "abra_i2v_8s", "A candid fashion lookbook"]],
+            ]
+        ],
+    ]
+    st_ok = parse_jwpduf_status(jwpduf_ok_data, video_media_id=vid_ok)
+    assert st_ok["state"] == "succeeded"
+    assert st_ok["status_code"] == 1
+    assert st_ok["file_bytes"] == 4595285
+    assert st_ok["seed_echo"] == 567281629
+    assert extract_video_submit_media_id(jwpduf_ok_data, project_id=project_id) == vid_ok
+
+    # 1b. In-progress (rendering) jwpduf payload: meta[8] == [1] while meta[9] == 1 and meta[13] is None
+    jwpduf_pending_data = [
+        None,
+        None,
+        [
+            [
+                vid_ok,
+                project_id,
+                item_id,
+                None,
+                None,
+                [
+                    None,
+                    [1776675273, 475210000],
+                    None,
+                    item_id,
+                    None,
+                    "c6781f90-27d9-4ff2-89c7-e7b1b32200a5",
+                    None,
+                    None,
+                    [1],
+                    1,
+                ],
+                None,
+                [[1, 567281629, None, None, None, "abra_i2v_8s", "A candid fashion lookbook"]],
+            ]
+        ],
+    ]
+    st_pending = parse_jwpduf_status(jwpduf_pending_data, video_media_id=vid_ok)
+    assert st_pending["state"] == "pending"
+
+    # 2. Failed jwpduf payload (PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED)
+    jwpduf_fail_data = [
+        None,
+        None,
+        [
+            [
+                vid_fail,
+                project_id,
+                item_id,
+                None,
+                None,
+                [
+                    None,
+                    [1776676296, 173255000],
+                    None,
+                    item_id,
+                    None,
+                    "25ae76d7-4f8b-4a34-bc63-44498114dc09",
+                    None,
+                    [1776676305, 134473000],
+                    [4, [3, "PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED"], ["PROMINENT_PERSON"]],
+                    4,
+                    2,
+                    1,
+                ],
+                None,
+                [[1, 1468186199, None, None, None, "abra_i2v_8s", "Prompt"]],
+            ]
+        ],
+    ]
+    st_fail = parse_jwpduf_status(jwpduf_fail_data, video_media_id=vid_fail)
+    assert st_fail["state"] == "failed"
+    assert st_fail["status_code"] == 4
+    assert st_fail["error_code"] == "PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED"
+    assert st_fail["error_categories"] == ["PROMINENT_PERSON"]
+
+    # 3. Signed URL extraction from as29s response
+    as29s_data = [
+        [
+            None,
+            None,
+            [
+                None,
+                f"https://flow-content.google/video/{vid_ok}?Expires=1776701980&KeyName=labs-flow-prod-cdn-key&Signature=abc123XYZ",
+                f"https://flow-content.google/thumbnail/{vid_ok}?Expires=1776701980&KeyName=labs-flow-prod-cdn-key&Signature=def456",
+            ],
+        ]
+    ]
+    signed_url = extract_signed_video_url(as29s_data)
+    assert signed_url is not None
+    assert signed_url.startswith(f"https://flow-content.google/video/{vid_ok}")
+
+
+def test_sanitize_video_prompt_and_condition_frame(tmp_path):
+    """Verify prompt sanitization removes celebrity/identity triggers and frame conditioning produces valid image."""
+    from src.Bridge.flow_video_bridge import (
+        condition_frame_for_policy_retry,
+        sanitize_video_prompt,
+    )
+
+    raw_prompt = (
+        "A candid, realistic outdoor fashion lookbook reel of the exact young Korean woman "
+        "from the reference image, strictly lock facial identity and hairstyle, visible skin micro-pores."
+    )
+    clean_normal = sanitize_video_prompt(raw_prompt, aggressive=False)
+    assert "Korean" not in clean_normal
+    assert "reference image" not in clean_normal
+    assert "lock facial identity" not in clean_normal
+    assert "micro-pores" not in clean_normal
+
+    clean_aggr = sanitize_video_prompt(raw_prompt, aggressive=True)
+    assert "Smooth natural movement" in clean_aggr
+
+    # Test frame conditioning with a synthetic image extracted from synthetic video
+    video = tmp_path / "src_vid.mp4"
+    _create_synthetic_video(video, color="purple", duration_s=1)
+    src_frame = tmp_path / "src_frame.png"
+    extract_last_video_frame(video, src_frame)
+
+    cond_frame = condition_frame_for_policy_retry(src_frame, tmp_path / "cond_frame.png")
+    assert cond_frame.is_file()
+    assert cond_frame.stat().st_size > 100
+
+
+
 
 

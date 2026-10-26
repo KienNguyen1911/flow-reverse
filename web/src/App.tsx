@@ -163,7 +163,11 @@ export default function App() {
   );
 
   return (
-    <div className="max-w-[1240px] mx-auto px-4 lg:px-6 py-5 flex flex-col gap-4 min-h-full">
+    <div
+      className={`${
+        activeTab === "tryon" ? "max-w-[1680px]" : "max-w-[1300px]"
+      } mx-auto px-3 sm:px-4 lg:px-6 py-4 sm:py-5 flex flex-col gap-4 min-h-full transition-all duration-200`}
+    >
       <TopBar
         status={status}
         pool={pool}
@@ -248,6 +252,8 @@ export default function App() {
                 busy={busy}
                 pool={pool}
                 activeJob={job}
+                activeJobId={activeJobId}
+                onSelectActiveJobId={setActiveJobId}
                 onStartJob={startJob}
               />
             </motion.div>

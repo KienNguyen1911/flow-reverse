@@ -60,6 +60,8 @@ export const api = {
 
   job: (id: string) => fetch(`/api/jobs/${id}`).then(j<Job>),
 
+  jobs: (limit = 50) => fetch(`/api/jobs?limit=${limit}`).then(j<{ jobs: Job[] }>),
+
   gallery: () => fetch("/api/gallery").then(j<{ runs: GalleryRun[] }>),
 
   clearCircuit: () => fetch("/api/circuit/clear").then(j<{ ok: boolean }>),

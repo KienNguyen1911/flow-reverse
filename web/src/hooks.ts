@@ -109,6 +109,41 @@ export function useJob(activeJobId: string | null, onTerminal?: (job: Job) => vo
   return job;
 }
 
+/** Poll list of jobs periodically. */
+export function useJobs(intervalMs = 3000) {
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = async () => {
+    try {
+      const res = await api.jobs(50);
+      setJobs(res.jobs);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    let stop = false;
+    const run = async () => {
+      if (stop) return;
+      await refresh();
+    };
+    run();
+    const t = window.setInterval(run, intervalMs);
+    return () => {
+      stop = true;
+      window.clearInterval(t);
+    };
+  }, [intervalMs]);
+
+  return { jobs, loading, error, refresh };
+}
+
 /** Project registry. */
 export function useProjects() {
   const [projects, setProjects] = useState<Project[]>([]);

@@ -378,7 +378,10 @@ class AutoTryOnPipeline:
                     aspect_ratio=aspect_ratio,
                 )
             except Exception as e:
-                self._log("warn", f"generate_video_flow Video 1 gặp sự cố ({e}), đang thử lại lần 2...")
+                self._log(
+                    "warn",
+                    f"generate_video_flow Video 1 gặp sự cố ({e}), đang tự động làm mềm Prompt (lọc từ nhạy cảm chính sách) và thử lại lần 2...",
+                )
                 time.sleep(2.0)
                 self.flow_video.generate_video_flow(
                     frame_path=first_frame_path,
@@ -388,6 +391,7 @@ class AutoTryOnPipeline:
                     timeout_s=300.0,
                     project_id=resolved_proj_id,
                     aspect_ratio=aspect_ratio,
+                    aggressive_sanitize=True,
                 )
 
         # ------------------------------------------------------------------- #
@@ -420,7 +424,10 @@ class AutoTryOnPipeline:
                     aspect_ratio=aspect_ratio,
                 )
             except Exception as e:
-                self._log("warn", f"generate_video_flow Video 2 gặp sự cố ({e}), đang thử lại lần 2...")
+                self._log(
+                    "warn",
+                    f"generate_video_flow Video 2 gặp sự cố ({e}), đang tự động làm mềm Prompt (lọc từ nhạy cảm chính sách) và thử lại lần 2...",
+                )
                 time.sleep(2.0)
                 self.flow_video.generate_video_flow(
                     frame_path=last_frame_path,
@@ -430,6 +437,7 @@ class AutoTryOnPipeline:
                     timeout_s=300.0,
                     project_id=resolved_proj_id,
                     aspect_ratio=aspect_ratio,
+                    aggressive_sanitize=True,
                 )
 
         # ------------------------------------------------------------------- #
