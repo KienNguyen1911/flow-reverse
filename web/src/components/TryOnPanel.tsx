@@ -36,11 +36,16 @@ import { Btn, Chip, Field, IconBtn, Panel, Spinner } from "./ui";
 
 const SAMPLE_FIRST_FRAME_PATH = "assets/sample_first_frame.png";
 
-const STEPS = [
+const STEPS_CHAIN = [
   { id: 1, label: "Tạo Video 1 (8s)", desc: "Upload First Frame & render Video 1" },
   { id: 2, label: "Trích xuất Last Frame", desc: "FFmpeg cắt frame chính xác 100%" },
   { id: 3, label: "Tạo Video 2 (8s)", desc: "Upload Last Frame & render Video 2" },
   { id: 4, label: "Ghép hoàn chỉnh 16s", desc: "Nối liền mạch 2 video không giật" },
+];
+
+const STEPS_SINGLE = [
+  { id: 1, label: "Tạo Video (8s)", desc: "Upload First Frame & render Video 8s" },
+  { id: 2, label: "Hậu kỳ & Xóa Watermark", desc: "Làm sạch watermark & xuất MP4" },
 ];
 
 const PRESETS_V1 = [
@@ -124,6 +129,7 @@ interface ToastInfo {
 }
 
 interface Props {
+  mode?: "single" | "chain";
   projects: Project[];
   selectedProjectId: string | null;
   busy: boolean;
@@ -135,6 +141,7 @@ interface Props {
 }
 
 export function TryOnPanel({
+  mode = "chain",
   projects,
   selectedProjectId,
   busy,
@@ -143,6 +150,7 @@ export function TryOnPanel({
   onSelectActiveJobId,
   onStartJob,
 }: Props) {
+  const isSingleMode = mode === "single";
   // Global jobs polling
   const { jobs: allJobs, refresh: refreshJobs } = useJobs(2500);
   const { runs: historyRuns, loading: historyLoading, refresh: refreshRuns } = useTryOnRuns();
@@ -203,6 +211,9 @@ export function TryOnPanel({
 
   const [targetProjectId, setTargetProjectId] = useState<string>(selectedProjectId || "");
   const [autoStitch, setAutoStitch] = useState(true);
+  const [removeWatermark, setRemoveWatermark] = useState<boolean>(
+    () => (localStorage.getItem("fb_tryon_rm_wm") ?? "1") !== "0"
+  );
   const [aspectRatio, setAspectRatio] = useState<"9:16" | "16:9">("9:16");
 
   // UI View Layout State
@@ -256,28 +267,43 @@ export function TryOnPanel({
     }
   }, [inspectedJob?.events?.length]);
 
-  // Determine current pipeline step (1-4)
+  const isJobSingle = useMemo(() => {
+    if (!inspectedJob) return isSingleMode;
+    const p = inspectedJob.params as Record<string, unknown> | undefined;
+    if (p && typeof p.single_video === "boolean") return p.single_video;
+    return isSingleMode;
+  }, [inspectedJob, isSingleMode]);
+
+  const activeSteps = isJobSingle ? STEPS_SINGLE : STEPS_CHAIN;
+
+  // Determine current pipeline step
   const currentStep = useMemo(() => {
     if (!inspectedJob) return 0;
-    if (inspectedJob.state === "succeeded") return 4;
+    if (inspectedJob.state === "succeeded") return isJobSingle ? 2 : 4;
     if (inspectedJob.state === "failed" || inspectedJob.state === "rejected") return 0;
 
     const events = inspectedJob.events || [];
     let step = 1;
     for (const ev of events) {
       const msg = ev.message.toLowerCase();
-      if (msg.includes("nối") || msg.includes("ghép") || msg.includes("bước 4/4") || msg.includes("bước 8")) {
-        step = Math.max(step, 4);
-      } else if (msg.includes("video 2") || msg.includes("bước 3/4") || msg.includes("bước 7")) {
-        step = Math.max(step, 3);
-      } else if (msg.includes("last frame") || msg.includes("trích xuất") || msg.includes("bước 2/4") || msg.includes("bước 6")) {
-        step = Math.max(step, 2);
-      } else if (msg.includes("video 1") || msg.includes("bước 1/4") || msg.includes("bước 5")) {
-        step = Math.max(step, 1);
+      if (isJobSingle) {
+        if (msg.includes("xóa watermark") || msg.includes("hoàn tất")) {
+          step = Math.max(step, 2);
+        }
+      } else {
+        if (msg.includes("nối") || msg.includes("ghép") || msg.includes("bước 4/4") || msg.includes("bước 8")) {
+          step = Math.max(step, 4);
+        } else if (msg.includes("video 2") || msg.includes("bước 3/4") || msg.includes("bước 7")) {
+          step = Math.max(step, 3);
+        } else if (msg.includes("last frame") || msg.includes("trích xuất") || msg.includes("bước 2/4") || msg.includes("bước 6")) {
+          step = Math.max(step, 2);
+        } else if (msg.includes("video 1") || msg.includes("bước 1/4") || msg.includes("bước 5")) {
+          step = Math.max(step, 1);
+        }
       }
     }
     return step;
-  }, [inspectedJob]);
+  }, [inspectedJob, isJobSingle]);
 
   // Active result to display
   const activeResult: TryOnRunManifest | null = useMemo(() => {
@@ -325,15 +351,18 @@ export function TryOnPanel({
       return;
     }
 
+    const singleRun = isSingleMode || !videoPrompt2.trim();
     const payload = {
       first_frame_path: firstFrame.path,
       project_id: targetProjectId.trim() || undefined,
       dry_run: dryRun,
       confirm: !dryRun,
-      auto_stitch: autoStitch,
+      auto_stitch: singleRun ? false : autoStitch,
+      remove_watermark: removeWatermark,
       aspect_ratio: aspectRatio,
       video_prompt_1: videoPrompt1.trim() || undefined,
-      video_prompt_2: videoPrompt2.trim() || undefined,
+      video_prompt_2: singleRun ? undefined : videoPrompt2.trim() || undefined,
+      single_video: singleRun,
     };
 
     try {
@@ -692,7 +721,9 @@ export function TryOnPanel({
                         <MagicWand size={11} />
                         <span>Lọc từ nhạy cảm</span>
                       </button>
-                      <Chip tone="acc" className="h-6 text-[10.5px]">{`2×8s · ${aspectRatio}`}</Chip>
+                      <Chip tone="acc" className="h-6 text-[10.5px]">
+                        {`${isSingleMode || !videoPrompt2.trim() ? "1×8s" : "2×8s"} · ${aspectRatio}`}
+                      </Chip>
                     </div>
                   </div>
 
@@ -701,14 +732,14 @@ export function TryOnPanel({
                     <div className="flex items-center justify-between text-[11.5px]">
                       <label className="font-semibold text-fg flex items-center gap-1.5">
                         <VideoCamera size={13} className="text-acc" />
-                        <span>Prompt Video 1 (0 - 8s)</span>
+                        <span>{isSingleMode ? "Prompt Chuyển động Video (0 - 8s)" : "Prompt Video 1 (0 - 8s)"}</span>
                       </label>
                       <span className="font-mono text-mut text-[10px]">
                         {videoPrompt1.length} ký tự
                       </span>
                     </div>
                     <textarea
-                      rows={3}
+                      rows={isSingleMode ? 5 : 3}
                       value={videoPrompt1}
                       onChange={(e) => setVideoPrompt1(e.target.value)}
                       placeholder="A photorealistic young woman wearing the outfit..."
@@ -728,37 +759,39 @@ export function TryOnPanel({
                     </div>
                   </div>
 
-                  {/* Video 2 Prompt */}
-                  <div className="flex flex-col gap-1 pt-2 border-t border-line">
-                    <div className="flex items-center justify-between text-[11.5px]">
-                      <label className="font-semibold text-fg flex items-center gap-1.5">
-                        <VideoCamera size={13} className="text-ok" />
-                        <span>Prompt Video 2 (8 - 16s)</span>
-                      </label>
-                      <span className="font-mono text-mut text-[10px]">
-                        {videoPrompt2.length} ký tự
-                      </span>
+                  {/* Video 2 Prompt (Only in chain mode) */}
+                  {!isSingleMode && (
+                    <div className="flex flex-col gap-1 pt-2 border-t border-line">
+                      <div className="flex items-center justify-between text-[11.5px]">
+                        <label className="font-semibold text-fg flex items-center gap-1.5">
+                          <VideoCamera size={13} className="text-ok" />
+                          <span>Prompt Video 2 (8 - 16s)</span>
+                        </label>
+                        <span className="font-mono text-mut text-[10px]">
+                          {videoPrompt2.length} ký tự
+                        </span>
+                      </div>
+                      <textarea
+                        rows={3}
+                        value={videoPrompt2}
+                        onChange={(e) => setVideoPrompt2(e.target.value)}
+                        placeholder="Continuing seamlessly from the last frame... (Để trống nếu chỉ muốn tạo 1 video 8s)"
+                        className="w-full rounded-ctl border border-line2 bg-panel2 p-2 text-[11px] font-mono text-fg focus:border-acc outline-none resize-y leading-relaxed"
+                      />
+                      <div className="flex flex-wrap gap-1 mt-0.5">
+                        {PRESETS_V2.map((p, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => setVideoPrompt2(p.prompt)}
+                            className="text-[10px] rounded bg-panel px-1.5 py-0.5 border border-line hover:border-acc/60 text-mut hover:text-fg transition-colors cursor-pointer"
+                          >
+                            {p.label}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                    <textarea
-                      rows={3}
-                      value={videoPrompt2}
-                      onChange={(e) => setVideoPrompt2(e.target.value)}
-                      placeholder="Continuing seamlessly from the last frame..."
-                      className="w-full rounded-ctl border border-line2 bg-panel2 p-2 text-[11px] font-mono text-fg focus:border-acc outline-none resize-y leading-relaxed"
-                    />
-                    <div className="flex flex-wrap gap-1 mt-0.5">
-                      {PRESETS_V2.map((p, idx) => (
-                        <button
-                          key={idx}
-                          type="button"
-                          onClick={() => setVideoPrompt2(p.prompt)}
-                          className="text-[10px] rounded bg-panel px-1.5 py-0.5 border border-line hover:border-acc/60 text-mut hover:text-fg transition-colors cursor-pointer"
-                        >
-                          {p.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                  )}
                 </Panel>
 
                 {/* Section 3: Project & Settings */}
@@ -767,7 +800,9 @@ export function TryOnPanel({
                     <span className="grid place-items-center size-5 rounded-full bg-acc/15 text-acc text-[11px] font-bold">
                       3
                     </span>
-                    <h3 className="text-[13px] font-bold text-fg">Cấu hình Tỷ lệ & Nối Video</h3>
+                    <h3 className="text-[13px] font-bold text-fg">
+                      {isSingleMode ? "Cấu hình Tỷ lệ & Xuất bản" : "Cấu hình Tỷ lệ & Nối Video"}
+                    </h3>
                   </div>
 
                   <Field label="Dự án Google Flow">
@@ -810,16 +845,39 @@ export function TryOnPanel({
                     </button>
                   </div>
 
+                  {!isSingleMode && (
+                    <div className="flex items-center gap-2 pt-1 border-t border-line text-[11.5px]">
+                      <input
+                        type="checkbox"
+                        id="autoStitch"
+                        checked={autoStitch}
+                        onChange={(e) => setAutoStitch(e.target.checked)}
+                        className="rounded accent-acc cursor-pointer"
+                      />
+                      <label htmlFor="autoStitch" className="font-medium text-dim cursor-pointer">
+                        Tự động ghép 2 video 8s thành 16s (FFmpeg)
+                      </label>
+                    </div>
+                  )}
+
                   <div className="flex items-center gap-2 pt-1 border-t border-line text-[11.5px]">
                     <input
                       type="checkbox"
-                      id="autoStitch"
-                      checked={autoStitch}
-                      onChange={(e) => setAutoStitch(e.target.checked)}
+                      id="tryonRemoveWatermark"
+                      checked={removeWatermark}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setRemoveWatermark(checked);
+                        localStorage.setItem("fb_tryon_rm_wm", checked ? "1" : "0");
+                      }}
                       className="rounded accent-acc cursor-pointer"
                     />
-                    <label htmlFor="autoStitch" className="font-medium text-dim cursor-pointer">
-                      Tự động ghép 2 video 8s thành 16s (FFmpeg)
+                    <label
+                      htmlFor="tryonRemoveWatermark"
+                      className="font-medium text-dim cursor-pointer"
+                      title="Tự động xóa ngôi sao 4 cánh (✦) trên First Frame và Video"
+                    >
+                      Tự động xóa watermark (✦) Ảnh & Video
                     </label>
                   </div>
                 </Panel>
@@ -833,8 +891,10 @@ export function TryOnPanel({
                     className="h-10 font-bold w-full justify-between px-4 text-[13px]"
                     title="Bắt đầu chạy tạo video thật qua tài khoản Flow"
                   >
-                    <span>Tạo Video Thử Đồ Thật</span>
-                    <span className="text-[10px] bg-accink/20 px-1.5 py-0.5 rounded text-accink font-bold">~2 cr</span>
+                    <span>{isSingleMode ? "Tạo Video 8s Thật" : "Tạo Video Thử Đồ Thật"}</span>
+                    <span className="text-[10px] bg-accink/20 px-1.5 py-0.5 rounded text-accink font-bold">
+                      {isSingleMode || !videoPrompt2.trim() ? "~1 cr" : "~2 cr"}
+                    </span>
                   </Btn>
 
                   <div className="flex items-center gap-2">
@@ -936,7 +996,7 @@ export function TryOnPanel({
                         )}
                         {inspectedJob?.state === "running" && (
                           <Chip tone="acc" live>
-                            {`Đang render bước ${currentStep}/4`}
+                            {`Đang render bước ${currentStep}/${activeSteps.length}`}
                           </Chip>
                         )}
                         {inspectedJob?.state === "queued" && (
@@ -984,21 +1044,29 @@ export function TryOnPanel({
                     {activeResult?.final_video_url && (
                       <a
                         href={activeResult.final_video_url}
-                        download={`${activeResult.run_id}_16s.mp4`}
+                        download={`${activeResult.run_id}_${activeResult.single_video || !activeResult.video_2_url ? "8s" : "16s"}.mp4`}
                         className="inline-flex items-center gap-1.5 rounded-ctl bg-acc text-accink px-3 h-8 text-[12px] font-bold hover:bg-acc2 transition-colors cursor-pointer"
                       >
                         <DownloadSimple size={14} weight="bold" />
-                        <span>Tải Video 16s</span>
+                        <span>
+                          {activeResult.single_video || !activeResult.video_2_url
+                            ? "Tải Video 8s"
+                            : "Tải Video 16s"}
+                        </span>
                       </a>
                     )}
                   </div>
                 </div>
 
-                {/* 4-Step Stepper (Shown when job is running or viewing a job) */}
+                {/* Stepper (Shown when job is running or viewing a job) */}
                 {inspectedJob && (inspectedJob.state === "running" || inspectedJob.state === "queued") && (
                   <div className="flex flex-col gap-2 pt-1">
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                      {STEPS.map((s) => {
+                    <div
+                      className={`grid grid-cols-2 ${
+                        activeSteps.length > 2 ? "sm:grid-cols-4" : "sm:grid-cols-2"
+                      } gap-2`}
+                    >
+                      {activeSteps.map((s) => {
                         const isCurrent = inspectedJob.state === "running" && currentStep === s.id;
                         const isDone = inspectedJob.state === "running" && currentStep > s.id;
 
@@ -1081,18 +1149,22 @@ export function TryOnPanel({
                             : "text-mut hover:text-fg"
                         }`}
                       >
-                        Video 16s Hoàn Chỉnh
+                        {activeResult.single_video || !activeResult.video_2_url
+                          ? "Video 8s Hoàn Chỉnh"
+                          : "Video 16s Hoàn Chỉnh"}
                       </button>
-                      <button
-                        onClick={() => setResultTab("subvideos")}
-                        className={`px-3 py-1 text-[11.5px] font-semibold rounded-ctl transition-colors cursor-pointer ${
-                          resultTab === "subvideos"
-                            ? "bg-panel2 text-acc border border-line2"
-                            : "text-mut hover:text-fg"
-                        }`}
-                      >
-                        Video 1 & 2 (8s + 8s)
-                      </button>
+                      {!activeResult.single_video && activeResult.video_2_url && (
+                        <button
+                          onClick={() => setResultTab("subvideos")}
+                          className={`px-3 py-1 text-[11.5px] font-semibold rounded-ctl transition-colors cursor-pointer ${
+                            resultTab === "subvideos"
+                              ? "bg-panel2 text-acc border border-line2"
+                              : "text-mut hover:text-fg"
+                          }`}
+                        >
+                          Video 1 & 2 (8s + 8s)
+                        </button>
+                      )}
                       <button
                         onClick={() => setResultTab("frames")}
                         className={`px-3 py-1 text-[11.5px] font-semibold rounded-ctl transition-colors cursor-pointer ${
@@ -1101,7 +1173,9 @@ export function TryOnPanel({
                             : "text-mut hover:text-fg"
                         }`}
                       >
-                        Khung hình First & Last Frame
+                        {activeResult.single_video || !activeResult.last_frame_url
+                          ? "Ảnh First Frame"
+                          : "Khung hình First & Last Frame"}
                       </button>
                       <button
                         onClick={() => setResultTab("prompts")}
@@ -1310,24 +1384,26 @@ export function TryOnPanel({
                           </p>
                         </div>
 
-                        <div className="p-2.5 rounded-ctl bg-panel2 border border-line flex flex-col gap-1">
-                          <div className="flex items-center justify-between text-[11.5px]">
-                            <span className="font-bold text-fg flex items-center gap-1.5">
-                              <VideoCamera size={13} className="text-ok" />
-                              <span>Video Prompt 2 (8-16s)</span>
-                            </span>
-                            <button
-                              onClick={() => handleCopyPrompt(activeResult.video_prompt_2 || "", "vp2")}
-                              className="text-[10.5px] text-mut hover:text-fg flex items-center gap-1 cursor-pointer"
-                            >
-                              {copiedKey === "vp2" ? <Check size={12} className="text-ok" /> : <Copy size={12} />}
-                              <span>{copiedKey === "vp2" ? "Đã chép" : "Sao chép"}</span>
-                            </button>
+                        {!activeResult.single_video && activeResult.video_prompt_2 && (
+                          <div className="p-2.5 rounded-ctl bg-panel2 border border-line flex flex-col gap-1">
+                            <div className="flex items-center justify-between text-[11.5px]">
+                              <span className="font-bold text-fg flex items-center gap-1.5">
+                                <VideoCamera size={13} className="text-ok" />
+                                <span>Video Prompt 2 (8-16s)</span>
+                              </span>
+                              <button
+                                onClick={() => handleCopyPrompt(activeResult.video_prompt_2 || "", "vp2")}
+                                className="text-[10.5px] text-mut hover:text-fg flex items-center gap-1 cursor-pointer"
+                              >
+                                {copiedKey === "vp2" ? <Check size={12} className="text-ok" /> : <Copy size={12} />}
+                                <span>{copiedKey === "vp2" ? "Đã chép" : "Sao chép"}</span>
+                              </button>
+                            </div>
+                            <p className="font-mono text-[11px] text-fg/90 whitespace-pre-wrap leading-relaxed select-all">
+                              {activeResult.video_prompt_2 || "(Không có dữ liệu)"}
+                            </p>
                           </div>
-                          <p className="font-mono text-[11px] text-fg/90 whitespace-pre-wrap leading-relaxed select-all">
-                            {activeResult.video_prompt_2 || "(Không có dữ liệu)"}
-                          </p>
-                        </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1838,7 +1914,11 @@ export function TryOnPanel({
                             : "bg-err/90 text-white shadow-xs"
                         }`}
                       >
-                        {run.status === "succeeded" ? "16s Hoàn chỉnh" : "Lỗi"}
+                        {run.status === "succeeded"
+                          ? run.single_video || !run.video_2_url
+                            ? "8s Hoàn chỉnh"
+                            : "16s Hoàn chỉnh"
+                          : "Lỗi"}
                       </span>
                     </div>
 
@@ -1878,9 +1958,9 @@ export function TryOnPanel({
                       {run.final_video_url && (
                         <a
                           href={run.final_video_url}
-                          download={`${run.run_id}_16s.mp4`}
+                          download={`${run.run_id}_${run.single_video || !run.video_2_url ? "8s" : "16s"}.mp4`}
                           className="text-dim hover:text-fg p-1 rounded hover:bg-line"
-                          title="Tải video 16s"
+                          title="Tải video"
                         >
                           <DownloadSimple size={14} />
                         </a>
@@ -1915,33 +1995,54 @@ export function TryOnPanel({
                 <Warning size={22} weight="bold" />
               </div>
               <div>
-                <h3 className="text-[15px] font-bold text-fg">Xác nhận tạo Video Thử Đồ Thật</h3>
+                <h3 className="text-[15px] font-bold text-fg">
+                  {isSingleMode || !videoPrompt2.trim()
+                    ? "Xác nhận tạo Video 8s Thật"
+                    : "Xác nhận tạo Video Thử Đồ Thật"}
+                </h3>
                 <p className="text-[12px] text-mut mt-0.5">Sử dụng Google Flow credit</p>
               </div>
             </div>
 
-            <div className="rounded-ctl bg-panel2 border border-line p-3 text-[12px] leading-relaxed flex flex-col gap-2">
-              <div className="flex items-center justify-between">
-                <span className="text-mut">Video 1 (8 giây):</span>
-                <span className="font-mono text-fg">~1 Flow Credit</span>
+            {isSingleMode || !videoPrompt2.trim() ? (
+              <div className="rounded-ctl bg-panel2 border border-line p-3 text-[12px] leading-relaxed flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-mut">Video (8 giây, 1080p):</span>
+                  <span className="font-mono text-fg">~1 Flow Credit</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-mut">Hậu kỳ & Xóa Watermark (Local):</span>
+                  <span className="font-mono text-ok">0 Credit (Local)</span>
+                </div>
+                <div className="border-t border-line2 pt-1.5 flex items-center justify-between font-bold text-acc">
+                  <span>Tổng chi phí ước tính:</span>
+                  <span className="font-mono">~1 Credit</span>
+                </div>
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-mut">Trích xuất Last Frame (FFmpeg):</span>
-                <span className="font-mono text-ok">0 Credit (Local)</span>
+            ) : (
+              <div className="rounded-ctl bg-panel2 border border-line p-3 text-[12px] leading-relaxed flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-mut">Video 1 (8 giây):</span>
+                  <span className="font-mono text-fg">~1 Flow Credit</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-mut">Trích xuất Last Frame (FFmpeg):</span>
+                  <span className="font-mono text-ok">0 Credit (Local)</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-mut">Video 2 (8 giây):</span>
+                  <span className="font-mono text-fg">~1 Flow Credit</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-mut">Ghép nối 16s (FFmpeg):</span>
+                  <span className="font-mono text-ok">0 Credit (Local)</span>
+                </div>
+                <div className="border-t border-line2 pt-1.5 flex items-center justify-between font-bold text-acc">
+                  <span>Tổng chi phí ước tính:</span>
+                  <span className="font-mono">~2 Credits</span>
+                </div>
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-mut">Video 2 (8 giây):</span>
-                <span className="font-mono text-fg">~1 Flow Credit</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-mut">Ghép nối 16s (FFmpeg):</span>
-                <span className="font-mono text-ok">0 Credit (Local)</span>
-              </div>
-              <div className="border-t border-line2 pt-1.5 flex items-center justify-between font-bold text-acc">
-                <span>Tổng chi phí ước tính:</span>
-                <span className="font-mono">~2 Credits</span>
-              </div>
-            </div>
+            )}
 
             <p className="text-[11.5px] text-dim leading-relaxed">
               Job sẽ được xếp vào hàng đợi và phân bổ cho tài khoản CloakBrowser khả dụng. Bạn có thể tiếp tục tạo thêm các job khác trong lúc render.

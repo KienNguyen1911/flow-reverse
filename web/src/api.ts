@@ -55,6 +55,7 @@ export const api = {
     aspect?: number;
     seed?: number | null;
     dry_run?: boolean;
+    remove_watermark?: boolean;
     confirm?: boolean;
   }) => post("/api/generate", p).then(j<{ job_id: string }>),
 
@@ -101,6 +102,7 @@ export const api = {
     storyboard_path?: string;
     aspect?: number;
     dry_run?: boolean;
+    remove_watermark?: boolean;
     confirm?: boolean;
     dest_dir?: string;
   }) => post("/api/batch", p).then(j<{ job_id: string }>),
@@ -135,6 +137,8 @@ export const api = {
     video_prompt_1?: string;
     video_prompt_2?: string;
     aspect_ratio?: string;
+    remove_watermark?: boolean;
+    single_video?: boolean;
   }) => post("/api/tryon/start", p).then(j<{ job_id: string }>),
 
   tryonRuns: () => fetch("/api/tryon/runs").then(j<{ runs: TryOnRunManifest[] }>),

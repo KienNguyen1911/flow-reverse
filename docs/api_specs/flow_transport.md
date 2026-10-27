@@ -124,7 +124,8 @@ def parse_response(body: str) -> list[dict]:
 | `jHPbke` | 233B | **Tạo project** | Bắn ngay lúc click "Dự án mới"; response chứa UUID project mới |
 | `ogiZ0b` | ~5.7KB | **Tạo ảnh (submit)** | Bắn lúc click nút "Bắt đầu tạo"; response (sau ~22s) chứa ảnh hoàn chỉnh |
 | `maseQ` | ~87KB | **Upload ảnh tham chiếu / starting frame** | Bắn lúc paste/upload ảnh vào project; trả về `MediaItem` chứa `media_id` mới |
-| `eb1hJf` | ~3.2KB | **Tạo video (submit `abra_i2v_8s`)** | Bắn lúc tạo video; chứa `starting_frame_media_id`, `prompt`, `aspect`, `recaptcha_token`; trả về `video_media_id` |
+| `eb1hJf` | ~3.2KB | **Tạo video từ khung hình đầu (`abra_i2v_8s`)** | Bắn lúc tạo video có gắn Starting Frame; chứa `starting_frame_media_id`, `prompt`, `aspect`, `recaptcha_token`; trả về `video_media_id` |
+| `YhhmEf` | ~2.8KB | **Tạo video từ văn bản (Text-to-Video)** | Bắn lúc bấm Generate ở chế độ Video khi **chưa** gắn chip ảnh Starting Frame (ví dụ ngay sau khi `reload()` trang để mượn token 0-credit cho `p0UkFb`) |
 | `p0UkFb` | ~2.9KB | **Nâng cấp video lên 1080p (`veo_3_1_upsampler_1080p`)** | Bắn khi nâng cấp 720p → 1080p; sinh ra `<video_media_id>_upsampled` (`1080x1920` / `1920x1080`) |
 | `jwpduf` | ~197B | **Poll trạng thái render video** | args `[null, null, [[video_media_id]]]`; trả về `rec[5][8]=[3]` (xong) hoặc `[4, ...]` (lỗi + mã `PUBLIC_ERROR_...`) |
 | `as29s` | ~170B | **Mint signed CDN URL 6h cho media** | args `[media_id]` (hoặc `[<id>_upsampled]`); trả về `https://flow-content.google/video/<id>?Expires=...` |

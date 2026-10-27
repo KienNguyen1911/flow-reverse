@@ -74,6 +74,7 @@ from .flow_models import (
     parse_uptedb_projects,
     validate_seed,
 )
+from .watermark_remover import remove_image_watermark
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUT = ROOT / "out" / "playground"
@@ -419,6 +420,7 @@ class FlowClient:
         aspect: int = ASPECT_DEFAULT,
         seed: Optional[int] = None,
         dry_run: bool = False,
+        remove_watermark: bool = True,
         poll_timeout_s: float = 150.0,
         anti_abuse_retries: int = 1,
         reference: Optional[ReferenceTemplate] = None,
@@ -449,6 +451,7 @@ class FlowClient:
                 aspect=int(aspect),
                 seed=seed_v,
                 dry_run=dry_run,
+                remove_watermark=remove_watermark,
                 poll_timeout_s=poll_timeout_s,
                 reference=reference,
                 ev=ev,
@@ -483,6 +486,7 @@ class FlowClient:
         aspect: int,
         seed: int,
         dry_run: bool,
+        remove_watermark: bool = True,
         poll_timeout_s: float,
         ev: EventFn,
         reference: Optional[ReferenceTemplate] = None,
@@ -599,6 +603,16 @@ class FlowClient:
                     dest = run_dir / (_slugify(prompt) + ".jpg")
                     ok, nbytes = br.download(img.signed_url, dest, on_event=ev)
                     if ok:
+                        if remove_watermark:
+                            try:
+                                remove_image_watermark(
+                                    dest,
+                                    prefer_family="image",
+                                    log=lambda k, m: ev(k, m),
+                                )
+                                nbytes = dest.stat().st_size
+                            except Exception as wm_exc:  # noqa: BLE001
+                                ev("warn", f"xóa watermark ảnh bỏ qua: {wm_exc}")
                         img.file_path = str(dest)
                         img.file_bytes = nbytes
                         ev("download", f"đã tải ảnh ({nbytes / 1024:.1f} KB) → {dest.name}")
@@ -708,6 +722,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_gen.add_argument("--aspect", type=int, default=ASPECT_DEFAULT)
     p_gen.add_argument("--seed", type=int, default=None, help="int32; bỏ trống = random")
     p_gen.add_argument("--dry-run", action="store_true", help="chỉ capture+build, KHÔNG fire (0 credit)")
+    p_gen.add_argument("--no-remove-watermark", action="store_true", help="giữ nguyên watermark ngôi sao (✦) trên ảnh")
     p_gen.add_argument("--yes", action="store_true", help="bỏ xác nhận credit")
     p_gen.add_argument("--anti-abuse-retries", type=int, default=1)
 
@@ -749,6 +764,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             res = client.generate_image(
                 args.project, args.prompt,
                 aspect=args.aspect, seed=args.seed, dry_run=args.dry_run,
+                remove_watermark=not args.no_remove_watermark,
                 anti_abuse_retries=args.anti_abuse_retries,
                 on_event=_print_ev,
             )

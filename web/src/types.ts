@@ -199,6 +199,7 @@ export interface Job {
     title?: string;
     items?: BatchItemRequest[];
     dry_run?: boolean;
+    remove_watermark?: boolean;
   };
   state: JobState;
   created_ms: number;
@@ -245,6 +246,7 @@ export interface TryOnRunManifest {
   final_video_path?: string | null;
   elapsed_s?: number;
   dry_run?: boolean;
+  single_video?: boolean;
   error?: string | null;
   account_id?: string | null;
   first_frame_url?: string | null;

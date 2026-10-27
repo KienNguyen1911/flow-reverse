@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { BookOpen, Code, FilmStrip, Images, Sparkle, Users } from "@phosphor-icons/react";
+import { BookOpen, Code, FilmStrip, Images, Sparkle, Users, VideoCamera } from "@phosphor-icons/react";
 import { motion, useReducedMotion } from "motion/react";
 import { api } from "./api";
 import { useGallery, useJob, usePool, useProjects, useStatus } from "./hooks";
@@ -17,7 +17,7 @@ import { TryOnPanel } from "./components/TryOnPanel";
 
 const PROJECT_KEY = "fb_project";
 
-type TabKey = "compose" | "tryon" | "gallery" | "accounts" | "guide" | "docs";
+type TabKey = "compose" | "video" | "tryon" | "gallery" | "accounts" | "guide" | "docs";
 
 function msg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -82,13 +82,13 @@ export default function App() {
     else localStorage.removeItem(PROJECT_KEY);
   }, [selectedId]);
 
-  // Keyboard shortcuts: Alt+1-6 to switch tabs
+  // Keyboard shortcuts: Alt+1-7 to switch tabs
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (!e.altKey) return;
-      const idx = ["1", "2", "3", "4", "5", "6"].indexOf(e.key);
+      const idx = ["1", "2", "3", "4", "5", "6", "7"].indexOf(e.key);
       if (idx === -1) return;
-      const tabs: TabKey[] = ["compose", "tryon", "gallery", "accounts", "guide", "docs"];
+      const tabs: TabKey[] = ["compose", "video", "tryon", "gallery", "accounts", "guide", "docs"];
       setActiveTab(tabs[idx]);
     };
     window.addEventListener("keydown", handler);
@@ -148,6 +148,7 @@ export default function App() {
   const tabs = useMemo(
     () => [
       { key: "compose" as TabKey, label: "Tạo ảnh", icon: <Sparkle size={15} /> },
+      { key: "video" as TabKey, label: "Tạo video", icon: <VideoCamera size={15} /> },
       { key: "tryon" as TabKey, label: "Video Thử Đồ", icon: <FilmStrip size={15} /> },
       { key: "gallery" as TabKey, label: "Thư viện", icon: <Images size={15} /> },
       {
@@ -165,7 +166,7 @@ export default function App() {
   return (
     <div
       className={`${
-        activeTab === "tryon" ? "max-w-[1680px]" : "max-w-[1300px]"
+        activeTab === "tryon" || activeTab === "video" ? "max-w-[1680px]" : "max-w-[1300px]"
       } mx-auto px-3 sm:px-4 lg:px-6 py-4 sm:py-5 flex flex-col gap-4 min-h-full transition-all duration-200`}
     >
       <TopBar
@@ -240,6 +241,27 @@ export default function App() {
             </motion.div>
           )}
 
+          {activeTab === "video" && (
+            <motion.div
+              initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.25, ease: "easeOut" }}
+            >
+              <TryOnPanel
+                key="video-single"
+                mode="single"
+                projects={projects}
+                selectedProjectId={selectedId}
+                busy={busy}
+                pool={pool}
+                activeJob={job}
+                activeJobId={activeJobId}
+                onSelectActiveJobId={setActiveJobId}
+                onStartJob={startJob}
+              />
+            </motion.div>
+          )}
+
           {activeTab === "tryon" && (
             <motion.div
               initial={reduceMotion ? false : { opacity: 0, y: 8 }}
@@ -247,6 +269,8 @@ export default function App() {
               transition={{ duration: 0.25, ease: "easeOut" }}
             >
               <TryOnPanel
+                key="tryon-chain"
+                mode="chain"
                 projects={projects}
                 selectedProjectId={selectedId}
                 busy={busy}

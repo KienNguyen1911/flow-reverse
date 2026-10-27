@@ -266,7 +266,13 @@ Mặc định `eb1hJf` (`abra_i2v_8s`) tạo ra video gốc ở độ phân gi�
      - `spec[4]`: `[null, "<item_id>", null, null, "<UUID_1>"]` (`item_id` lấy từ `jwpduf` tại `rec[2]`).
      - `spec[6]`: `2`.
      - `spec[31]`: `"veo_3_1_upsampler_1080p"` (bắt buộc ở đúng chỉ số `31`, tức có đúng 24 phần tử `null` giữa `spec[6]` và `spec[31]`).
-   - Sau khi `p0UkFb` trả về `200 OK`, gọi `jwpduf` với `[null, null, [["<video_media_id>_upsampled"]]]` mỗi 3.5s cho tới khi `rec[5][8] == [3]` (~12–20s), rồi gọi `as29s(["<video_media_id>_upsampled"])` để lấy Signed URL 1080p.
+   - Sau khi `p0UkFb` trả về `200 OK`, gọi `jwpduf` với `[null, null, [["<video_media_id>_upsampled"]]]` mỗi 3.5s cho tới khi `rec[5][8] == [3]` (~12–36s), rồi gọi `as29s(["<video_media_id>_upsampled"])` để lấy Signed URL 1080p.
+4. **Cơ chế Mượn Token reCAPTCHA 0-Credit cho `p0UkFb` (Lưu ý Kỹ thuật Quan trọng):**
+   - **Bẫy Anti-Hijack của Angular (`_.OK` / `IUa`):** Bundle frontend của Flow bọc `window.grecaptcha.enterprise.execute` bằng hàm bẫy ghi đè `{action: "extension_hijack_detected"}` (hàm thật được giữ kín trong thuộc tính private `_.OK.ha` thông qua `WeakMap`). Do đó **tuyệt đối không** tự gọi `grecaptcha.enterprise.execute()` trực tiếp từ console/script bên ngoài.
+   - **Phân nhánh RPC khi bấm Generate mồi sau `reload()`:** Trước khi gọi `p0UkFb`, nếu trang dự án vừa được `reload()` để xóa trạng thái composer bẩn từ lần chặn `eb1hJf` trước đó, thanh composer ở chế độ Video sẽ **không còn gắn chip ảnh Starting Frame**. Khi `upsample_and_fetch_1080p_url_rpc` kiểm tra `bridge.prompt_value()`, điền prompt mồi và bấm Generate:
+     - Nếu có chip ảnh Starting Frame: Angular bắn RPC **`eb1hJf`** (Image-to-Video).
+     - Nếu không có chip ảnh Starting Frame: Angular bắn RPC **`YhhmEf`** (Text-to-Video).
+   - Vì vậy, `VIDEO_HOOK_JS` (`v: 2`) bắt buộc phải chặn đồng thời cả 4 mã RPC: **`eb1hJf`**, **`YhhmEf`**, **`ogiZ0b`**, và **`p0UkFb`** để thu giữ token reCAPTCHA `0cAFcWeA...` tại `args[1][10][0]` với chi phí **0 credit**.
 
 ---
 
@@ -275,11 +281,11 @@ Mặc định `eb1hJf` (`abra_i2v_8s`) tạo ra video gốc ở độ phân gi�
 ```mermaid
 sequenceDiagram
     participant W as FlowVideoBridge (Python)
-    participant P as CloakBrowser Page (VIDEO_HOOK_JS)
+    participant P as CloakBrowser Page (VIDEO_HOOK_JS v2)
     participant G as Google Flow Backend (batchexecute)
     participant C as flow-content.google CDN
 
-    W->>P: 1. condition_frame_for_policy_retry() + install_video_hook()
+    W->>P: 1. install_video_hook() (chặn eb1hJf / YhhmEf / ogiZ0b / p0UkFb)
     W->>P: 2. Dispatch ClipboardEvent("paste") với file ảnh
     P->>G: POST rpcids=maseQ (0 credit)
     G-->>P: 200 OK (starting_frame_media_id)
@@ -298,10 +304,19 @@ sequenceDiagram
         G-->>W: rec[5][8] = [1]/[2] (pending) | [3] (succeeded) | [4, error] (failed)
     end
 
-    W->>G: 6. POST rpcids=as29s ([video_media_id]) (0 credit)
+    opt Khi resolution == "1080p" (Upsample 720p -> 1080p)
+        W->>P: 6a. Kiểm tra bridge.prompt_value(), click Generate mồi -> chặn YhhmEf/eb1hJf (0 credit)
+        W->>G: 6b. POST rpcids=p0UkFb (veo_3_1_upsampler_1080p, item_id, token)
+        loop Mỗi 3.5 giây (tối đa 120s)
+            W->>G: 6c. POST rpcids=jwpduf ([null, null, [[<video_media_id>_upsampled]]])
+            G-->>W: rec[5][8] = [3] (succeeded 1080x1920)
+        end
+    end
+
+    W->>G: 7. POST rpcids=as29s ([<video_media_id>_upsampled] hoặc [video_media_id]) (0 credit)
     G-->>W: Signed URL 6h (https://flow-content.google/video/<id>?Expires=...)
-    W->>C: 7. GET Signed URL & kiểm tra magic bytes ftypisom
-    C-->>W: File MP4 gốc (~4.0 - 4.6 MB)
+    W->>C: 8. GET Signed URL & kiểm tra magic bytes ftypisom
+    C-->>W: File MP4 1080p gốc (~4.5 - 10.2 MB)
 ```
 
 ---
@@ -320,24 +335,27 @@ Trong chế độ **Khung hình (`abra_i2v_8s`)**, Google Flow quét đồng th�
 
 ---
 
-## 5. Bảng Ánh xạ Hàm Thực thi trong [`src/Bridge/flow_video_bridge.py`](file:///D:/Dev/rev-flow/src/Bridge/flow_video_bridge.py)
+## 5. Bảng Ánh xạ Hàm Thực thi trong [`src/Bridge/flow_video_bridge.py`](file:///D:/Dev/rev-flow/src/Bridge/flow_video_bridge.py) & [`src/Bridge/flow_bridge.py`](file:///D:/Dev/rev-flow/src/Bridge/flow_bridge.py)
 
 | Hàm / Phương thức | Vai trò |
 | :--- | :--- |
-| `VIDEO_HOOK_JS` | Hook `window.fetch` in-page: chặn `eb1hJf` mồi của app (0 credit) và bắt ngầm response `maseQ` khi paste ảnh. |
-| `parse_video_app_capture(body)` | Giải mã `f.req` và `at` từ request mồi, trích xuất `recaptcha_token` tại `args[1][10][0]`. |
+| `VIDEO_HOOK_JS` (`v: 2`) | Hook `window.fetch` in-page: chặn đồng thời `eb1hJf`, `YhhmEf`, `ogiZ0b`, `p0UkFb` mồi của app (0 credit) và bắt ngầm response `maseQ` khi paste ảnh. |
+| `FlowBridge.prompt_value()` | Đọc nội dung văn bản hiện tại trong composer `div.ProseMirror` để xác định có cần nhập prompt mồi trước khi bấm Generate hay không. |
+| `parse_video_app_capture(body)` | Giải mã `f.req` và `at` từ request mồi (`eb1hJf` / `YhhmEf` / `ogiZ0b`), trích xuất `recaptcha_token` tại `args[1][10][0]`. |
 | `build_video_args(...)` | Đóng gói `args` tất định cho `eb1hJf` (`abra_i2v_8s`, `aspect_enum` `1`/`2`, `seed` `int32`, `starting_frame_media_id`, UUID viết hoa). |
-| `build_jwpduf_args(video_media_id)` | Đóng gói `[None, None, [[video_media_id]]]` để poll trạng thái render (0 credit). |
+| `build_video_upsample_1080p_args(...)` | Đóng gói `args` 32 phần tử cho `p0UkFb` (`veo_3_1_upsampler_1080p`, `video_media_id`, `item_id`, `aspect_enum`, `recaptcha_token`). |
+| `build_jwpduf_args(video_media_id)` | Đóng gói `[None, None, [[video_media_id]]]` để poll trạng thái render 720p hoặc `<id>_upsampled` 1080p (0 credit). |
 | `parse_jwpduf_status(data)` | Phân tích `rec[5][8]` (`[1]/[2]` = `pending`, `[3]` = `succeeded`, `[4, ...]` = `failed` kèm `error_code` & `error_categories`). |
 | `build_as29s_args(media_id)` | Đóng gói `[media_id]` để mint Signed Video CDN URL 6 giờ (0 credit). |
 | `extract_signed_video_url(data)` | Ưu tiên lấy URL `https://flow-content.google/video/<id>?Expires=...` từ `as29s`, fallback sang FIFE `=mm,22,15`. |
-| `condition_frame_for_policy_retry(...)` | Vi chỉnh nhẹ ảnh khung hình đầu bằng FFmpeg để vượt bộ lọc `PROMINENT_PERSON`. |
-| `FlowVideoBridge.generate_video_flow(...)` | Pipeline thực thi trọn gói: `maseQ` → `eb1hJf` → `jwpduf` → `as29s` → `download_video_verified`. |
+| `FlowVideoBridge.upsample_and_fetch_1080p_url_rpc(...)` | Nâng cấp video 720p lên 1080p (`p0UkFb` → poll `jwpduf` `<id>_upsampled` → `as29s`) và trả về Signed URL 1080p. |
+| `FlowVideoBridge.generate_video_flow(...)` | Pipeline thực thi trọn gói: `maseQ` → `eb1hJf` → `jwpduf` → `upsample_and_fetch_1080p_url_rpc` → `download_video_verified`. |
 
 ---
 
-## 6. Biên bản Kiểm chứng Thực tế (Live E2E Receipt — 2026-10-26)
+## 6. Biên bản Kiểm chứng Thực tế (Live E2E Receipt — 2026-10-26 & 2026-10-27)
 
+### 6.1. Kiểm chứng Tạo Video & Vượt Bộ lọc (2026-10-26)
 Kiểm chứng trực tiếp trên dự án `006f6e93-2d22-4a3d-9b03-1a902a50fd10` (`http://127.0.0.1:4023`) với tấm ảnh mẫu từng bị lỗi `PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED`:
 
 | Giai đoạn | `video_media_id` | `seed` | Kết quả `jwpduf` | Dung lượng MP4 (`as29s`) |
@@ -346,4 +364,13 @@ Kiểm chứng trực tiếp trên dự án `006f6e93-2d22-4a3d-9b03-1a902a50fd1
 | **Video 1 — Lượt 2** *(sau `condition_frame` + `sanitize`)* | `29a57c63-3425-4355-aa47-ef4c72de010a` | `285530228` | `state=succeeded` (`rec[5][8]=[3]`) | **`4,606,899 bytes`** (`video_1_8s.mp4`) |
 | **Video 2 (8–16s)** *(từ Last Frame đã vi chỉnh)* | `7d2fdff5-3ab5-40e9-b41f-e2fddd901301` | `207487042` | `state=succeeded` ngay Lượt 1 sau **34s** | **`3,983,696 bytes`** (`video_2_8s.mp4`) |
 | **Ghép nối 16s (FFmpeg)** | — | — | Hoàn tất `concatenate_two_videos` | **`4,252,624 bytes`** (`final_tryon_video_16s.mp4`) |
+
+### 6.2. Kiểm chứng Nâng cấp 1080p (`p0UkFb` + `YhhmEf` Decoy Hook — 2026-10-27)
+Kiểm chứng trực tiếp trên job `tryon_20261027_095602` (dự án `006f6e93-2d22-4a3d-9b03-1a902a50fd10`):
+
+| Giai đoạn | `media_id` (1080p) | Độ phân giải | Thời gian Upsample (`jwpduf`) | Dung lượng sau xóa Watermark |
+| :--- | :--- | :--- | :--- | :--- |
+| **Video 1 (0–8s)** | `560cb040-994a-447f-8a4e-5fe42381e6fb_upsampled` | **`1080x1920`** (192 frames) | **31s** (`4,483,234` bytes raw CDN) | **`6,251,844 bytes`** (`video_1.mp4`) |
+| **Video 2 (8–16s)** | `27f41ef9-6073-43b0-ba31-97eff2c29c59_upsampled` | **`1080x1920`** (192 frames) | **36s** (`3,489,334` bytes raw CDN) | **`4,786,947 bytes`** (`video_2.mp4`) |
+| **Ghép nối 16s (`-c:v copy -an`)** | — | **`1080x1920`** (384 frames, 16.0s) | Stream copy 0 re-encode | **`11,038,001 bytes`** (`final_tryon_video_16s.mp4`) |
 

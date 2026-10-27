@@ -333,6 +333,7 @@ class BatchRunner:
         raw_pid = self.params.get("project_id")
         self.project_id = parse_project_ref(str(raw_pid)) if raw_pid else None
         self.dry_run = bool(self.params.get("dry_run"))
+        self.remove_watermark = bool(self.params.get("remove_watermark", True))
         self.aspect = int(self.params.get("aspect") or 3)
         self.item_pause_mean = float(self.params.get("item_pause_s") or 4.0)
         self.items: list[BatchItem] = []
@@ -498,11 +499,13 @@ class BatchRunner:
             return client.generate_image(
                 target_pid, it.prompt,
                 aspect=self.aspect, seed=it.seed, dry_run=self.dry_run,
+                remove_watermark=self.remove_watermark,
                 reference=tpl, on_event=ev,
             )
         return client.generate_image(
             target_pid, it.prompt,
             aspect=self.aspect, seed=it.seed, dry_run=self.dry_run,
+            remove_watermark=self.remove_watermark,
             on_event=ev,
         )
 
@@ -891,6 +894,7 @@ class JobManager:
                 aspect=int(params.get("aspect") or 3),
                 seed=params.get("seed"),
                 dry_run=dry_run,
+                remove_watermark=bool(params.get("remove_watermark", True)),
                 reference=tpl,
                 on_event=ev,
             )
@@ -939,9 +943,10 @@ class JobManager:
     def _run_auto_tryon(self, job: Job) -> None:
         import importlib
         from dataclasses import asdict
-        from ..Bridge import flow_video_bridge
+        from ..Bridge import flow_bridge, flow_video_bridge
         from ..Workflows import auto_tryon_pipeline
 
+        importlib.reload(flow_bridge)
         importlib.reload(flow_video_bridge)
         importlib.reload(auto_tryon_pipeline)
         AutoTryOnPipeline = auto_tryon_pipeline.AutoTryOnPipeline
@@ -1003,6 +1008,8 @@ class JobManager:
                 override_video_prompt_1=params.get("video_prompt_1"),
                 override_video_prompt_2=params.get("video_prompt_2"),
                 aspect_ratio=params.get("aspect_ratio", "9:16"),
+                remove_watermark=bool(params.get("remove_watermark", True)),
+                single_video=bool(params.get("single_video", False)),
             )
             res_dict = asdict(res)
             res_dict["account_id"] = aid

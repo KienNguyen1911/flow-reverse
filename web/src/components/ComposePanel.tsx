@@ -21,12 +21,14 @@ export interface GenRequest {
   prompt: string;
   aspect: number;
   seed: number | null;
+  remove_watermark?: boolean;
 }
 
 export interface BatchRequest {
   project_id?: string;
   aspect: number;
   items: BatchItemRequest[];
+  remove_watermark?: boolean;
 }
 
 interface Props {
@@ -52,12 +54,16 @@ const PROMPT_KEY = "fb_prompt_draft";
 const BATCH_ON_KEY = "fb_batch_on";
 const BATCH_KEY = "fb_batch_prompts";
 const BATCH_REF_KEY = "fb_batch_ref";
+const RM_WM_KEY = "fb_remove_watermark";
 const MAX_BATCH = 300;
 
 export function ComposePanel(p: Props) {
   const [prompt, setPrompt] = useState(() => localStorage.getItem(PROMPT_KEY) ?? "");
   const [seedStr, setSeedStr] = useState("");
   const [formErr, setFormErr] = useState<string | null>(null);
+  const [removeWatermark, setRemoveWatermark] = useState(
+    () => (localStorage.getItem(RM_WM_KEY) ?? "1") !== "0",
+  );
 
 
   // -- batch mode (plan Task 4) --------------------------------------------- //
@@ -87,6 +93,10 @@ export function ComposePanel(p: Props) {
   useEffect(() => {
     localStorage.setItem(BATCH_ON_KEY, batchOn ? "1" : "0");
   }, [batchOn]);
+
+  useEffect(() => {
+    localStorage.setItem(RM_WM_KEY, removeWatermark ? "1" : "0");
+  }, [removeWatermark]);
 
   useEffect(() => {
     localStorage.setItem(BATCH_KEY, batchText);
@@ -135,7 +145,13 @@ export function ComposePanel(p: Props) {
       setFormErr("Prompt không được để trống.");
       return null;
     }
-    return { project_id: p.selectedId, prompt: prompt.trim(), aspect: 3, seed };
+    return {
+      project_id: p.selectedId,
+      prompt: prompt.trim(),
+      aspect: 3,
+      seed,
+      remove_watermark: removeWatermark,
+    };
   };
 
   // -- batch helpers --------------------------------------------------------- //
@@ -177,6 +193,7 @@ export function ComposePanel(p: Props) {
     return {
       ...(p.selectedId ? { project_id: p.selectedId } : {}),
       aspect: 3,
+      remove_watermark: removeWatermark,
       items: batchLines.map((line, i) => ({
         prompt: line,
         id: `shot_${String(i + 1).padStart(3, "0")}`,
@@ -537,6 +554,22 @@ export function ComposePanel(p: Props) {
           </div>
         </>
       )}
+
+      {/* Auto Watermark Removal toggle -------------------------------------- */}
+      <div className="flex items-center justify-between rounded-ctl border border-line2 bg-panel2 px-3 h-9 select-none">
+        <label className="flex items-center gap-2.5 cursor-pointer flex-1">
+          <input
+            type="checkbox"
+            className="accent-acc size-3.5"
+            checked={removeWatermark}
+            onChange={(e) => setRemoveWatermark(e.target.checked)}
+          />
+          <span className="text-[12.5px] font-medium text-dim">
+            Tự động xóa watermark (✦) góc phải
+          </span>
+        </label>
+        <InfoTip content="Tự động nhận diện và xóa biểu tượng ngôi sao 4 cánh (✦) của Google Flow ở góc dưới phải bằng thuật toán Hybrid Reverse-Alpha + Inpainting mà không làm giảm chất lượng ảnh gốc." />
+      </div>
 
       {/* Actions ------------------------------------------------------------ */}
       <div className="flex flex-col gap-2.5">

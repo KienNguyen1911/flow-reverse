@@ -558,6 +558,14 @@ class FlowBridge:
             time.sleep(0.5)
         raise PageInteractionError("Không tìm thấy ô prompt (div.ProseMirror).")
 
+    def prompt_value(self) -> str:
+        """Read current text inside the ProseMirror composer ('' if empty or missing)."""
+        txt = self._eval(
+            "(() => { try { const ed = document.querySelector('div.ProseMirror'); return ed ? String(ed.innerText || '').trim() : ''; } catch (e) { return ''; } })()",
+            retries=2,
+        )
+        return str(txt or "").strip()
+
     def type_prompt(self, prompt: str, attempts: int = 4) -> None:
         for attempt in range(attempts):
             pos = self.eval_json(self._COMPOSER_POS_JS)

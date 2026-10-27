@@ -57,6 +57,7 @@ from ..Bridge.gemini_bridge import (
 from .flow_client import FlowClient
 from .flow_models import ProjectInfo
 from .shopee_downloader import ShopeeAssetDownloader, ShopeeProductInfo
+from .watermark_remover import remove_image_watermark, remove_video_watermark
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUT_DIR = ROOT / "out" / "affiliate_runs"
@@ -84,6 +85,7 @@ class TryOnPipelineResult:
     final_video_path: Optional[str] = None
     elapsed_s: float = 0.0
     dry_run: bool = False
+    single_video: bool = False
     error: Optional[str] = None
 
 
@@ -125,8 +127,10 @@ class AutoTryOnPipeline:
         override_video_prompt_2: Optional[str] = None,
         first_frame_path: Optional[Path | str] = None,
         aspect_ratio: str = "9:16",
+        remove_watermark: bool = True,
+        single_video: bool = False,
     ) -> TryOnPipelineResult:
-        """Run the automated try-on video pipeline (or direct video-chain from first frame)."""
+        """Run the automated try-on video pipeline (or direct video-chain / single 8s video from first frame)."""
         t0 = time.time()
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         run_id = f"tryon_{ts}"
@@ -134,24 +138,28 @@ class AutoTryOnPipeline:
         run_dir.mkdir(parents=True, exist_ok=True)
 
         # ------------------------------------------------------------------- #
-        # Shortcut Branch: Direct Video-Chain when First Frame is provided
+        # Shortcut Branch: Direct Video-Chain / Single Video when First Frame is provided
         # ------------------------------------------------------------------- #
         is_direct_first_frame = bool(first_frame_path)
+        is_single = bool(single_video or (is_direct_first_frame and not (override_video_prompt_2 or "").strip()))
         if is_direct_first_frame:
             ff_p = Path(first_frame_path).resolve()
             if not ff_p.is_file() and not dry_run:
                 raise FileNotFoundError(f"Không tìm thấy ảnh First Frame: {ff_p}")
-            self._log("step", f"=== Khởi động Video Chain Pipeline ({run_id}) ===", {"dry_run": dry_run})
+            mode_label = "Single Video 8s Pipeline" if is_single else "Video Chain Pipeline"
+            self._log("step", f"=== Khởi động {mode_label} ({run_id}) ===", {"dry_run": dry_run, "single_video": is_single})
             self._log("info", f"Sử dụng First Frame Image trực tiếp: {ff_p.name}")
 
             dest_ff = run_dir / "first_frame.png"
             if ff_p != dest_ff:
                 shutil.copy(ff_p, dest_ff)
             first_frame_path = dest_ff
+            if remove_watermark and not dry_run and first_frame_path.is_file():
+                remove_image_watermark(first_frame_path, log=self._bridge_log)
 
             product_title = ff_p.stem
             v_prompt_1 = override_video_prompt_1 or "A cinematic natural fashion video, 8 seconds"
-            v_prompt_2 = override_video_prompt_2 or "A cinematic seamless continuation video, 8 seconds"
+            v_prompt_2 = "" if is_single else (override_video_prompt_2 or "A cinematic seamless continuation video, 8 seconds")
             image_prompt = override_image_prompt or ""
             all_product_images = [first_frame_path]
             garment_p = first_frame_path
@@ -319,10 +327,13 @@ class AutoTryOnPipeline:
                     prompt=flow_image_prompt,
                     reference=tpl,
                     dry_run=False,
+                    remove_watermark=remove_watermark,
                 )
                 if gen_res.status != "ok" or not gen_res.image or not gen_res.image.file_path:
                     raise RuntimeError(f"Tạo First Frame trên Flow thất bại: {gen_res.reason} ({gen_res.hint})")
                 shutil.copy(gen_res.image.file_path, first_frame_path)
+                if remove_watermark and first_frame_path.is_file():
+                    remove_image_watermark(first_frame_path, prefer_family="image", log=self._bridge_log)
                 self._log("info", f"First Frame đã lưu: {first_frame_path.name}")
 
             # ------------------------------------------------------------------- #
@@ -359,7 +370,7 @@ class AutoTryOnPipeline:
         # ------------------------------------------------------------------- #
         # Step 5: Google Flow -> Video 1 (8s)
         # ------------------------------------------------------------------- #
-        step_1_lbl = "BƯỚC 1/4" if is_direct_first_frame else "BƯỚC 5"
+        step_1_lbl = "BƯỚC 1/1" if is_single else ("BƯỚC 1/4" if is_direct_first_frame else "BƯỚC 5")
         self._log("step", f"{step_1_lbl}: Tạo Video 1 (8s) từ First Frame + Video Prompt 1...")
         video_1_path = run_dir / "video_1.mp4"
 
@@ -379,6 +390,8 @@ class AutoTryOnPipeline:
                     resolution="1080p",
                 )
             except Exception as e:
+                if "PROMINENT_PERSON" in str(e) or "PROMINENT_PEOPLE" in str(e):
+                    raise
                 self._log(
                     "warn",
                     f"generate_video_flow Video 1 gặp sự cố ({e}), đang tự động làm mềm Prompt (lọc từ nhạy cảm chính sách) và thử lại lần 2...",
@@ -395,67 +408,84 @@ class AutoTryOnPipeline:
                     aggressive_sanitize=True,
                     resolution="1080p",
                 )
+            if remove_watermark and video_1_path.is_file():
+                self._log("step", "Đang tự động xóa watermark (✦) trên Video 1...")
+                remove_video_watermark(video_1_path, log=self._bridge_log)
 
-        # ------------------------------------------------------------------- #
-        # Step 6: Extract Last Frame from Video 1
-        # ------------------------------------------------------------------- #
-        step_2_lbl = "BƯỚC 2/4" if is_direct_first_frame else "BƯỚC 6"
-        self._log("step", f"{step_2_lbl}: Trích xuất chính xác Last Frame từ Video 1...")
-        last_frame_path = run_dir / "last_frame_video_1.png"
-        extract_last_video_frame(video_1_path, last_frame_path, log=self._bridge_log)
-
-        # ------------------------------------------------------------------- #
-        # Step 7: Google Flow -> Video 2 (8s) using Last Frame as First Frame
-        # ------------------------------------------------------------------- #
-        step_3_lbl = "BƯỚC 3/4" if is_direct_first_frame else "BƯỚC 7"
-        self._log("step", f"{step_3_lbl}: Tạo Video 2 (8s) từ Last Frame + Video Prompt 2...")
-        video_2_path = run_dir / "video_2.mp4"
-
-        if dry_run:
-            self._log("info", "[DRY-RUN] Giả lập tạo Video 2...")
-            self._generate_dummy_video(video_2_path, duration_s=2)
-        else:
-            try:
-                self.flow_video.generate_video_flow(
-                    frame_path=last_frame_path,
-                    prompt_text=v_prompt_2,
-                    dest_path=video_2_path,
-                    duration_s=8,
-                    timeout_s=300.0,
-                    project_id=resolved_proj_id,
-                    aspect_ratio=aspect_ratio,
-                    resolution="1080p",
-                )
-            except Exception as e:
-                self._log(
-                    "warn",
-                    f"generate_video_flow Video 2 gặp sự cố ({e}), đang tự động làm mềm Prompt (lọc từ nhạy cảm chính sách) và thử lại lần 2...",
-                )
-                time.sleep(2.0)
-                self.flow_video.generate_video_flow(
-                    frame_path=last_frame_path,
-                    prompt_text=v_prompt_2,
-                    dest_path=video_2_path,
-                    duration_s=8,
-                    timeout_s=300.0,
-                    project_id=resolved_proj_id,
-                    aspect_ratio=aspect_ratio,
-                    aggressive_sanitize=True,
-                    resolution="1080p",
-                )
-
-        # ------------------------------------------------------------------- #
-        # Step 8: Automatic 16s Video Stitching
-        # ------------------------------------------------------------------- #
+        last_frame_path: Optional[Path] = None
+        video_2_path: Optional[Path] = None
         final_video_path: Optional[Path] = None
-        if auto_stitch:
-            step_4_lbl = "BƯỚC 4/4" if is_direct_first_frame else "BƯỚC 8"
-            self._log("step", f"{step_4_lbl}: Nối Video 1 + Video 2 thành Video 16s hoàn chỉnh...")
-            final_video_path = run_dir / "final_tryon_video_16s.mp4"
-            concatenate_two_videos(video_1_path, video_2_path, final_video_path, log=self._bridge_log)
+
+        if is_single:
+            final_video_path = video_1_path
+            self._log("info", "Chế độ Tạo 1 Video (8s): Bỏ qua cắt Last Frame, Video 2 và nối 16s.")
+        else:
+            # ------------------------------------------------------------------- #
+            # Step 6: Extract Last Frame from Video 1
+            # ------------------------------------------------------------------- #
+            step_2_lbl = "BƯỚC 2/4" if is_direct_first_frame else "BƯỚC 6"
+            self._log("step", f"{step_2_lbl}: Trích xuất chính xác Last Frame từ Video 1...")
+            last_frame_path = run_dir / "last_frame_video_1.png"
+            extract_last_video_frame(video_1_path, last_frame_path, log=self._bridge_log)
+            if remove_watermark and not dry_run and last_frame_path.is_file():
+                remove_image_watermark(last_frame_path, prefer_family="video", log=self._bridge_log)
+
+            # ------------------------------------------------------------------- #
+            # Step 7: Google Flow -> Video 2 (8s) using Last Frame as First Frame
+            # ------------------------------------------------------------------- #
+            step_3_lbl = "BƯỚC 3/4" if is_direct_first_frame else "BƯỚC 7"
+            self._log("step", f"{step_3_lbl}: Tạo Video 2 (8s) từ Last Frame + Video Prompt 2...")
+            video_2_path = run_dir / "video_2.mp4"
+
+            if dry_run:
+                self._log("info", "[DRY-RUN] Giả lập tạo Video 2...")
+                self._generate_dummy_video(video_2_path, duration_s=2)
+            else:
+                try:
+                    self.flow_video.generate_video_flow(
+                        frame_path=last_frame_path,
+                        prompt_text=v_prompt_2,
+                        dest_path=video_2_path,
+                        duration_s=8,
+                        timeout_s=300.0,
+                        project_id=resolved_proj_id,
+                        aspect_ratio=aspect_ratio,
+                        resolution="1080p",
+                    )
+                except Exception as e:
+                    if "PROMINENT_PERSON" in str(e) or "PROMINENT_PEOPLE" in str(e):
+                        raise
+                    self._log(
+                        "warn",
+                        f"generate_video_flow Video 2 gặp sự cố ({e}), đang tự động làm mềm Prompt (lọc từ nhạy cảm chính sách) và thử lại lần 2...",
+                    )
+                    time.sleep(2.0)
+                    self.flow_video.generate_video_flow(
+                        frame_path=last_frame_path,
+                        prompt_text=v_prompt_2,
+                        dest_path=video_2_path,
+                        duration_s=8,
+                        timeout_s=300.0,
+                        project_id=resolved_proj_id,
+                        aspect_ratio=aspect_ratio,
+                        aggressive_sanitize=True,
+                        resolution="1080p",
+                    )
+                if remove_watermark and video_2_path.is_file():
+                    self._log("step", "Đang tự động xóa watermark (✦) trên Video 2...")
+                    remove_video_watermark(video_2_path, log=self._bridge_log)
+
+            # ------------------------------------------------------------------- #
+            # Step 8: Automatic 16s Video Stitching
+            # ------------------------------------------------------------------- #
+            if auto_stitch:
+                step_4_lbl = "BƯỚC 4/4" if is_direct_first_frame else "BƯỚC 8"
+                self._log("step", f"{step_4_lbl}: Nối Video 1 + Video 2 thành Video 16s hoàn chỉnh...")
+                final_video_path = run_dir / "final_tryon_video_16s.mp4"
+                concatenate_two_videos(video_1_path, video_2_path, final_video_path, log=self._bridge_log)
 
         elapsed = round(time.time() - t0, 2)
-        self._log("info", f"=== HOÀN TẤT AUTO TRY-ON ({elapsed}s) ===")
+        self._log("info", f"=== HOÀN TẤT {'VIDEO 8S' if is_single else 'AUTO TRY-ON'} ({elapsed}s) ===")
 
         res = TryOnPipelineResult(
             run_id=run_id,
@@ -470,11 +500,12 @@ class AutoTryOnPipeline:
             video_prompt_1=v_prompt_1,
             video_prompt_2=v_prompt_2,
             video_1_path=str(video_1_path) if video_1_path.exists() else None,
-            last_frame_path=str(last_frame_path) if last_frame_path.exists() else None,
-            video_2_path=str(video_2_path) if video_2_path.exists() else None,
+            last_frame_path=str(last_frame_path) if last_frame_path and last_frame_path.exists() else None,
+            video_2_path=str(video_2_path) if video_2_path and video_2_path.exists() else None,
             final_video_path=str(final_video_path) if final_video_path and final_video_path.exists() else None,
             elapsed_s=elapsed,
             dry_run=dry_run,
+            single_video=is_single,
         )
 
         (run_dir / "manifest.json").write_text(
@@ -524,6 +555,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cdp-url", default=DEFAULT_CDP_URL, help=f"Cổng CDP CloakBrowser (mặc định: {DEFAULT_CDP_URL})")
     ap.add_argument("--dry-run", action="store_true", help="Chạy thử nghiệm (0 credit, test toàn bộ pipeline)")
     ap.add_argument("--no-stitch", action="store_true", help="Không nối video 1 + 2 thành 16s")
+    ap.add_argument("--no-remove-watermark", action="store_true", help="Giữ nguyên watermark ngôi sao (✦) trên ảnh và video")
     ap.add_argument("--image-prompt", help="Chỉ định sẵn prompt tạo ảnh")
     ap.add_argument("--video-prompt-1", help="Chỉ định sẵn video prompt 1")
     ap.add_argument("--video-prompt-2", help="Chỉ định sẵn video prompt 2")
@@ -543,6 +575,7 @@ def main(argv: list[str] | None = None) -> int:
         project_id=args.project_id,
         dry_run=args.dry_run,
         auto_stitch=not args.no_stitch,
+        remove_watermark=not args.no_remove_watermark,
         override_image_prompt=args.image_prompt,
         override_video_prompt_1=args.video_prompt_1,
         override_video_prompt_2=args.video_prompt_2,

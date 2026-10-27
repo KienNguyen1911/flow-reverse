@@ -84,17 +84,20 @@ DEFAULT_CROP_169 = [0.0, None, 1.0, 1]
 
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 _MEDIA_ID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?:_upsampled|_4k)?$")
-_TOKEN_RE = re.compile(r"^0cAFcWeA[A-Za-z0-9_\-]{400,}$")
+_TOKEN_RE = re.compile(r"^0[0-9A-Za-z][A-Za-z0-9_\-]{400,}$")
 
 # In-page fetch hook for Video Bridge Mode:
 # - Blocks app's own eb1hJf (and ogiZ0b) when window.__blockVideoGen == true (0 credit on decoy).
 # - Passively captures maseQ upload responses so starting_frame_media_id is read from JSON.
 VIDEO_HOOK_JS = r"""
 (() => {
-  const isVideoSubmit = u => {
+  window.__isVideoSubmit = u => {
     const s = String(u || '');
     return s.indexOf('/data/batchexecute?') >= 0 &&
-           (s.indexOf('rpcids=eb1hJf') >= 0 || s.indexOf('rpcids=ogiZ0b') >= 0);
+           (s.indexOf('rpcids=eb1hJf') >= 0 ||
+            s.indexOf('rpcids=YhhmEf') >= 0 ||
+            s.indexOf('rpcids=ogiZ0b') >= 0 ||
+            s.indexOf('rpcids=p0UkFb') >= 0);
   };
   const isMaseQ = u => {
     const s = String(u || '');
@@ -105,9 +108,10 @@ VIDEO_HOOK_JS = r"""
     catch (e) { return false; }
   };
 
-  if (!window.__videoHook) {
-    window.__videoHook = {v: 1, cap: null, blocked: false, lastUpload: null};
-    const prevFetch = window.fetch;
+  if (!window.__videoHook || (window.__videoHook.v || 0) < 2) {
+    window.__videoHook = {v: 2, cap: null, blocked: false, lastUpload: null};
+    const prevFetch = window.__origFetchForVideo || window.fetch;
+    window.__origFetchForVideo = prevFetch;
     window.fetch = function(input, init) {
       let url = '';
       try { url = typeof input === 'string' ? input : (input && input.url) || ''; } catch (e) {}
@@ -125,7 +129,8 @@ VIDEO_HOOK_JS = r"""
         });
       }
 
-      if (isVideoSubmit(url) && window.__blockVideoGen && !ours) {
+      const checkSub = window.__isVideoSubmit || (() => false);
+      if (checkSub(url) && window.__blockVideoGen && !ours) {
         if (typeof input !== 'string' && input && typeof input.text === 'function') {
           const cap = {url: String(url), body: '', bodyReady: false, ts: Date.now(), via: 'fetch-request'};
           window.__videoHook.cap = cap;
@@ -192,7 +197,7 @@ def parse_video_app_capture(body: str) -> tuple[str, str, list, str]:
     # 1. Canonical eb1hJf position: args[1][10][0]
     try:
         cand = inner_args[1][10][0]
-        if isinstance(cand, str) and cand.startswith("0cAFcWeA"):
+        if isinstance(cand, str) and len(cand) >= 400:
             token = cand
     except Exception:
         pass
@@ -201,7 +206,7 @@ def parse_video_app_capture(body: str) -> tuple[str, str, list, str]:
     if not token:
         try:
             cand2 = inner_args[1][0][7][10][0]
-            if isinstance(cand2, str) and cand2.startswith("0cAFcWeA"):
+            if isinstance(cand2, str) and len(cand2) >= 400:
                 token = cand2
         except Exception:
             pass
@@ -225,8 +230,11 @@ def parse_video_app_capture(body: str) -> tuple[str, str, list, str]:
 
         token = _find_tok(inner_args)
 
-    if not (isinstance(token, str) and len(token) > 500 and token.startswith("0cAFcWeA")):
-        raise TokenParseError(f"reCAPTCHA token sanity failed in {rpcid} capture (len={len(token or '')})")
+    if not (isinstance(token, str) and len(token) >= 400):
+        ref_len = len(inner_args[1]) if (isinstance(inner_args, list) and len(inner_args) > 1 and isinstance(inner_args[1], list)) else -1
+        raise TokenParseError(
+            f"reCAPTCHA token sanity failed in {rpcid} capture (len={len(token or '')}, ref_len={ref_len})"
+        )
 
     return token, at_param, inner_args, rpcid
 
@@ -567,28 +575,10 @@ def condition_frame_for_policy_retry(
     frame_path: Path | str,
     output_path: Optional[Path | str] = None,
     log: Optional[LogFn] = None,
+    level: int = 1,
 ) -> Path:
-    """Create a subtly conditioned starting frame to avoid false-positive PROMINENT_PEOPLE_FILTER blocks.
-
-    Applies an imperceptible 2% center inset crop + slight warmth/contrast micro-shift so that
-    Google Flow's face-embedding similarity score drops below the false-positive celebrity threshold
-    while preserving the outfit and model appearance.
-    """
-    src = Path(frame_path).resolve()
-    dst = Path(output_path).resolve() if output_path else src.parent / f"{src.stem}_conditioned.png"
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    _log = log or (lambda kind, msg: None)
-
-    vf = "crop=iw*0.97:ih*0.97:iw*0.015:ih*0.015,scale=iw:ih,eq=brightness=0.012:contrast=0.985:saturation=0.98"
-    cmd = ["ffmpeg", "-y", "-i", str(src), "-vf", vf, "-frames:v", "1", str(dst)]
-    try:
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20)
-        if res.returncode == 0 and dst.is_file() and dst.stat().st_size > 100:
-            _log("info", f"Đã vi chỉnh starting frame chống false-positive filter: {dst.name}")
-            return dst
-    except Exception as e:
-        _log("warn", f"condition_frame_for_policy_retry FFmpeg lỗi ({e}), giữ nguyên ảnh gốc.")
-    return src
+    """Return the original starting frame untouched to preserve 100% character and facial consistency."""
+    return Path(frame_path).resolve()
 
 
 def extract_last_video_frame(
@@ -674,15 +664,51 @@ def extract_last_video_frame(
     raise RuntimeError(f"Không thể trích xuất khung hình cuối từ {v_path}")
 
 
+def strip_video_audio(
+    video_path: Path | str,
+    log: Optional[LogFn] = None,
+) -> Path:
+    """Strip audio tracks from an MP4 file in-place using lossless stream copy (`-c:v copy -an`)."""
+    vp = Path(video_path).resolve()
+    if not vp.is_file():
+        return vp
+    _log = log or (lambda kind, msg: None)
+    tmp_out = vp.parent / f"._noaudio_{int(time.time() * 1000)}_{vp.name}"
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(vp),
+        "-c:v",
+        "copy",
+        "-an",
+        "-movflags",
+        "+faststart",
+        str(tmp_out),
+    ]
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        if res.returncode == 0 and tmp_out.is_file() and tmp_out.stat().st_size > 200:
+            tmp_out.replace(vp)
+            _log("info", f"Đã loại bỏ luồng âm thanh trên {vp.name} (stream copy -c:v copy -an).")
+    except Exception as e:
+        _log("warn", f"strip_video_audio ({vp.name}) gặp lỗi nhẹ: {e}")
+    finally:
+        if tmp_out.exists():
+            tmp_out.unlink(missing_ok=True)
+    return vp
+
+
 def concatenate_two_videos(
     video1_path: Path | str,
     video2_path: Path | str,
     output_path: Path | str,
     log: Optional[LogFn] = None,
 ) -> Path:
-    """Concatenate video 1 (8s) and video 2 (8s) into a unified 16s video using FFmpeg.
+    """Concatenate video 1 (8s) and video 2 (8s) into a unified 16s silent video using FFmpeg.
 
-    Handles video streams with or without audio tracks seamlessly.
+    Uses lossless stream copy (`-c:v copy -an`) first so no re-rendering occurs;
+    falls back to normalized H.264 encoding only if stream parameters differ.
     """
     v1 = Path(video1_path).resolve()
     v2 = Path(video2_path).resolve()
@@ -690,19 +716,13 @@ def concatenate_two_videos(
     out.parent.mkdir(parents=True, exist_ok=True)
 
     _log = log or (lambda kind, msg: None)
-    _log("step", f"Nối {v1.name} + {v2.name} thành {out.name}...")
+    _log("step", f"Nối trực tiếp {v1.name} + {v2.name} thành {out.name} (stream copy, không âm thanh)...")
 
-    has_audio = False
-    try:
-        probe = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(v1)],
-            capture_output=True, text=True, timeout=10
-        )
-        has_audio = bool(probe.stdout.strip())
-    except Exception:
-        has_audio = False
+    # Ensure both input videos have no audio tracks
+    strip_video_audio(v1, log=_log)
+    strip_video_audio(v2, log=_log)
 
-    # Method 1: Concat demuxer
+    # Method 1: Concat demuxer with direct stream copy (-c:v copy -an, 0 re-encoding)
     list_file = out.parent / f"_concat_{int(time.time() * 1000)}.txt"
     try:
         v1_esc = v1.as_posix().replace("'", "'\\''")
@@ -721,19 +741,16 @@ def concatenate_two_videos(
             "-i",
             str(list_file),
             "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
+            "copy",
+            "-an",
+            "-movflags",
+            "+faststart",
+            str(out),
         ]
-        if has_audio:
-            cmd.extend(["-c:a", "aac"])
-        else:
-            cmd.append("-an")
-        cmd.append(str(out))
 
         res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
         if res.returncode == 0 and out.is_file() and out.stat().st_size > 200:
-            _log("info", f"Nối video thành công: {out.name} ({out.stat().st_size} bytes)")
+            _log("info", f"Nối video trực tiếp (-c:v copy -an) thành công: {out.name} ({out.stat().st_size} bytes)")
             return out
     finally:
         if list_file.exists():
@@ -742,7 +759,7 @@ def concatenate_two_videos(
             except Exception:
                 pass
 
-    # Method 2: filter_complex with resolution & SAR normalization
+    # Method 2: filter_complex fallback (if stream resolutions/codecs differ) with audio stripped (-an)
     w, h = 1280, 720
     try:
         probe_res = subprocess.run(
@@ -769,13 +786,20 @@ def concatenate_two_videos(
         "[v]",
         "-c:v",
         "libx264",
+        "-crf",
+        "17",
+        "-preset",
+        "fast",
         "-pix_fmt",
         "yuv420p",
+        "-an",
+        "-movflags",
+        "+faststart",
         str(out),
     ]
     res2 = subprocess.run(cmd_filter, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
     if res2.returncode == 0 and out.is_file() and out.stat().st_size > 200:
-        _log("info", f"Nối video (filter_complex) thành công: {out.name}")
+        _log("info", f"Nối video (filter_complex fallback, -an) thành công: {out.name}")
         return out
 
     raise RuntimeError(f"Lỗi nối video: {res2.stderr.decode('utf-8', 'ignore')[:300]}")
@@ -817,14 +841,26 @@ def sanitize_video_prompt(prompt_text: str, aggressive: bool = False) -> str:
     clean = re.sub(r"\s{2,}", " ", clean).strip()
 
     if aggressive:
+        aggressive_replacements = [
+            (r"\bglances\s+over\s+(her|his|their)\s+shoulder,?\s*", "rotates smoothly, "),
+            (r"\bfacing\s+the\s+camera\b", "in a balanced front silhouette"),
+            (r"\blook(s|ing)?\s+(directly\s+|straight\s+)?at\s+the\s+camera\b", "maintaining natural posture"),
+            (r"\b(the\s+)?(woman|girl|lady)\b", "the fashion subject"),
+            (r"\b(the\s+)?model('s)?\b", lambda m: "the subject's" if m.group(2) else "the subject"),
+            (r"\bshe\b", "the subject"),
+            (r"\bher\b", "their"),
+        ]
+        for pattern, repl in aggressive_replacements:
+            clean = re.sub(pattern, repl, clean, flags=re.IGNORECASE)
+        clean = re.sub(r"\s{2,}", " ", clean).strip()
         if not clean:
             clean = (
                 "A smooth, realistic 8-second fashion lookbook video. "
-                "The model moves gracefully with natural posture, gentle fabric flow, "
+                "The subject moves gracefully with natural posture, gentle fabric flow, "
                 "soft studio lighting, subtle handheld camera movement, 24fps."
             )
         else:
-            clean += " Smooth natural movement, realistic fabric drape, soft lighting, 8 seconds."
+            clean += " Focus on garment silhouette, realistic fabric drape, soft studio lighting, 8 seconds."
 
     return clean
 
@@ -1105,9 +1141,23 @@ class FlowVideoBridge:
         # 3. Borrow a 0-credit reCAPTCHA token via decoy click_generate and fire p0UkFb
         try:
             self._log("step", f"Nâng cấp video {vid_norm[:8]}... lên 1080p qua RPC {VIDEO_UPSAMPLE_RPC} (veo_3_1_upsampler_1080p)...")
+            # Reload cleanly if the page composer state was dirtied by the earlier blocked eb1hJf
+            if bridge._eval("Boolean(window.__videoHook && window.__videoHook.blocked)"):
+                bridge.reload(settle_s=4.0)
+            self._ensure_recaptcha_ready(bridge, project_id)
             self.install_video_hook(bridge)
             bridge._eval("window.__videoHook.cap = null; window.__blockVideoGen = true;")
-            if not bridge.prompt_value().strip():
+            cur_prompt = (
+                bridge.prompt_value()
+                if hasattr(bridge, "prompt_value")
+                else str(
+                    bridge._eval(
+                        "(() => { try { const ed = document.querySelector('div.ProseMirror'); return ed ? String(ed.innerText || '').trim() : ''; } catch (e) { return ''; } })()"
+                    )
+                    or ""
+                )
+            )
+            if not cur_prompt.strip():
                 bridge.type_prompt("A fashion model smiling naturally, 8 seconds.")
                 time.sleep(0.3)
             bridge.click_generate(timeout_s=12.0)
@@ -1289,6 +1339,47 @@ class FlowVideoBridge:
                     break
                 page.wait_for_timeout(1000)
 
+    def _ensure_recaptcha_ready(self, bridge: FlowBridge, active_pid: str, timeout_s: float = 12.0) -> None:
+        """Ensure Flow's reCAPTCHA Enterprise service (`_.NK` / `xZbWve` / `grecaptcha.enterprise.execute`) is ready
+        and that the page is not left in a dirty post-blocked state before capturing `eb1hJf`.
+        """
+        check_js = """(() => {
+            const w = window;
+            const siteKey = (w.WIZ_global_data && w.WIZ_global_data.xZbWve) ? String(w.WIZ_global_data.xZbWve) : '';
+            const hasExec = !!(w.grecaptcha && w.grecaptcha.enterprise && typeof w.grecaptcha.enterprise.execute === 'function');
+            const dirtyHook = !!(w.__videoHook && w.__videoHook.blocked);
+            const hasComposer = !!document.querySelector('div.ProseMirror');
+            return {siteKey: siteKey, hasExec: hasExec, dirtyHook: dirtyHook, hasComposer: hasComposer};
+        })()"""
+
+        st = bridge.eval_json(check_js) or {}
+        if st.get("dirtyHook") or not st.get("siteKey"):
+            self._log("info", "Làm mới trang dự án Flow để khởi tạo sạch phiên reCAPTCHA Enterprise...")
+            if active_pid and f"/project/{active_pid}" not in (bridge.page.url or ""):
+                try:
+                    bridge.page.goto(
+                        f"https://flow.google.com/project/{active_pid}",
+                        wait_until="domcontentloaded",
+                        timeout=bridge.page_timeout_ms,
+                    )
+                    time.sleep(4.5)
+                except Exception:
+                    bridge.reload(settle_s=4.5)
+            else:
+                bridge.reload(settle_s=4.5)
+
+        t0 = time.time()
+        reloaded = False
+        while time.time() - t0 < timeout_s:
+            st = bridge.eval_json(check_js) or {}
+            if st.get("siteKey") and st.get("hasExec") and st.get("hasComposer") and not st.get("dirtyHook"):
+                return
+            if not reloaded and (time.time() - t0 > 5.0):
+                reloaded = True
+                self._log("info", "reCAPTCHA Enterprise chưa sẵn sàng sau 5s, đang reload lại trang dự án...")
+                bridge.reload(settle_s=4.5)
+            time.sleep(0.5)
+
     def _cleanup_failed_tiles_in_dom(self, page: Any) -> None:
         """Remove any stale 'Không thành công' error tiles from the project grid."""
         try:
@@ -1368,13 +1459,9 @@ class FlowVideoBridge:
             page.wait_for_timeout(300)
             self._cleanup_failed_tiles_in_dom(page)
 
-            # Pre-condition starting frame lightly on attempt 0 to prevent false-positive PROMINENT_PERSON blocks up front
+            # Use the exact original starting frame untouched to preserve 100% character consistency
             max_protocol_attempts = 2
-            current_frame_p = condition_frame_for_policy_retry(
-                frame_p,
-                dest_p.parent / f"_{frame_p.stem}_conditioned.png",
-                log=self._log,
-            )
+            current_frame_p = frame_p
 
             for attempt in range(max_protocol_attempts):
                 is_retry = attempt > 0
@@ -1388,7 +1475,8 @@ class FlowVideoBridge:
                 )
                 self._log("info", f"Prompt ({len(clean_prompt)} ký tự): '{clean_prompt[:85]}...'")
 
-                # 1. Install VIDEO_HOOK_JS and ensure Video + Khung hình mode
+                # 1. Ensure reCAPTCHA Enterprise & clean page state, install VIDEO_HOOK_JS and ensure Video + Khung hình mode
+                self._ensure_recaptcha_ready(br, active_pid)
                 self.install_video_hook(br)
                 self._ensure_ui_video_frames_mode(page, target_aspect)
 
@@ -1410,11 +1498,24 @@ class FlowVideoBridge:
                 time.sleep(jitter(0.4, 0.1, 0.2))
                 br.click_generate(timeout_s=15.0)
 
-                cap = self.wait_video_capture(br, timeout_s=25.0)
-                self.disarm_video_hook(br)
+                try:
+                    cap = self.wait_video_capture(br, timeout_s=25.0)
+                    self.disarm_video_hook(br)
+                    app_reqid = extract_app_reqid(cap["url"])
+                    token, at_param, app_args, cap_rpcid = parse_video_app_capture(cap["body"])
+                except (TokenParseError, CaptureTimeoutError) as cap_err:
+                    self.disarm_video_hook(br)
+                    if attempt + 1 < max_protocol_attempts:
+                        self._log(
+                            "warn",
+                            f"Phiên reCAPTCHA trên trang chưa sẵn sàng ({cap_err}). "
+                            f"Đang tự động reload trang dự án và thử lại lần {attempt + 2}...",
+                        )
+                        br.reload(settle_s=5.0)
+                        continue
+                    br.reload(settle_s=4.0)
+                    raise
 
-                app_reqid = extract_app_reqid(cap["url"])
-                token, at_param, app_args, cap_rpcid = parse_video_app_capture(cap["body"])
                 cap_sf_id, cap_crop_box = extract_starting_frame_from_eb1hjf_args(app_args)
 
                 starting_frame_media_id = cap_sf_id or uploaded_media_id
@@ -1484,20 +1585,23 @@ class FlowVideoBridge:
                     cats = ", ".join(poll_res.get("error_categories") or [])
                     self._cleanup_failed_tiles_in_dom(page)
 
+                    if "PROMINENT_PERSON" in cats or "PROMINENT_PEOPLE" in err_code:
+                        br.reload(settle_s=4.0)
+                        raise BridgeError(
+                            f"Ảnh bắt đầu bị bộ lọc người nổi tiếng của Google Flow từ chối ({err_code} [{cats}]). "
+                            "Hệ thống đã dừng ngay (không tự ý chỉnh sửa khuôn mặt để giữ đồng nhất nhân vật) — bạn vui lòng tự chỉnh hoặc đổi ảnh bắt đầu nhé."
+                        )
+
                     if attempt + 1 < max_protocol_attempts:
                         self._log(
                             "warn",
                             f"Video bị từ chối bởi bộ lọc ({err_code} / {cats}). "
-                            f"Đang tự động vi chỉnh starting frame + làm sạch sâu prompt và thử lại lần {attempt + 2}...",
-                        )
-                        current_frame_p = condition_frame_for_policy_retry(
-                            frame_p,
-                            dest_p.parent / f"_{frame_p.stem}_retry_conditioned.png",
-                            log=self._log,
+                            f"Đang tự động làm sạch prompt và thử lại lần {attempt + 2}...",
                         )
                         br.reload(settle_s=4.0)
                         continue
 
+                    br.reload(settle_s=4.0)
                     raise BridgeError(
                         f"Flow từ chối tạo video qua giao thức jwpduf ({err_code} [{cats}]). "
                         "Hãy thử đổi ảnh mẫu / khung hình đầu khác hoặc chỉnh lại prompt."
@@ -1520,6 +1624,7 @@ class FlowVideoBridge:
                         br, video_media_id=video_media_id, project_id=active_pid
                     )
                 downloaded = self.download_video_verified(br, signed_url, dest_p)
+                strip_video_audio(downloaded, log=self._log)
                 br.reload(settle_s=4.0)
                 return downloaded
 

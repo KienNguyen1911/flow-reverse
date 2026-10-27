@@ -58,6 +58,7 @@ class GenerateBody(BaseModel):
     aspect: int = 3
     seed: Optional[int] = None
     dry_run: bool = False
+    remove_watermark: bool = True
     confirm: bool = False
 
 
@@ -87,6 +88,7 @@ class BatchBody(BaseModel):
     storyboard_path: Optional[str] = None
     aspect: int = 3
     dry_run: bool = False
+    remove_watermark: bool = True
     confirm: bool = False
     dest_dir: Optional[str] = None
 
@@ -126,6 +128,8 @@ class AutoTryOnBody(BaseModel):
     video_prompt_1: Optional[str] = None
     video_prompt_2: Optional[str] = None
     aspect_ratio: str = "9:16"
+    remove_watermark: bool = True
+    single_video: bool = False
     confirm: bool = False
 
 
@@ -371,6 +375,7 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
         job = manager.submit(kind, {
             "project_id": pid, "prompt": body.prompt.strip(),
             "aspect": body.aspect, "seed": body.seed,
+            "remove_watermark": body.remove_watermark,
         })
         return {"job_id": job.id}
 
@@ -404,6 +409,7 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
             "storyboard_path": body.storyboard_path,
             "aspect": body.aspect,
             "dry_run": body.dry_run,
+            "remove_watermark": body.remove_watermark,
             "dest_dir": body.dest_dir,
         })
         return {"job_id": job.id}
