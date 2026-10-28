@@ -206,6 +206,11 @@ class AutoTryOnPipeline:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             run_id = f"tryon_{ts}"
             run_dir = self.out_root / run_id
+            n = 2
+            while run_dir.exists():
+                run_id = f"tryon_{ts}_{n}"
+                run_dir = self.out_root / run_id
+                n += 1
             run_dir.mkdir(parents=True, exist_ok=True)
 
         # ------------------------------------------------------------------- #
@@ -213,7 +218,9 @@ class AutoTryOnPipeline:
         # ------------------------------------------------------------------- #
         if not first_frame_path and prev_manifest.get("first_frame_path"):
             first_frame_path = prev_manifest["first_frame_path"]
-        is_direct_first_frame = bool(first_frame_path or (run_dir / "first_frame.png").is_file())
+        is_direct_first_frame = bool(
+            first_frame_path or (resume_run_id and (run_dir / "first_frame.png").is_file())
+        )
         is_single = bool(single_video or (is_direct_first_frame and not (override_video_prompt_2 or prev_manifest.get("video_prompt_2") or "").strip()))
 
         if is_single:
@@ -265,13 +272,13 @@ class AutoTryOnPipeline:
                 model_image_path=str(model_p),
                 garment_image_path=str(garment_p) if garment_p else "",
                 image_prompt=image_prompt,
-                first_frame_path=str(ff_file) if ff_file.is_file() else "",
+                first_frame_path=str(ff_file) if ff_file.is_file() else None,
                 video_prompt_1=v_prompt_1,
                 video_prompt_2=v_prompt_2,
-                video_1_path=str(v1_file) if (v1_file.is_file() and v1_file.stat().st_size > 1000) else "",
-                last_frame_path=str(lf_file) if (lf_file.is_file() and lf_file.stat().st_size > 500) else "",
-                video_2_path=str(v2_file) if (v2_file.is_file() and v2_file.stat().st_size > 1000) else "",
-                final_video_path=str(fv_file) if (fv_file.is_file() and fv_file.stat().st_size > 1000 and status_val == "succeeded") else "",
+                video_1_path=str(v1_file) if (v1_file.is_file() and v1_file.stat().st_size > 1000) else None,
+                last_frame_path=str(lf_file) if (lf_file.is_file() and lf_file.stat().st_size > 500) else None,
+                video_2_path=str(v2_file) if (v2_file.is_file() and v2_file.stat().st_size > 1000) else None,
+                final_video_path=str(fv_file) if (fv_file.is_file() and fv_file.stat().st_size > 1000 and status_val == "succeeded") else None,
                 elapsed_s=round(time.time() - t0, 2),
                 dry_run=dry_run,
                 single_video=is_single,

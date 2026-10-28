@@ -1025,7 +1025,11 @@ def test_sanitize_video_prompt_and_condition_frame(tmp_path):
     assert "micro-pores" not in clean_normal
 
     clean_aggr = sanitize_video_prompt(raw_prompt, aggressive=True)
-    assert "Smooth natural movement" in clean_aggr
+    # Aggressive mode strips person nouns entirely and appends the garment-focus clause.
+    assert "woman" not in clean_aggr.lower()
+    assert "model" not in clean_aggr.lower()
+    assert "Korean" not in clean_aggr
+    assert "Focus on garment silhouette" in clean_aggr
 
     # Test frame conditioning with a synthetic image extracted from synthetic video
     video = tmp_path / "src_vid.mp4"
