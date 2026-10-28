@@ -8,7 +8,7 @@
       "id": "flow_main",
       "profile_id": "flow_main",
       "cdp_port": 4022,
-      "enabled": false
+      "enabled": true
     },
     {
       "id": "kiennd-study",
