@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import {
   ArrowsCounterClockwise,
   CheckCircle,
@@ -21,7 +21,7 @@ import {
 import { api } from "../api";
 import type { Job, NodeMediaOptions, Project } from "../types";
 import { CanvasDrawer, type CanvasDrawerNode } from "./CanvasDrawer";
-import { Chip, Panel, Spinner } from "./ui";
+import { Chip, Spinner } from "./ui";
 
 // --------------------------------------------------------------------------- //
 // Canvas node graph — image nodes feed video nodes (image-to-video chains).
@@ -218,12 +218,157 @@ function statusStyle(s: NodeStatus): { border: string; label: string; cls: strin
   }
 }
 
-interface Props {
-  projects?: Project[];
-  selectedProjectId?: string | null;
+function createTryOnTemplate(): CanvasNode[] {
+  return [
+    {
+      id: "tryon_ref_model",
+      type: "ref",
+      label: "Ảnh Người Mẫu (Nabi)",
+      x: 60,
+      y: 90,
+      prompt: "",
+      aspectRatio: "9:16",
+      seed: null,
+      sourceImageId: null,
+      sourceImageIds: [],
+      videoRatio: "9:16",
+      resolution: "1080p",
+      imageAspectRatio: "9:16",
+      autoImagePrompt: "",
+      removeWatermark: true,
+      jobId: null,
+      status: "idle",
+      fileUrl: "/api/assets/nabi_model.png",
+      fileName: "nabi_model.png",
+    },
+    {
+      id: "tryon_ref_garment",
+      type: "ref",
+      label: "Ảnh Trang Phục",
+      x: 60,
+      y: 430,
+      prompt: "",
+      aspectRatio: "9:16",
+      seed: null,
+      sourceImageId: null,
+      sourceImageIds: [],
+      videoRatio: "9:16",
+      resolution: "1080p",
+      imageAspectRatio: "9:16",
+      autoImagePrompt: "",
+      removeWatermark: true,
+      jobId: null,
+      status: "idle",
+      fileUrl: "/api/assets/sample_garment.png",
+      fileName: "sample_garment.png",
+    },
+    {
+      id: "tryon_node_image",
+      type: "image",
+      label: "Node Ảnh (First Frame)",
+      x: 420,
+      y: 220,
+      prompt: "@nabi wearing this outfit, elegant studio fashion portrait, full body shot, high resolution, 8k, photorealistic",
+      aspectRatio: "9:16",
+      seed: null,
+      sourceImageId: "tryon_ref_model",
+      sourceImageIds: ["tryon_ref_model", "tryon_ref_garment"],
+      videoRatio: "9:16",
+      resolution: "1080p",
+      imageAspectRatio: "9:16",
+      autoImagePrompt: "",
+      removeWatermark: true,
+      jobId: null,
+      status: "idle",
+    },
+    {
+      id: "tryon_node_video_1",
+      type: "video",
+      label: "Node Video 1 (8s)",
+      x: 780,
+      y: 220,
+      prompt: "Nabi stands elegantly, smooth camera slow zoom in, gentle movement showing garment drape, natural studio lighting, 8 seconds",
+      aspectRatio: "9:16",
+      seed: null,
+      sourceImageId: "tryon_node_image",
+      sourceImageIds: ["tryon_node_image"],
+      videoRatio: "9:16",
+      resolution: "1080p",
+      imageAspectRatio: "9:16",
+      autoImagePrompt: "",
+      removeWatermark: true,
+      jobId: null,
+      status: "idle",
+    },
+    {
+      id: "tryon_node_last_frame",
+      type: "last_frame",
+      label: "Frame Cuối (Video 1)",
+      x: 1140,
+      y: 220,
+      prompt: "",
+      aspectRatio: "9:16",
+      seed: null,
+      sourceImageId: "tryon_node_video_1",
+      sourceImageIds: ["tryon_node_video_1"],
+      videoRatio: "9:16",
+      resolution: "1080p",
+      imageAspectRatio: "9:16",
+      autoImagePrompt: "",
+      removeWatermark: true,
+      jobId: null,
+      status: "idle",
+    },
+    {
+      id: "tryon_node_video_2",
+      type: "video",
+      label: "Node Video 2 (8s Nối tiếp)",
+      x: 1500,
+      y: 220,
+      prompt: "Nabi turns slightly to showcase side profile and back of the outfit, natural fashion pose, seamless motion continuation, 8 seconds",
+      aspectRatio: "9:16",
+      seed: null,
+      sourceImageId: "tryon_node_last_frame",
+      sourceImageIds: ["tryon_node_last_frame"],
+      videoRatio: "9:16",
+      resolution: "1080p",
+      imageAspectRatio: "9:16",
+      autoImagePrompt: "",
+      removeWatermark: true,
+      jobId: null,
+      status: "idle",
+    },
+  ];
 }
 
-export function CanvasPanel(_props: Props = {}) {
+export interface CanvasStats {
+  imageCount: number;
+  videoCount: number;
+  lastFrameCount: number;
+  nRunning: number;
+  nDone: number;
+  nPending: number;
+  wfBusy: boolean;
+  linking: boolean;
+}
+
+export interface CanvasPanelHandle {
+  addNode: (type: NodeType) => void;
+  loadTemplate: (name: "tryon") => void;
+  runWorkflow: (dry: boolean) => Promise<void>;
+  openConfirmWorkflow: () => void;
+}
+
+export interface CanvasPanelProps {
+  projects?: Project[];
+  selectedProjectId?: string | null;
+  onStatsChange?: (stats: CanvasStats) => void;
+}
+
+export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(function CanvasPanel(
+  props,
+  ref,
+) {
   const [graph, setGraph] = useState<Graph>(loadGraph);
   const [view, setView] = useState<View>({ x: 40, y: 20, z: 1 });
   const [opts, setOpts] = useState<NodeMediaOptions | null>(null);
@@ -236,6 +381,12 @@ export function CanvasPanel(_props: Props = {}) {
   const [confirmTarget, setConfirmTarget] = useState<
     { mode: "workflow" } | { mode: "node"; nodeId: string } | null
   >(null);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    canvasX: number;
+    canvasY: number;
+  } | null>(null);
 
   const viewportRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef(view);
@@ -322,6 +473,7 @@ export function CanvasPanel(_props: Props = {}) {
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      setContextMenu(null);
       const rect = el.getBoundingClientRect();
       const mx = e.clientX - rect.left;
       const my = e.clientY - rect.top;
@@ -335,17 +487,32 @@ export function CanvasPanel(_props: Props = {}) {
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
-  // -- escape cancels linking or closes drawer -------------------------------- //
+  // -- escape cancels linking, context menu, or closes drawer ----------------- //
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        if (linking) setLinking(null);
+        if (contextMenu) setContextMenu(null);
+        else if (linking) setLinking(null);
         else if (drawerNodeId) setDrawerNodeId(null);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [linking, drawerNodeId]);
+  }, [linking, drawerNodeId, contextMenu]);
+
+  // -- close context menu on click outside ------------------------------------ //
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!contextMenu) return;
+    const handlePointerDown = (e: PointerEvent) => {
+      if (menuRef.current && menuRef.current.contains(e.target as Node)) {
+        return;
+      }
+      setContextMenu(null);
+    };
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, [contextMenu]);
 
   // -- poll jobs for nodes with an active job --------------------------------- //
   const activeJobKey = nodes
@@ -555,12 +722,29 @@ export function CanvasPanel(_props: Props = {}) {
   );
 
   // -- node / edge actions ----------------------------------------------------- //
-  const addNode = (type: NodeType) => {
-    const n = nodes.length;
+  const addNodeAt = (type: NodeType, cx: number, cy: number) => {
+    const node = newNode(type, opts, cx, cy);
     setGraph((g) => ({
       ...g,
-      nodes: [...g.nodes, newNode(type, opts, 40 + (n % 4) * 310, 30 + Math.floor(n / 4) * 60 + n * 24)],
+      nodes: [...g.nodes, node],
     }));
+    setContextMenu(null);
+    const label =
+      type === "ref"
+        ? "Ảnh tham chiếu"
+        : type === "image"
+          ? "Node Ảnh"
+          : type === "video"
+            ? "Node Video"
+            : "Frame Cuối";
+    showToast(`Đã thêm ${label}`, "ok");
+  };
+
+  const addNode = (type: NodeType) => {
+    const v = viewRef.current;
+    const cx = Math.round((-v.x + window.innerWidth / 2 - 140) / v.z);
+    const cy = Math.round((-v.y + window.innerHeight / 2 - 100) / v.z);
+    addNodeAt(type, cx, cy);
   };
 
   const removeNode = (id: string) => {
@@ -704,11 +888,58 @@ export function CanvasPanel(_props: Props = {}) {
 
   const drawerNode = nodes.find((n) => n.id === drawerNodeId) ?? null;
 
+  const loadTemplate = useCallback(
+    (name: "tryon") => {
+      if (name === "tryon") {
+        const tplNodes = createTryOnTemplate();
+        setGraph({ nodes: tplNodes });
+        setView({ x: 20, y: 30, z: 0.82 });
+        showToast("Đã khởi tạo Mẫu Workflow: Video Thử Đồ (6 nodes liên kết)", "ok");
+      }
+    },
+    [showToast],
+  );
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      addNode,
+      loadTemplate,
+      runWorkflow,
+      openConfirmWorkflow: () => setConfirmTarget({ mode: "workflow" }),
+    }),
+    [addNode, loadTemplate, runWorkflow],
+  );
+
+  const onStatsChange = props.onStatsChange;
+  useEffect(() => {
+    onStatsChange?.({
+      imageCount: imageNodes.length,
+      videoCount: videoNodes.length,
+      lastFrameCount: lastFrameNodes.length,
+      nRunning,
+      nDone,
+      nPending,
+      wfBusy,
+      linking: !!linking,
+    });
+  }, [
+    imageNodes.length,
+    videoNodes.length,
+    lastFrameNodes.length,
+    nRunning,
+    nDone,
+    nPending,
+    wfBusy,
+    linking,
+    onStatsChange,
+  ]);
+
   return (
-    <div className="flex flex-col min-h-[calc(100vh-150px)]">
+    <div className="flex flex-col w-full h-full relative overflow-hidden">
       {/* Toast Notification with Click-to-Open-Drawer */}
       {toast && (
-        <div className="fixed top-5 right-5 z-50 flex items-center gap-2.5 rounded-ctl border border-line2 bg-panel px-4 py-3 shadow-2xl backdrop-blur-md text-[12.5px] animate-in fade-in slide-in-from-top-2">
+        <div className="fixed top-16 right-5 z-40 flex items-center gap-2.5 rounded-ctl border border-line2 bg-panel px-4 py-3 shadow-2xl backdrop-blur-md text-[12.5px] animate-in fade-in slide-in-from-top-2">
           <span
             className={`size-2 rounded-full shrink-0 ${
               toast.type === "ok" ? "bg-ok" : toast.type === "err" ? "bg-err" : "bg-acc"
@@ -735,93 +966,41 @@ export function CanvasPanel(_props: Props = {}) {
         </div>
       )}
 
-      {/* Toolbar */}
-      <Panel className="p-2.5 sm:px-4 sm:py-3 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <button
-            onClick={() => addNode("ref")}
-            className="inline-flex items-center gap-1.5 px-3 h-8 rounded-ctl border border-line2 bg-panel2 text-[12px] font-semibold text-dim hover:text-fg hover:border-acc/50 transition-colors cursor-pointer"
-            title="Thêm node ảnh tham chiếu (upload ảnh, nối vào node ảnh/video)"
-          >
-            <Plus size={14} weight="bold" />
-            <UploadSimple size={14} />
-            <span>Ảnh tham chiếu</span>
-          </button>
-          <button
-            onClick={() => addNode("image")}
-            className="inline-flex items-center gap-1.5 px-3 h-8 rounded-ctl border border-line2 bg-panel2 text-[12px] font-semibold text-dim hover:text-fg hover:border-acc/50 transition-colors cursor-pointer"
-            title="Thêm node tạo ảnh (~1 credit/lần chạy thật)"
-          >
-            <Plus size={14} weight="bold" />
-            <ImageIcon size={14} />
-            <span>Node Ảnh</span>
-          </button>
-          <button
-            onClick={() => addNode("video")}
-            className="inline-flex items-center gap-1.5 px-3 h-8 rounded-ctl border border-line2 bg-panel2 text-[12px] font-semibold text-dim hover:text-fg hover:border-acc/50 transition-colors cursor-pointer"
-            title="Thêm node tạo video (image-to-video 8s)"
-          >
-            <Plus size={14} weight="bold" />
-            <VideoCamera size={14} />
-            <span>Node Video</span>
-          </button>
-          <button
-            onClick={() => addNode("last_frame")}
-            className="inline-flex items-center gap-1.5 px-3 h-8 rounded-ctl border border-line2 bg-panel2 text-[12px] font-semibold text-dim hover:text-fg hover:border-acc/50 transition-colors cursor-pointer"
-            title="Thêm node trích xuất Frame cuối của video (để tạo video nối tiếp giống pipeline thử đồ)"
-          >
-            <Plus size={14} weight="bold" />
-            <FilmSlate size={14} />
-            <span>Frame Cuối</span>
-          </button>
-
-          <span className="mx-1 hidden sm:block w-px h-6 bg-line2" />
-          <span className="text-[11px] text-mut hidden lg:flex items-center gap-1.5">
-            <LinkSimple size={13} className={linking ? "text-acc" : ""} />
-            {linking
-              ? "Đang nối: bấm chấm trên node đối diện (Esc để hủy)"
-              : "Nối: Tham chiếu/Ảnh → Ảnh/Video | Video → Frame Cuối → Video/Ảnh"}
+      {/* Linking Helper Bar */}
+      {linking && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-acc/40 bg-panel/95 backdrop-blur-md text-[12px] text-acc shadow-lg select-none">
+          <LinkSimple size={14} className="animate-pulse" />
+          <span>
+            Đang nối: bấm vào chấm đối diện để liên kết (Nhấn{" "}
+            <kbd className="font-mono bg-panel2 px-1 rounded text-[11px]">Esc</kbd> để hủy)
           </span>
         </div>
-
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-2 text-[11.5px] font-mono text-mut">
-            <Chip tone="neutral">{`${imageNodes.length} ảnh`}</Chip>
-            <Chip tone="neutral">{`${videoNodes.length} video`}</Chip>
-            {lastFrameNodes.length > 0 && <Chip tone="neutral">{`${lastFrameNodes.length} frame`}</Chip>}
-            {nRunning > 0 && <Chip tone="acc" live>{`${nRunning} đang chạy`}</Chip>}
-            {nDone > 0 && <Chip tone="ok">{`${nDone} xong`}</Chip>}
-            {nPending > 0 && <Chip tone="warn">{`${nPending} chờ`}</Chip>}
-          </div>
-
-
-
-          <button
-            onClick={() => void runWorkflow(true)}
-            disabled={wfBusy || nodes.length === 0}
-            className="inline-flex items-center gap-1.5 px-3 h-8 rounded-ctl border border-line2 bg-panel2 text-[12px] font-semibold text-dim hover:text-fg transition-colors cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
-            title="Kiểm tra tham số toàn bộ workflow không tốn credit"
-          >
-            <span>Dry run</span>
-          </button>
-          <button
-            onClick={() => setConfirmTarget({ mode: "workflow" })}
-            disabled={wfBusy || nodes.length === 0}
-            className="inline-flex items-center gap-1.5 px-3.5 h-8 rounded-ctl bg-acc text-accink text-[12px] font-bold hover:bg-acc2 transition-colors cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
-            title="Chạy toàn bộ workflow theo chuỗi phụ thuộc (Topological sequence)"
-          >
-            {wfBusy ? <Spinner size={13} /> : <Play size={13} weight="fill" />}
-            <span>Chạy Workflow</span>
-          </button>
-        </div>
-      </Panel>
+      )}
 
       {/* Canvas Viewport */}
       <div
         ref={viewportRef}
-        className={`relative flex-1 min-h-[520px] rounded-panel border bg-ink overflow-hidden select-none ${
-          canvasDrag ? "border-acc" : "border-line"
+        className={`relative w-full h-full flex-1 bg-ink overflow-hidden select-none ${
+          canvasDrag ? "border-2 border-acc" : ""
         }`}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          const t = e.target as HTMLElement;
+          if (t.closest("button, select, input, textarea, a, video, .canvas-node-card")) return;
+          const rect = viewportRef.current?.getBoundingClientRect();
+          if (!rect) return;
+          const relX = e.clientX - rect.left;
+          const relY = e.clientY - rect.top;
+          const v = viewRef.current;
+          const gx = Math.round((relX - v.x) / v.z);
+          const gy = Math.round((relY - v.y) / v.z);
+          setContextMenu({
+            x: e.clientX,
+            y: e.clientY,
+            canvasX: gx,
+            canvasY: gy,
+          });
+        }}
         onDragOver={(e) => {
           if (!Array.from(e.dataTransfer.types).includes("Files")) return;
           e.preventDefault();
@@ -836,6 +1015,7 @@ export function CanvasPanel(_props: Props = {}) {
           backgroundSize: "26px 26px",
         }}
         onPointerDown={(e) => {
+          if (contextMenu) setContextMenu(null);
           const t = e.target as HTMLElement;
           if (t.closest("button, select, input, textarea, a, video")) return;
           dragRef.current = { kind: "pan", sx: e.clientX, sy: e.clientY, ox: view.x, oy: view.y };
@@ -968,7 +1148,6 @@ export function CanvasPanel(_props: Props = {}) {
                 if (n.type === "last_frame") void runNodeNow(n.id, false);
                 else setConfirmTarget({ mode: "node", nodeId: n.id });
               }}
-              onDry={() => void runNodeNow(n.id, true)}
               onDot={(side) => handleDotClick(n, side)}
               onUpload={(file) => void uploadRef(n.id, file)}
               onOpenDrawer={(id) => setDrawerNodeId(id)}
@@ -980,6 +1159,69 @@ export function CanvasPanel(_props: Props = {}) {
           ))}
         </div>
       </div>
+
+      {/* Floating Context Menu (Right-Click on Canvas) */}
+      {contextMenu && (
+        <div
+          ref={menuRef}
+          className="fixed z-50 min-w-[210px] rounded-ctl border border-line2 bg-panel/95 backdrop-blur-md p-1.5 shadow-2xl animate-in fade-in zoom-in-95 duration-100 select-none text-[12.5px]"
+          style={{
+            left: Math.min(contextMenu.x, window.innerWidth - 225),
+            top: Math.min(contextMenu.y, window.innerHeight - 210),
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          <div className="px-2.5 py-1 text-[10px] font-bold text-mut uppercase tracking-wider border-b border-line mb-1">
+            Thêm Node Mới
+          </div>
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => addNodeAt("ref", contextMenu.canvasX, contextMenu.canvasY)}
+            className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-[6px] text-left text-dim hover:text-fg hover:bg-panel2 transition-colors cursor-pointer"
+          >
+            <span className="grid place-items-center size-5 rounded-[4px] bg-acc/15 text-acc">
+              <UploadSimple size={13} />
+            </span>
+            <span>Ảnh tham chiếu</span>
+          </button>
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => addNodeAt("image", contextMenu.canvasX, contextMenu.canvasY)}
+            className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-[6px] text-left text-dim hover:text-fg hover:bg-panel2 transition-colors cursor-pointer"
+          >
+            <span className="grid place-items-center size-5 rounded-[4px] bg-acc/15 text-acc">
+              <ImageIcon size={13} />
+            </span>
+            <span>Node Ảnh</span>
+          </button>
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => addNodeAt("video", contextMenu.canvasX, contextMenu.canvasY)}
+            className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-[6px] text-left text-dim hover:text-fg hover:bg-panel2 transition-colors cursor-pointer"
+          >
+            <span className="grid place-items-center size-5 rounded-[4px] bg-ok/15 text-ok">
+              <VideoCamera size={13} />
+            </span>
+            <span>Node Video</span>
+          </button>
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => addNodeAt("last_frame", contextMenu.canvasX, contextMenu.canvasY)}
+            className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-[6px] text-left text-dim hover:text-fg hover:bg-panel2 transition-colors cursor-pointer"
+          >
+            <span className="grid place-items-center size-5 rounded-[4px] bg-purple-500/15 text-purple-400">
+              <FilmSlate size={13} />
+            </span>
+            <span>Frame Cuối</span>
+          </button>
+        </div>
+      )}
 
       {/* Right Drawer for Logs & Errors */}
       <CanvasDrawer
@@ -1040,7 +1282,7 @@ export function CanvasPanel(_props: Props = {}) {
       )}
     </div>
   );
-}
+});
 
 // --------------------------------------------------------------------------- //
 // Node Card
@@ -1061,7 +1303,6 @@ function CanvasNodeCard(props: {
   onSourcesChange: (sids: string[]) => void;
   onRemove: () => void;
   onRun: () => void;
-  onDry: () => void;
   onDot: (side: "in" | "out") => void;
   onUpload: (file: File) => void;
   onOpenDrawer: (id: string) => void;
@@ -1108,19 +1349,22 @@ function CanvasNodeCard(props: {
   const availableOptions = sourceOptions.filter((c) => !currentSids.includes(c.id));
 
   const sourceLabel = (c: CanvasNode) => {
+    if (c.label) return c.label;
     if (c.type === "ref") return `Tham chiếu: ${c.fileName ?? c.id}`;
     if (c.type === "last_frame") return `Frame Cuối: ${c.id}${c.fileUrl ? " (đã có ảnh)" : ""}`;
     if (c.type === "video") return `Video: ${c.prompt ? c.prompt.slice(0, 24) + "…" : c.id}`;
     return c.prompt ? `Ảnh: ${c.prompt.slice(0, 24)}…` : `Ảnh (${c.id})`;
   };
 
-  const nodeTitle = isRef
-    ? "Ảnh tham chiếu"
-    : isImg
-      ? "Node Ảnh"
-      : isVid
-        ? "Node Video"
-        : "Frame Cuối Video";
+  const nodeTitle =
+    n.label ||
+    (isRef
+      ? "Ảnh tham chiếu"
+      : isImg
+        ? "Node Ảnh"
+        : isVid
+          ? "Node Video"
+          : "Frame Cuối Video");
 
   const dotCls = (side: "in" | "out", accent: boolean) =>
     `absolute ${side === "out" ? "-right-2.5" : "-left-2.5"} top-[12px] size-5 rounded-full border-2 grid place-items-center cursor-pointer transition-all ${
@@ -1151,7 +1395,7 @@ function CanvasNodeCard(props: {
 
   return (
     <div
-      className={`absolute rounded-panel border-2 bg-panel shadow-xl ${st.border}`}
+      className={`canvas-node-card absolute rounded-panel border-2 bg-panel shadow-xl ${st.border}`}
       style={{ left: n.x, top: n.y, width: NODE_W }}
       onPointerDown={(e) => e.stopPropagation()}
     >
@@ -1588,16 +1832,8 @@ function CanvasNodeCard(props: {
               <Play size={10} weight="fill" />
               <span>{isLastFrame ? "Trích xuất" : "Chạy node"}</span>
             </button>
-            <button
-              onClick={props.onDry}
-              disabled={wfBusy || (isLastFrame ? !n.sourceImageId : n.prompt.trim().length === 0)}
-              className="h-7 px-2 rounded-ctl border border-line2 text-[11px] font-semibold text-mut hover:text-fg transition-colors cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
-              title="Kiểm tra tham số (dry-run, không tốn credit)"
-            >
-              Dry
-            </button>
             {n.elapsedS != null && n.status === "succeeded" && (
-              <span className="text-[10px] font-mono text-mut">{n.elapsedS.toFixed(1)}s</span>
+              <span className="text-[10px] font-mono text-mut px-1">{n.elapsedS.toFixed(1)}s</span>
             )}
           </div>
         )}

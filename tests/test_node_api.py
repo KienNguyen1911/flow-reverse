@@ -27,13 +27,13 @@ def test_node_options(client: TestClient):
     r = client.get("/api/node/options")
     assert r.status_code == 200
     body = r.json()
-    assert body["image"]["aspect_ratios"] == {"16:9": 3}
+    assert body["image"]["aspect_ratios"] == {"16:9": 3, "9:16": 2}
     assert body["video"]["aspect_ratios"] == ["9:16", "16:9"]
     assert body["video"]["supports_text_to_video"] is False
 
 
 def test_node_image_rejects_unverified_ratio(client: TestClient):
-    r = client.post("/api/node/image", json={"prompt": "x", "aspect_ratio": "9:16", "dry_run": True})
+    r = client.post("/api/node/image", json={"prompt": "x", "aspect_ratio": "1:1", "dry_run": True})
     assert r.status_code == 400
     assert "capture_image_aspects" in r.json()["detail"]
 

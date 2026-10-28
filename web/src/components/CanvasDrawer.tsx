@@ -25,6 +25,7 @@ export interface CanvasDrawerNode {
   type: "ref" | "image" | "video" | "last_frame";
   x: number;
   y: number;
+  label?: string | null;
   prompt: string;
   fileName?: string | null;
   aspectRatio: string;
@@ -267,13 +268,14 @@ export function CanvasDrawer({ node, allNodes, onClose, onRunNode, onRemoveNode 
     .filter(Boolean) as CanvasDrawerNode[];
 
   const nodeTitle =
-    node.type === "ref"
+    node.label ||
+    (node.type === "ref"
       ? "Ảnh tham chiếu"
       : node.type === "image"
         ? "Node Ảnh"
         : node.type === "video"
           ? "Node Video"
-          : "Trích xuất Frame Cuối";
+          : "Trích xuất Frame Cuối");
 
   const nodeIcon =
     node.type === "ref" ? (
