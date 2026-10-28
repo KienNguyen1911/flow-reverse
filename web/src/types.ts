@@ -303,6 +303,7 @@ export interface NodeImageRequest {
   aspect?: number;
   seed?: number | null;
   reference_image_path?: string | null;
+  reference_image_paths?: string[];
   project_id?: string | null;
   dry_run?: boolean;
   remove_watermark?: boolean;
@@ -323,6 +324,11 @@ export interface NodeVideoRequest {
   dry_run?: boolean;
   remove_watermark?: boolean;
   confirm?: boolean;
+}
+
+export interface NodeLastFrameRequest {
+  video_path: string;
+  remove_watermark?: boolean;
 }
 
 export interface NodeImageResult {

@@ -833,6 +833,9 @@ class JobManager:
         if kind == "node_video":
             self._run_node_video(job)
             return
+        if kind == "node_last_frame":
+            self._run_node_last_frame(job)
+            return
         raise ValueError(f"unknown job kind: {kind}")
 
     # -- single-account jobs ---------------------------------------------------- #
@@ -870,32 +873,31 @@ class JobManager:
             except Exception as e:
                 ev("warn", f"[{aid}] không dò được dự án trên account: {e}")
 
-        tpl = None
+        ref_paths_raw = params.get("reference_image_paths") or []
         ref_path = params.get("reference_image_path")
+        resolved_files: list[Path] = []
+        if ref_paths_raw and isinstance(ref_paths_raw, list):
+            for rp in ref_paths_raw:
+                if rp:
+                    rf = resolve_input_path(rp)
+                    if rf.is_file() and rf not in resolved_files:
+                        resolved_files.append(rf)
         if ref_path:
-            p = Path(ref_path)
-            candidate_paths = [
-                p,
-                ROOT / p,
-                ROOT / "out" / "references" / p.name,
-            ]
-            resolved_file = None
-            for cand in candidate_paths:
-                if cand.is_file():
-                    resolved_file = cand.resolve()
-                    break
-            if resolved_file is None:
-                raise FileNotFoundError(f"Không tìm thấy file ảnh tham chiếu tại: {ref_path}")
-
-            sha = sha256_file(str(resolved_file))
-            cached = self.pool.registry.get(aid, sha)
-            if cached is None:
-                ev("step", f"lazy upload ảnh tham chiếu ({resolved_file.name}) — 0 credit")
-                tpl = client.upload_reference_image(target_pid, str(resolved_file), prompt_probe=params["prompt"], on_event=ev)
-                self.pool.registry.put(aid, tpl.model_dump())
-            else:
-                tpl = ReferenceTemplate(**cached)
-                ev("info", f"trúng cache tham chiếu sha {sha[:8]}… (media≈{tpl.media_id})")
+            rf = resolve_input_path(ref_path)
+            if not rf.is_file():
+                p = Path(ref_path)
+                candidate_paths = [
+                    p,
+                    ROOT / p,
+                    ROOT / "out" / "references" / p.name,
+                    ROOT / "out" / "uploads" / p.name,
+                ]
+                for cand in candidate_paths:
+                    if cand.is_file():
+                        rf = cand.resolve()
+                        break
+            if rf.is_file() and rf not in resolved_files:
+                resolved_files.insert(0, rf)
 
         try:
             res = client.generate_image(
@@ -905,7 +907,8 @@ class JobManager:
                 seed=params.get("seed"),
                 dry_run=dry_run,
                 remove_watermark=bool(params.get("remove_watermark", True)),
-                reference=tpl,
+                reference_path=resolved_files[0] if resolved_files else None,
+                reference_paths=resolved_files if resolved_files else None,
                 on_event=ev,
             )
         except Exception as exc:
@@ -955,6 +958,7 @@ class JobManager:
                 aspect=params.get("aspect"),
                 seed=params.get("seed"),
                 reference_image=params.get("reference_image_path"),
+                reference_images=params.get("reference_image_paths"),
                 project_id=params.get("project_id"),
                 dry_run=bool(params.get("dry_run")),
                 remove_watermark=bool(params.get("remove_watermark", True)),
@@ -1012,6 +1016,50 @@ class JobManager:
         if res.frame_path:
             d["frame_url"] = f"/api/node/files/{res.run_id}/{Path(res.frame_path).name}"
         job.result = d
+        job.set_state("succeeded")
+
+    def _run_node_last_frame(self, job: Job) -> None:
+        params = job.params
+        ev = job.add_event
+        v_path = Path(params["video_path"])
+        if not v_path.is_file():
+            raise FileNotFoundError(f"Không tìm thấy file video: {v_path}")
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_name = f"{ts}_last_frame_{v_path.stem[:30]}"
+        run_dir = self.node_out / run_name
+        run_dir.mkdir(parents=True, exist_ok=True)
+        out_frame = run_dir / "last_frame.png"
+
+        ev("step", f"Trích xuất frame cuối từ {v_path.name}...")
+        t0 = time.time()
+        from ..Bridge.flow_video_bridge import extract_last_video_frame
+        from ..Workflows.watermark_remover import remove_image_watermark
+
+        extract_last_video_frame(v_path, out_frame, log=lambda k, m: ev(k, m))
+        if not out_frame.is_file() or out_frame.stat().st_size < 100:
+            raise RuntimeError("Trích xuất frame cuối thất bại (file đầu ra rỗng hoặc không tồn tại).")
+
+        if params.get("remove_watermark", True):
+            try:
+                remove_image_watermark(out_frame, prefer_family="video", log=lambda k, m: ev(k, m))
+            except Exception as wm_exc:
+                ev("warn", f"Xóa watermark frame cuối bỏ qua: {wm_exc}")
+
+        elapsed = round(time.time() - t0, 2)
+        ev("done", f"Trích xuất frame cuối hoàn tất ({elapsed}s) → {out_frame.name}")
+
+        res = {
+            "status": "ok",
+            "run_id": run_name,
+            "run_dir": str(run_dir),
+            "file_path": str(out_frame),
+            "file_url": f"/api/node/files/{run_name}/{out_frame.name}",
+            "file_bytes": out_frame.stat().st_size,
+            "source_video": str(v_path),
+            "elapsed_s": elapsed,
+        }
+        job.result = res
         job.set_state("succeeded")
 
     def _run_project_op(self, job: Job) -> None:

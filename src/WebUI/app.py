@@ -37,6 +37,7 @@ from typing import Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -68,7 +69,7 @@ DEFAULT_WEB_DIST = ROOT / "web" / "dist"
 
 class GenerateBody(BaseModel):
     project_id: str
-    prompt: str = Field(min_length=1, max_length=2000)
+    prompt: str = Field(min_length=1, max_length=5000)
     aspect: int = 3
     seed: Optional[int] = None
     dry_run: bool = False
@@ -77,13 +78,14 @@ class GenerateBody(BaseModel):
 
 
 class NodeImageBody(BaseModel):
-    """One canvas image node: prompt + ratio + optional attached reference image."""
+    """One canvas image node: prompt + ratio + optional attached reference image(s)."""
 
-    prompt: str = Field(min_length=1, max_length=2000)
+    prompt: str = Field(min_length=1, max_length=5000)
     aspect_ratio: Optional[str] = None      # "16:9" (verified), other ratios need capture
     aspect: Optional[int] = None            # raw enum escape hatch (wins over aspect_ratio)
     seed: Optional[int] = None
     reference_image_path: Optional[str] = None   # path or /api/uploads|references|assets URL
+    reference_image_paths: Optional[list[str]] = None
     project_id: Optional[str] = None
     dry_run: bool = False
     remove_watermark: bool = True
@@ -93,7 +95,7 @@ class NodeImageBody(BaseModel):
 class NodeVideoBody(BaseModel):
     """One canvas video node: prompt + ratio + attached frame (or auto image→video chain)."""
 
-    prompt: str = Field(min_length=1, max_length=2000)
+    prompt: str = Field(min_length=1, max_length=5000)
     aspect_ratio: str = "9:16"
     frame_path: Optional[str] = None        # attached image (path or /api/... URL)
     image_prompt: Optional[str] = None      # used only when auto_image generates the frame
@@ -106,6 +108,13 @@ class NodeVideoBody(BaseModel):
     dry_run: bool = False
     remove_watermark: bool = True
     confirm: bool = False
+
+
+class NodeLastFrameBody(BaseModel):
+    """Extract last frame of a video for chaining to next video/image node (0 credit)."""
+
+    video_path: str
+    remove_watermark: bool = True
 
 
 class CreateProjectBody(BaseModel):
@@ -248,6 +257,16 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
     app.state.manager = manager
     app.state.store = store
     app.state.out_root = out_root
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request, exc: RequestValidationError):
+        errors = []
+        for err in exc.errors():
+            loc = ".".join(str(x) for x in err.get("loc", []) if x != "body")
+            msg = err.get("msg", "Lỗi tham số")
+            errors.append(f"{loc}: {msg}" if loc else msg)
+        msg_str = "; ".join(errors)
+        return JSONResponse(status_code=422, content={"detail": f"Tham số không hợp lệ: {msg_str}"})
 
     # -- status ------------------------------------------------------------- #
 
@@ -476,8 +495,20 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
             raise HTTPException(status_code=400, detail=str(e))
         if body.seed is not None and not (1 <= int(body.seed) <= 2147483647):
             raise HTTPException(status_code=400, detail="seed phải nằm trong int32: 1..2147483647")
-        if body.reference_image_path and not resolve_input_path(body.reference_image_path).is_file():
-            raise HTTPException(status_code=400, detail=f"Không tìm thấy ảnh đính kèm: {body.reference_image_path}")
+
+        # Collect & validate all reference image paths
+        all_refs: list[str] = []
+        if body.reference_image_paths:
+            for rp in body.reference_image_paths:
+                if rp and rp not in all_refs:
+                    all_refs.append(rp)
+        if body.reference_image_path and body.reference_image_path not in all_refs:
+            all_refs.insert(0, body.reference_image_path)
+
+        for ref_p in all_refs:
+            if not resolve_input_path(ref_p).is_file():
+                raise HTTPException(status_code=400, detail=f"Không tìm thấy ảnh đính kèm: {ref_p}")
+
         if not body.dry_run:
             if not body.confirm:
                 raise HTTPException(status_code=400,
@@ -490,7 +521,8 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
             "aspect_ratio": ratio,
             "aspect": enum,
             "seed": body.seed,
-            "reference_image_path": body.reference_image_path,
+            "reference_image_path": all_refs[0] if all_refs else None,
+            "reference_image_paths": all_refs if all_refs else None,
             "project_id": body.project_id,
             "dry_run": body.dry_run,
             "remove_watermark": body.remove_watermark,
@@ -539,6 +571,17 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
             "job_id": job.id, "kind": "video", "aspect_ratio": ratio,
             "resolution": resolution, "duration_s": duration, "frame_source": ("provided" if body.frame_path else "generated"),
         }
+
+    @app.post("/api/node/last_frame")
+    def api_node_last_frame(body: NodeLastFrameBody):
+        resolved = resolve_input_path(body.video_path)
+        if not resolved.is_file():
+            raise HTTPException(status_code=400, detail=f"Không tìm thấy file video: {body.video_path}")
+        job = manager.submit("node_last_frame", {
+            "video_path": str(resolved),
+            "remove_watermark": body.remove_watermark,
+        })
+        return {"job_id": job.id, "kind": "last_frame"}
 
     @app.get("/api/node/files/{file_path:path}")
     def api_node_file(file_path: str):

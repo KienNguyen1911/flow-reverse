@@ -983,6 +983,8 @@ class FlowVideoBridge:
                 parsed = parse_batchexecute_text(up["resp"])
                 if parsed.get("ok"):
                     records = extract_media_records(parsed.get("data"), project_id=project_id)
+                    if not records:
+                        records = extract_media_records(parsed.get("data"), project_id=None)
                     if records:
                         media_id = str(records[0][0]).lower()
                         self._log("info", f"maseQ upload hoàn tất sau {time.time() - t0:.1f}s -> media_id={media_id}")

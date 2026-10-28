@@ -93,7 +93,7 @@ POST /_/AiSandboxAngularFrontend/data/batchexecute?rpcids=ogiZ0b&source-path=%2F
 | Tham số | Nguồn | Ghi chú |
 |---|---|---|
 | `seed` | Client random | response echo lại; cùng seed ⇒ cùng ảnh (Inference) |
-| `aspect_ratio` | Settings chip (`crop_16_9`) | 3 = 16:9. Chưa test các giá trị khác |
+| `aspect_ratio` | Settings chip (`crop_16_9`) | 3 = 16:9, 2 = 9:16 (capture 2026-10-28, chip `crop_9_16`; 1:1/4:3... chưa capture) |
 | `model` | Chip model | `BELUGA`; các model khác chưa capture |
 | `prompt` | ProseMirror input | Plain text |
 | `recaptcha_token` | Handshake §2 | **Bắt buộc** (gần như chắc chắn) |

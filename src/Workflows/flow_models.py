@@ -231,23 +231,21 @@ def _mask_ref_inplace(ref: Any) -> Any:
 def captured_args_has_reference(args: Any) -> Optional[bool]:
     """Does a captured ogiZ0b args payload carry a reference image?
 
-    Returns False when the (masked) ref equals the known t2i baseline — i.e.
-    the attach did not land and the app sent a plain text2image request.
-    Returns None when the structure is unrecognizable (caller continues).
+    In Flow's ogiZ0b spec:
+    - text2image: spec[2] is None.
+    - image2image: spec[2] carries ingredient list, e.g. [["<media_id>", None, None, None, 1]].
     """
     try:
-        ref = args[1][0][7]
+        spec = args[1][0]
     except Exception:  # noqa: BLE001
         return None
-    if not isinstance(ref, list):
+    if not isinstance(spec, list) or len(spec) <= 2:
         return None
-    masked = _mask_ref_inplace(copy.deepcopy(ref))
-    base = _mask_ref_inplace(copy.deepcopy(T2I_REF_BASELINE))
-    if masked == base:
+    if spec[2] is not None:
+        if isinstance(spec[2], list) and len(spec[2]) > 0:
+            return True
         return False
-    if len(masked) == len(base):
-        return True
-    return None
+    return False
 
 
 def mask_template_token(args: list) -> list:
@@ -297,6 +295,7 @@ def build_args_from_template(
     u1: Optional[str] = None,
     u2: Optional[str] = None,
     gen_id: Optional[str] = None,
+    aspect: Optional[int] = None,
 ) -> tuple[list, dict]:
     """Replay an app-captured i2i template with fresh token/seed/prompt/UUIDs.
 
@@ -329,6 +328,17 @@ def build_args_from_template(
             replaced["seed"] = True
     except Exception:  # noqa: BLE001
         pass
+
+    # 2b) aspect — spec[4] (same enum as t2i). The template was captured with whatever
+    # ratio the Flow chip held at capture time, so override it with the node's ratio.
+    if aspect is not None:
+        try:
+            spec = args[1][0]
+            if isinstance(spec[4], int) and not isinstance(spec[4], bool):
+                spec[4] = int(aspect)
+                replaced["aspect"] = True
+        except Exception:  # noqa: BLE001
+            pass
 
     # 3) prompt — leaf substring replace (the app nests it, e.g. [[[prompt]]]).
     if old_prompt and prompt and old_prompt != prompt:

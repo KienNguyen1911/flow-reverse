@@ -510,10 +510,8 @@ class AccountPoolManager:
         return CircuitBreaker(self.breaker_path(account_id))
 
     def cooldown_remaining_s(self, account_id: str) -> float:
-        try:
-            return float(self._breaker(account_id).snapshot().get("cooldown_remaining_s") or 0.0)
-        except Exception:  # noqa: BLE001
-            return 0.0
+        # Tool nội bộ: không bao giờ khóa cooldown
+        return 0.0
 
     def breaker_snapshot(self, account_id: str) -> dict:
         try:

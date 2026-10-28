@@ -57,7 +57,9 @@ IMAGE_ASPECT_CONFIG = ROOT / "configs" / "image_aspect_enums.json"
 
 #: Aspect enum values verified against a captured Flow request.
 #: ``docs/api_specs/flow_create_image.md`` §2: ``spec[4] = 3`` (16:9).
-VERIFIED_IMAGE_ASPECTS: dict[str, int] = {"16:9": 3}
+#: 9:16 = 2 captured from the app's own blocked request (0 credit), 2026-10-28,
+#: via discovery/capture_image_aspects.py (traces/image_aspects_20261028T165133.json).
+VERIFIED_IMAGE_ASPECTS: dict[str, int] = {"16:9": 3, "9:16": 2}
 
 #: Free-form aliases accepted by :func:`resolve_image_aspect`.
 RATIO_ALIASES: dict[str, str] = {
@@ -472,6 +474,7 @@ class MediaService:
         aspect: Optional[int] = None,
         seed: Optional[int] = None,
         reference_image: Optional[Path | str] = None,
+        reference_images: Optional[list[Path | str]] = None,
         project_id: Optional[str] = None,
         dry_run: bool = False,
         remove_watermark: bool = True,
@@ -485,16 +488,51 @@ class MediaService:
             raise ValueError("prompt rỗng")
         with self._lock:
             project = self.resolve_project(project_id, on_event=on_event)
-            tpl, sha = self._reference_template(project, reference_image, prompt, on_event)
+            ref_paths: list[Path] = []
+            if reference_images:
+                for r in reference_images:
+                    if r:
+                        rp = resolve_input_path(r)
+                        if not rp.is_file():
+                            raise FileNotFoundError(f"Không tìm thấy ảnh tham chiếu: {r} (đã thử {rp})")
+                        if rp not in ref_paths:
+                            ref_paths.append(rp)
+            if reference_image:
+                rp = resolve_input_path(reference_image)
+                if not rp.is_file():
+                    raise FileNotFoundError(f"Không tìm thấy ảnh tham chiếu: {reference_image} (đã thử {rp})")
+                if rp not in ref_paths:
+                    ref_paths.insert(0, rp)
+
+            sha = sha256_file(ref_paths[0]) if ref_paths else None
+            gen_kwargs = {
+                "aspect": enum,
+                "seed": seed,
+                "dry_run": dry_run,
+                "remove_watermark": remove_watermark,
+                "on_event": on_event,
+            }
+            # Detect whether image client supports direct reference_path / reference_paths
+            import inspect
+            try:
+                sig = inspect.signature(self.image.generate_image)
+                supports_ref_paths = "reference_path" in sig.parameters or "reference_paths" in sig.parameters
+            except Exception:
+                supports_ref_paths = True
+
+            tpl = None
+            if ref_paths:
+                if supports_ref_paths:
+                    gen_kwargs["reference_path"] = ref_paths[0]
+                    gen_kwargs["reference_paths"] = ref_paths
+                else:
+                    tpl, _ = self._reference_template(project, ref_paths[0], prompt, on_event)
+                    gen_kwargs["reference"] = tpl
+
             res: GenerationResult = self.image.generate_image(
                 project,
                 prompt,
-                aspect=enum,
-                seed=seed,
-                dry_run=dry_run,
-                remove_watermark=remove_watermark,
-                reference=tpl,
-                on_event=on_event,
+                **gen_kwargs,
             )
         return self._image_result(res, prompt, label, enum, project, sha, tpl, t0)
 

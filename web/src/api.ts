@@ -5,6 +5,7 @@ import type {
   GalleryRun,
   Job,
   NodeImageRequest,
+  NodeLastFrameRequest,
   NodeMediaOptions,
   NodeVideoRequest,
   PoolAccount,
@@ -20,7 +21,21 @@ async function j<T>(r: Response): Promise<T> {
     let detail = "";
     try {
       const body = await r.json();
-      detail = String(body?.detail ?? "");
+      if (typeof body?.detail === "string") {
+        detail = body.detail;
+      } else if (Array.isArray(body?.detail)) {
+        detail = body.detail
+          .map((x: any) => {
+            const loc = Array.isArray(x?.loc) ? x.loc.filter((k: any) => k !== "body").join(".") : "";
+            const m = x?.msg || (typeof x === "object" ? JSON.stringify(x) : String(x));
+            return loc ? `${loc}: ${m}` : m;
+          })
+          .join("; ");
+      } else if (body?.detail && typeof body.detail === "object") {
+        detail = JSON.stringify(body.detail);
+      } else if (body?.message) {
+        detail = String(body.message);
+      }
     } catch {
       /* ignore */
     }
@@ -167,6 +182,9 @@ export const api = {
         frame_source: "provided" | "generated";
       }>,
     ),
+
+  nodeLastFrame: (p: NodeLastFrameRequest) =>
+    post("/api/node/last_frame", p).then(j<{ job_id: string; kind: "last_frame" }>),
 
   nodeFileUrl: (runId: string, filename: string) =>
     `/api/node/files/${encodeURIComponent(runId)}/${filename.split("/").map(encodeURIComponent).join("/")}`,

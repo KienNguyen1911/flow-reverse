@@ -24,6 +24,7 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import re
@@ -131,18 +132,17 @@ class CircuitBreaker:
     def snapshot(self) -> dict:
         with self._lock:
             s = dict(self.state)
-        now = int(time.time() * 1000)
-        s["cooldown_remaining_s"] = max(0.0, (s["cooldown_until_ms"] - now) / 1000.0)
+        s["cooldown_remaining_s"] = 0.0
+        s["cooldown_until_ms"] = 0
         return s
 
     def check(self) -> None:
-        s = self.snapshot()
-        if s["cooldown_remaining_s"] > 0:
-            raise CircuitOpenError(s["cooldown_remaining_s"], s["cooldown_reason"] or "cooldown")
+        # Tool nội bộ: không bao giờ chặn hay khóa cooldown
+        return
 
     def trip(self, seconds: float, reason: str) -> None:
         with self._lock:
-            self.state["cooldown_until_ms"] = int(time.time() * 1000 + seconds * 1000)
+            self.state["cooldown_until_ms"] = 0
             self.state["cooldown_reason"] = reason
             self._save()
 
@@ -156,12 +156,10 @@ class CircuitBreaker:
         with self._lock:
             self.state["consecutive_anti_abuse"] = int(self.state.get("consecutive_anti_abuse", 0)) + 1
             self.state["last_anti_abuse_ms"] = int(time.time() * 1000)
-            n = self.state["consecutive_anti_abuse"]
-            if n >= 3:
-                self.state["cooldown_until_ms"] = int(time.time() * 1000 + 1800 * 1000)
-                self.state["cooldown_reason"] = f"{n} lần liên tiếp bị anti-abuse từ chối"
+            self.state["cooldown_until_ms"] = 0
+            self.state["cooldown_reason"] = ""
             self._save()
-            return n
+            return self.state["consecutive_anti_abuse"]
 
     def note_success(self) -> None:
         with self._lock:
@@ -424,21 +422,23 @@ class FlowClient:
         poll_timeout_s: float = 150.0,
         anti_abuse_retries: int = 1,
         reference: Optional[ReferenceTemplate] = None,
+        reference_path: Optional[str | Path] = None,
+        reference_paths: Optional[list[str | Path]] = None,
         on_event: Optional[EventFn] = None,
     ) -> GenerationResult:
         """Generate one image via Bridge Mode. ~1 credit if accepted, 0 if rejected.
 
-        ``reference`` (i2i): pass a :class:`ReferenceTemplate` captured (once
-        per account) by :meth:`upload_reference_image`; the request is then a
-        replay of the app's own i2i args with a fresh token/seed/prompt.
+        ``reference_path`` or ``reference_paths`` (i2i): direct image file(s) to attach via paste;
+        the bridge waits until uploads reach 100% + settle, types prompt, and captures.
+        ``reference`` (i2i fallback): pass a :class:`ReferenceTemplate`.
         """
         ev = self._mk_events(on_event)
         project = parse_project_ref(project_id)
         prompt = (prompt or "").strip()
         if not prompt:
             raise ValueError("prompt rỗng")
-        if len(prompt) > 2000:
-            raise ValueError("prompt quá dài (tối đa 2000 ký tự)")
+        if len(prompt) > 5000:
+            raise ValueError("prompt quá dài (tối đa 5000 ký tự)")
         seed_v = validate_seed(seed if seed is not None else generate_seed())
         if not dry_run:
             self.breaker.check()
@@ -454,6 +454,8 @@ class FlowClient:
                 remove_watermark=remove_watermark,
                 poll_timeout_s=poll_timeout_s,
                 reference=reference,
+                reference_path=reference_path,
+                reference_paths=reference_paths,
                 ev=ev,
             )
             if dry_run or res.status == "dry_run":
@@ -490,6 +492,8 @@ class FlowClient:
         poll_timeout_s: float,
         ev: EventFn,
         reference: Optional[ReferenceTemplate] = None,
+        reference_path: Optional[str | Path] = None,
+        reference_paths: Optional[list[str | Path]] = None,
     ) -> GenerationResult:
         run_dir = self._new_run_dir(prompt)
         t0 = time.time()
@@ -504,20 +508,72 @@ class FlowClient:
                 ev("step", f"mở dự án {project_id[:8]}...")
                 br.nav_project(project_id)
                 ui_started = True
+
+                # Determine actual reference image paths
+                actual_ref_paths: list[Path] = []
+                if reference_paths:
+                    for rp in reference_paths:
+                        if rp:
+                            p = Path(rp)
+                            if p.is_file() and p.resolve() not in actual_ref_paths:
+                                actual_ref_paths.append(p.resolve())
+                if reference_path:
+                    p = Path(reference_path)
+                    if p.is_file() and p.resolve() not in actual_ref_paths:
+                        actual_ref_paths.append(p.resolve())
+                elif reference and reference.source_path:
+                    p = Path(reference.source_path)
+                    if p.is_file() and p.resolve() not in actual_ref_paths:
+                        actual_ref_paths.append(p.resolve())
+
+                # Always clear any leftover chips from previous runs
+                br.clear_reference_chips()
+
+                # If reference images present, upload via paste sequentially
+                if actual_ref_paths:
+                    if len(actual_ref_paths) == 1:
+                        ev("step", f"đính ảnh tham chiếu: {actual_ref_paths[0].name} (chờ upload 100% + 3s)...")
+                        paste_info = br.attach_reference_paste(actual_ref_paths[0], settle_s=3.0, clear_existing=False)
+                        ev("info", f"upload ảnh tham chiếu hoàn tất ({paste_info.get('upload_s', 0)}s) + 3s chờ ổn định", paste_info)
+                    else:
+                        ev("step", f"đính {len(actual_ref_paths)} ảnh tham chiếu lần lượt...")
+                        for idx, rpath in enumerate(actual_ref_paths, 1):
+                            ev("step", f"đính ảnh tham chiếu #{idx}/{len(actual_ref_paths)}: {rpath.name}...")
+                            paste_info = br.attach_reference_paste(rpath, settle_s=0.5, clear_existing=False)
+                            ev("info", f"upload ảnh #{idx} ({rpath.name}) hoàn tất ({paste_info.get('upload_s', 0)}s)", paste_info)
+                        ev("info", "chờ tất cả ảnh tham chiếu ổn định (3s)...")
+                        time.sleep(3.0)
+
                 ev("step", "nhập prompt vào composer...")
                 br.type_prompt(prompt)
                 br.click_generate()
-                cap = br.wait_capture(20.0)
+                cap = br.wait_capture(30.0)
                 app_reqid = extract_app_reqid(cap.url)
                 token, at_param = parse_app_capture(cap.body)
+                app_args = parse_captured_args(cap.body)
                 (run_dir / "app_request_body.txt").write_text(cap.body, encoding="utf-8")
 
                 u1, u2, gen_id = new_uuids()
-                if reference is not None:
+                if actual_ref_paths:
+                    # Live capture with authentic upload ingredient(s)
+                    args = copy.deepcopy(app_args)
+                    try:
+                        spec = args[1][0]
+                        spec[3] = int(seed)
+                        spec[4] = int(aspect)
+                        spec[12] = u1
+                        spec[13] = u2
+                        if isinstance(args[4], list) and args[4]:
+                            args[4][0] = gen_id
+                    except Exception as exc:
+                        ev("warn", f"không cập nhật được seed/aspect trong live capture: {exc}")
+                    ev("info", f"i2i live capture: đính kèm {len(actual_ref_paths)} ảnh ({', '.join(p.name for p in actual_ref_paths)}), seed {seed}, aspect {aspect}")
+                elif reference is not None:
                     args, replaced = build_args_from_template(
                         reference.template_args,
                         token=token, seed=seed, prompt=prompt,
                         old_prompt=reference.prompt, u1=u1, u2=u2, gen_id=gen_id,
+                        aspect=aspect,
                     )
                     ev("info",
                        f"i2i template replay: ref sha {reference.sha256[:8]}… (media≈{reference.media_id or '?'}), "
@@ -537,14 +593,21 @@ class FlowClient:
 
                 base_meta = {
                     "kind": "dry_run" if dry_run else "generate",
-                    "mode": "i2i" if reference is not None else "t2i",
+                    "mode": "i2i" if (actual_ref_paths or reference is not None) else "t2i",
                     "prompt": prompt, "project_id": project_id, "seed": seed, "aspect": aspect,
                     "generation_id": gen_id, "uuid1": u1, "uuid2": u2,
                     "token_len": len(token), "app_reqid": app_reqid,
                     "created_ts": datetime.now().isoformat(timespec="seconds"),
                     "run_dir": str(run_dir),
                 }
-                if reference is not None:
+                if actual_ref_paths:
+                    base_meta["reference_source"] = str(actual_ref_paths[0])
+                    base_meta["reference_sources"] = [str(p) for p in actual_ref_paths]
+                    try:
+                        base_meta["reference_sha256"] = sha256_file(actual_ref_paths[0])
+                    except Exception:
+                        pass
+                elif reference is not None:
                     base_meta["reference_sha256"] = reference.sha256
                     base_meta["reference_media_id"] = reference.media_id
                     base_meta["reference_source"] = reference.source_path
