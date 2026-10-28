@@ -512,13 +512,16 @@ class MediaService:
                 "remove_watermark": remove_watermark,
                 "on_event": on_event,
             }
-            # Detect whether image client supports direct reference_path / reference_paths
+            # Detect whether image client supports direct reference_path / reference_paths / aspect_ratio
             import inspect
             try:
                 sig = inspect.signature(self.image.generate_image)
                 supports_ref_paths = "reference_path" in sig.parameters or "reference_paths" in sig.parameters
+                if "aspect_ratio" in sig.parameters:
+                    gen_kwargs["aspect_ratio"] = label
             except Exception:
                 supports_ref_paths = True
+                gen_kwargs["aspect_ratio"] = label
 
             tpl = None
             if ref_paths:

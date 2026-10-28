@@ -108,6 +108,20 @@ class HttpStatusError(BridgeError):
 HOOK_JS = r"""
 (() => {
   const isOgi = u => { const s = String(u || ''); return s.indexOf('/data/batchexecute?') >= 0 && s.indexOf('rpcids=ogiZ0b') >= 0; };
+  const isVideoSubmit = u => {
+    const s = String(u || '');
+    if (s.indexOf('/data/batchexecute?') < 0) return false;
+    return (
+      s.indexOf('rpcids=eb1hJf') >= 0 ||
+      s.indexOf('rpcids=MZZa6b') >= 0 ||
+      s.indexOf('rpcids=YhhmEf') >= 0 ||
+      s.indexOf('rpcids=nprQif') >= 0 ||
+      s.indexOf('rpcids=fZytfe') >= 0 ||
+      s.indexOf('rpcids=jIps6') >= 0 ||
+      s.indexOf('rpcids=IJhj9c') >= 0 ||
+      s.indexOf('rpcids=p0UkFb') >= 0
+    );
+  };
   const isOurs = h => { try { return !!(h && (h['x-harness-ours'] || (h.get && h.get('x-harness-ours')))); } catch (e) { return false; } };
   if (!window.__flowHook) {
     window.__flowHook = {v: 3, cap: null, blocked: false};
@@ -115,9 +129,16 @@ HOOK_JS = r"""
     window.fetch = function(input, init) {
       let url = '';
       try { url = typeof input === 'string' ? input : (input && input.url) || ''; } catch (e) {}
+      const ours = isOurs(init && init.headers);
+
+      // Safety guard: Never allow accidental video generation during image bridge mode (saves 12 credits)
+      if (isVideoSubmit(url) && window.__blockOgi && !ours) {
+        console.warn('[bridge] Blocked unexpected video submit during image generation mode');
+        return Promise.reject(new Error('bridge-blocked-unexpected-video-submit'));
+      }
+
       if (!isOgi(url) || !window.__blockOgi) return prevFetch(input, init);
       if (typeof input !== 'string' && input && typeof input.text === 'function') {
-        const ours = isOurs(init && init.headers);
         if (!ours) {
           const cap = {url: String(url), body: '', bodyReady: false, ts: Date.now(), via: 'fetch-request'};
           window.__flowHook.cap = cap;
@@ -128,8 +149,7 @@ HOOK_JS = r"""
         return prevFetch(input, init);
       }
       const body = String((init && init.body) || '');
-      const ours2 = isOurs(init && init.headers);
-      if (!ours2) {
+      if (!ours) {
         window.__flowHook.cap = {url: String(url), body: body, bodyReady: true, ts: Date.now(), via: 'fetch-init'};
         window.__flowHook.blocked = true;
         return Promise.reject(new Error('bridge-blocked-ogiz0b'));
@@ -603,13 +623,123 @@ class FlowBridge:
             time.sleep(1.0)
         raise PageInteractionError("Không nhập được prompt vào composer sau nhiều lần thử.")
 
+    def ensure_ui_image_mode(self, target_aspect: Optional[str] = None) -> bool:
+        """Ensure composer UI is in Image Mode ('Hình ảnh' / 'Image') with target_aspect and x1.
+
+        Prevents the critical issue where a previous video run leaves composer in Video mode,
+        causing subsequent image nodes to trigger video generation instead of image generation.
+        """
+        if self.page is None:
+            return False
+        page = self.page
+        try:
+            settings_btn = page.query_selector("button.settings-trigger-button")
+            if not settings_btn:
+                settings_btn = page.query_selector(
+                    '//button[contains(@class, "settings-trigger") or contains(@class, "settings-btn")]'
+                )
+            if not settings_btn:
+                self._log("Không tìm thấy button.settings-trigger-button trên composer (bỏ qua điều chỉnh chế độ)")
+                return False
+
+            btn_txt = (settings_btn.inner_text() or "").strip()
+            btn_html = settings_btn.inner_html() or ""
+            is_video = "Video" in btn_txt or "videocam" in btn_html
+
+            aspect_ok = True
+            if target_aspect:
+                norm_aspect = target_aspect.replace(":", "_")
+                aspect_ok = (target_aspect in btn_txt) or (f"crop_{norm_aspect}" in btn_html)
+
+            # If already image mode, correct aspect, and x1 count, no need to toggle
+            if not is_video and aspect_ok and ("x1" in btn_txt or "| 1" in btn_txt or "· 1" in btn_txt):
+                self._log(f"UI đã ở chế độ Hình ảnh ({btn_txt})")
+                return True
+
+            self._log(f"Chuyển UI composer sang chế độ Hình ảnh (trước đó: {btn_txt!r})...")
+            settings_btn.click(force=True)
+            page.wait_for_timeout(500)
+
+            # 1. Switch to Image Mode Tab ("Hình ảnh" / "Image")
+            img_tabs = [
+                '//button[@role="radio" and (contains(., "Hình ảnh") or contains(., "Image") or contains(., "image"))]',
+                '//button[contains(@class, "tab") and (contains(., "Hình ảnh") or contains(., "Image"))]',
+                '//button[contains(., "Hình ảnh") or contains(., "Image")]',
+            ]
+            for xp in img_tabs:
+                r_btn = page.query_selector(xp)
+                if r_btn:
+                    if r_btn.get_attribute("aria-checked") != "true":
+                        r_btn.click(force=True)
+                        page.wait_for_timeout(350)
+                    break
+
+            # 2. Select Target Aspect Ratio (e.g. "16:9", "9:16", "1:1", "4:3", "3:4")
+            if target_aspect:
+                aspect_selectors = [
+                    f'//button[@role="radio" and (contains(., "{target_aspect}") or contains(@aria-label, "{target_aspect}"))]',
+                    f'//button[contains(., "{target_aspect}")]',
+                ]
+                for axp in aspect_selectors:
+                    asp_btn = page.query_selector(axp)
+                    if asp_btn:
+                        if asp_btn.get_attribute("aria-checked") != "true":
+                            asp_btn.click(force=True)
+                            page.wait_for_timeout(250)
+                        break
+
+            # 3. Ensure Batch Count is x1 (avoid generating multiple images / wasting credits)
+            x1_selectors = [
+                '//button[@role="radio" and (normalize-space(.)="x1" or normalize-space(.)="1")]',
+                '//button[normalize-space(.)="x1" or normalize-space(.)="1"]',
+            ]
+            for x1_xp in x1_selectors:
+                x1_btn = page.query_selector(x1_xp)
+                if x1_btn:
+                    if x1_btn.get_attribute("aria-checked") != "true":
+                        x1_btn.click(force=True)
+                        page.wait_for_timeout(250)
+                    break
+
+            # 4. Close backdrop popup
+            backdrop = page.query_selector(".cdk-overlay-backdrop")
+            if backdrop:
+                backdrop.click(force=True)
+            else:
+                page.keyboard.press("Escape")
+            page.wait_for_timeout(400)
+
+            # Verification
+            new_txt = (settings_btn.inner_text() or "").strip()
+            self._log(f"UI composer đã chuyển sang: {new_txt}")
+            return True
+        except Exception as e:
+            self._log(f"Lỗi khi điều chỉnh UI sang chế độ Hình ảnh: {e}")
+            try:
+                page.keyboard.press("Escape")
+            except Exception:
+                pass
+            return False
+
     _GEN_BTN_JS = (
         "(() => { const b = document.querySelector('button.generate-icon-button'); if (!b) return null; "
         "const r = b.getBoundingClientRect(); "
         "return {disabled: !!b.disabled, x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)}; })()"
     )
 
-    def click_generate(self, timeout_s: float = 8.0) -> int:
+    def click_generate(self, timeout_s: float = 8.0, target_aspect: Optional[str] = None) -> int:
+        # Pre-check guard: Ensure composer is NOT in Video mode before clicking generate
+        if self.page:
+            try:
+                s_btn = self.page.query_selector("button.settings-trigger-button")
+                if s_btn:
+                    txt = (s_btn.inner_text() or "").strip()
+                    if "Video" in txt:
+                        self._log(f"Phát hiện UI vẫn ở chế độ Video ({txt!r}) trước khi Generate -> Tự động chuyển về Hình ảnh")
+                        self.ensure_ui_image_mode(target_aspect)
+            except Exception as e:
+                self._log(f"Lỗi kiểm tra pre-generate mode: {e}")
+
         deadline = time.time() + timeout_s
         btn = None
         while time.time() < deadline:

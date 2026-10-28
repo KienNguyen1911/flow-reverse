@@ -904,6 +904,7 @@ class JobManager:
                 target_pid,
                 params["prompt"],
                 aspect=int(params.get("aspect") or 3),
+                aspect_ratio=params.get("aspect_ratio"),
                 seed=params.get("seed"),
                 dry_run=dry_run,
                 remove_watermark=bool(params.get("remove_watermark", True)),

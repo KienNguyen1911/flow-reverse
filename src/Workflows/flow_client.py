@@ -367,6 +367,8 @@ class FlowClient:
                 br.nav_home()
                 ev("step", f"mở dự án {project_id[:8]}...")
                 br.nav_project(project)
+                ev("step", "kiểm tra và chuyển composer sang chế độ Hình ảnh...")
+                br.ensure_ui_image_mode()
                 ev("step", f"đính ảnh tham chiếu vào composer: {path.name} (app tự upload)")
                 info = br.attach_reference(path)
                 ev("info", f"attach OK: input #{info['input_index']} accept={info['accept']!r} preview={info['preview_seen']}", info)
@@ -416,6 +418,7 @@ class FlowClient:
         prompt: str,
         *,
         aspect: int = ASPECT_DEFAULT,
+        aspect_ratio: Optional[str] = None,
         seed: Optional[int] = None,
         dry_run: bool = False,
         remove_watermark: bool = True,
@@ -449,6 +452,7 @@ class FlowClient:
                 project_id=project,
                 prompt=prompt,
                 aspect=int(aspect),
+                aspect_ratio=aspect_ratio,
                 seed=seed_v,
                 dry_run=dry_run,
                 remove_watermark=remove_watermark,
@@ -486,6 +490,7 @@ class FlowClient:
         project_id: str,
         prompt: str,
         aspect: int,
+        aspect_ratio: Optional[str] = None,
         seed: int,
         dry_run: bool,
         remove_watermark: bool = True,
@@ -508,6 +513,11 @@ class FlowClient:
                 ev("step", f"mở dự án {project_id[:8]}...")
                 br.nav_project(project_id)
                 ui_started = True
+
+                # Đảm bảo composer UI ở chế độ Hình ảnh và chọn đúng tỷ lệ trước khi đính ảnh
+                target_ratio = aspect_ratio or ("9:16" if int(aspect) == 2 else "16:9")
+                ev("step", f"kiểm tra và chuyển composer sang chế độ Hình ảnh ({target_ratio})...")
+                br.ensure_ui_image_mode(target_ratio)
 
                 # Determine actual reference image paths
                 actual_ref_paths: list[Path] = []
@@ -546,7 +556,7 @@ class FlowClient:
 
                 ev("step", "nhập prompt vào composer...")
                 br.type_prompt(prompt)
-                br.click_generate()
+                br.click_generate(target_aspect=target_ratio)
                 cap = br.wait_capture(30.0)
                 app_reqid = extract_app_reqid(cap.url)
                 token, at_param = parse_app_capture(cap.body)
