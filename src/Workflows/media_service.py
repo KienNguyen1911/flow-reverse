@@ -1,0 +1,751 @@
+"""Node Media Service — standalone image/video generation for canvas nodes.
+
+This service is the single entry point for "one node = one generation" flows. It
+wraps the protocol cores (:class:`~src.Workflows.flow_client.FlowClient` for
+images, :class:`~src.Bridge.flow_video_bridge.FlowVideoBridge` for videos) and
+adds the concerns that every caller needs but that previously lived only inside
+the try-on pipeline or the WebUI job layer:
+
+* project resolution (explicit → project open in the tab → newest project → create);
+* optional i2i reference-image template cache (account + sha256);
+* video watermark removal (images already handle it inside ``FlowClient``);
+* per-CDP-tab serialization, so two canvas nodes cannot drive the same tab at once;
+* node run directories under ``out/nodes/`` with deterministic naming.
+
+Nothing here depends on ``auto_tryon_pipeline`` — the pipeline is a consumer,
+not an owner, of image/video generation.
+
+Usage::
+
+    svc = MediaService(cdp_url="http://127.0.0.1:4022")
+    img = svc.generate_image(prompt="...", aspect_ratio="16:9")
+    vid = svc.generate_video(prompt="...", frame_path=img.file_path, aspect_ratio="9:16")
+
+Limitations (verified against docs/api_specs/*):
+* Image aspect ratios are an int enum; only ``16:9 == 3`` is verified. Extra
+  ratios must be captured with ``discovery/capture_image_aspects.py`` (written
+  to ``configs/image_aspect_enums.json``) — never guessed.
+* Video is image-to-video only (``abra_i2v_8s``): a starting frame is required.
+  Without one, ``auto_image=True`` chains an image generation first. There is
+  no reverse-engineered text-to-video RPC (see ``discovery/probe_video_composer.py``).
+* Video duration is fixed at 8s by the model key; resolution supports 1080p
+  (default, upsampled via ``p0UkFb`` with 720p fallback) and 720p.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import shutil
+import threading
+import time
+from dataclasses import asdict, dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Callable, Iterable, Literal, Optional
+
+from ..Bridge.flow_bridge import DEFAULT_CDP_URL
+from ..Bridge.flow_video_bridge import FlowVideoBridge
+from .account_pool import ReferenceMediaRegistry, sha256_file
+from .flow_client import FlowClient
+from .flow_models import GenerationResult, ReferenceTemplate, parse_project_ref
+from .watermark_remover import remove_video_watermark
+
+ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_NODE_OUT = ROOT / "out" / "nodes"
+IMAGE_ASPECT_CONFIG = ROOT / "configs" / "image_aspect_enums.json"
+
+#: Aspect enum values verified against a captured Flow request.
+#: ``docs/api_specs/flow_create_image.md`` §2: ``spec[4] = 3`` (16:9).
+VERIFIED_IMAGE_ASPECTS: dict[str, int] = {"16:9": 3}
+
+#: Free-form aliases accepted by :func:`resolve_image_aspect`.
+RATIO_ALIASES: dict[str, str] = {
+    "portrait": "9:16",
+    "vertical": "9:16",
+    "landscape": "16:9",
+    "horizontal": "16:9",
+    "wide": "16:9",
+    "square": "1:1",
+}
+
+VIDEO_RATIOS: tuple[str, ...] = ("9:16", "16:9")
+VIDEO_RESOLUTIONS: tuple[str, ...] = ("1080p", "720p")
+VIDEO_DURATION_S = 8  # model key `abra_i2v_8s` is fixed-length
+
+
+class AspectNotVerifiedError(ValueError):
+    """Raised when a ratio has no captured enum value yet."""
+
+
+class UnsupportedOptionError(ValueError):
+    """Raised for options the Flow protocol does not support."""
+
+
+# --------------------------------------------------------------------------- #
+# Aspect / option resolution
+# --------------------------------------------------------------------------- #
+
+
+def load_image_aspects(config_path: Optional[Path | str] = None) -> dict[str, int]:
+    """Verified ratio → enum map (config file overrides/augments the built-ins).
+
+    The config file is written by ``discovery/capture_image_aspects.py``::
+
+        {"version": 1, "ratios": {"16:9": 3, "9:16": 1, "1:1": 2}}
+    """
+    ratios = dict(VERIFIED_IMAGE_ASPECTS)
+    path = Path(config_path) if config_path else IMAGE_ASPECT_CONFIG
+    try:
+        if path.is_file():
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            entries = raw.get("ratios") if isinstance(raw, dict) else None
+            if isinstance(entries, dict):
+                for ratio, enum in entries.items():
+                    try:
+                        ratios[str(ratio).strip()] = int(enum)
+                    except (TypeError, ValueError):
+                        continue
+    except Exception:  # noqa: BLE001 - a broken config must not break generation
+        pass
+    return ratios
+
+
+def _normalize_ratio_label(value: str) -> str:
+    s = str(value or "").strip().lower().replace(" ", "")
+    s = s.replace("x", ":").replace("/", ":")
+    s = RATIO_ALIASES.get(s, s)
+    return s
+
+
+def resolve_image_aspect(
+    aspect_ratio: Optional[str] = None,
+    aspect: Optional[int] = None,
+    *,
+    config_path: Optional[Path | str] = None,
+) -> tuple[str, int]:
+    """Resolve a user-facing ratio (or raw enum) to ``(label, enum)``.
+
+    ``aspect`` (int) always wins and is passed through untouched — it is the
+    escape hatch for values captured manually. ``aspect_ratio`` accepts
+    ``"16:9"``, aliases (``"portrait"``) and numeric strings (``"3"``).
+    """
+    ratios = load_image_aspects(config_path)
+
+    if aspect is not None:
+        enum = int(aspect)
+        if enum <= 0:
+            raise UnsupportedOptionError(f"aspect enum phải > 0 (nhận {enum})")
+        label = next((k for k, v in ratios.items() if v == enum), f"aspect_{enum}")
+        return label, enum
+
+    if aspect_ratio is None or str(aspect_ratio).strip() == "":
+        label = next(iter(ratios))
+        return label, ratios[label]
+
+    raw = str(aspect_ratio).strip()
+    if raw.isdigit():
+        return resolve_image_aspect(aspect=int(raw), config_path=config_path)
+
+    label = _normalize_ratio_label(raw)
+    if label not in ratios:
+        known = ", ".join(f"{k}={v}" for k, v in ratios.items())
+        raise AspectNotVerifiedError(
+            f"Tỷ lệ ảnh {raw!r} chưa được verify (enum chưa capture). "
+            f"Đã biết: {known}. Chạy `python -m discovery.capture_image_aspects` khi browser đang mở "
+            f"để ghi configs/image_aspect_enums.json, hoặc truyền `aspect` (int) đã capture thủ công."
+        )
+    return label, ratios[label]
+
+
+def normalize_video_ratio(value: Optional[str]) -> str:
+    label = _normalize_ratio_label(value or "9:16")
+    if label not in VIDEO_RATIOS:
+        raise UnsupportedOptionError(
+            f"Video chỉ hỗ trợ tỷ lệ {', '.join(VIDEO_RATIOS)} (nhận {value!r})."
+        )
+    return label
+
+
+def normalize_video_resolution(value: Optional[str]) -> str:
+    v = str(value or "1080p").strip().lower()
+    if v in ("720", "720p", "hd"):
+        return "720p"
+    if v in ("1080", "1080p", "fullhd", "full-hd"):
+        return "1080p"
+    raise UnsupportedOptionError(f"Độ phân giải video chỉ hỗ trợ 1080p/720p (nhận {value!r}).")
+
+
+def validate_video_duration(duration_s: int) -> int:
+    d = int(duration_s)
+    if d != VIDEO_DURATION_S:
+        raise UnsupportedOptionError(
+            f"Video Flow hiện cố định {VIDEO_DURATION_S}s (model abra_i2v_8s); "
+            f"muốn video dài hơn hãy nối nhiều node video (nhận {duration_s}s)."
+        )
+    return d
+
+
+def node_options(config_path: Optional[Path | str] = None) -> dict:
+    """Machine-readable option list for building canvas node UIs."""
+    image_ratios = load_image_aspects(config_path)
+    return {
+        "image": {
+            "aspect_ratios": image_ratios,
+            "verified_aspect_ratios": sorted(VERIFIED_IMAGE_ASPECTS),
+            "default_aspect_ratio": next(iter(VERIFIED_IMAGE_ASPECTS)),
+            "supports_reference_image": True,
+            "supports_seed": True,
+            "supports_watermark_removal": True,
+        },
+        "video": {
+            "aspect_ratios": list(VIDEO_RATIOS),
+            "default_aspect_ratio": "9:16",
+            "durations_s": [VIDEO_DURATION_S],
+            "resolutions": list(VIDEO_RESOLUTIONS),
+            "default_resolution": "1080p",
+            "supports_starting_frame": True,
+            "supports_text_to_video": False,
+            "auto_image_chain": True,
+            "supports_seed": True,
+            "supports_watermark_removal": True,
+        },
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Input path resolution (attachments may be filesystem paths or API URLs)
+# --------------------------------------------------------------------------- #
+
+
+def resolve_input_path(raw: Path | str, *, run_roots: Iterable[Path | str] = ()) -> Path:
+    """Map an attachment reference (path or ``/api/...`` URL) to a local file.
+
+    The returned path may not exist; callers validate with ``is_file()`` so the
+    error message can name the original reference.
+    """
+    s = str(raw or "").strip().strip('"').strip("'")
+    if "?" in s:
+        s = s.split("?", 1)[0]
+    if s.startswith("/api/"):
+        m = re.match(r"^/api/([a-z_]+)/(.+)$", s)
+        if m:
+            kind, rel = m.group(1), m.group(2)
+            if kind == "tryon":
+                rel = re.sub(r"^files/", "", rel)
+                roots = [Path(r) for r in (run_roots or [ROOT / "out" / "affiliate_runs"])]
+                for root in roots:
+                    cand = (root / rel).resolve()
+                    if cand.is_file():
+                        return cand
+                return (roots[0] / rel).resolve()
+            elif kind == "node":
+                return (DEFAULT_NODE_OUT / re.sub(r"^files/", "", rel)).resolve()
+            elif kind == "uploads":
+                return (ROOT / "out" / "uploads" / rel).resolve()
+            elif kind == "references":
+                return (ROOT / "out" / "references" / rel).resolve()
+            elif kind == "assets":
+                return (ROOT / "assets" / rel).resolve()
+    p = Path(s)
+    if p.is_file():
+        return p.resolve()
+    if (ROOT / p).is_file():
+        return (ROOT / p).resolve()
+    return p
+
+
+# --------------------------------------------------------------------------- #
+# Per-tab serialization
+# --------------------------------------------------------------------------- #
+
+_CDP_LOCKS: dict[str, threading.RLock] = {}
+_CDP_LOCKS_GUARD = threading.Lock()
+
+
+def cdp_lock(cdp_url: str) -> threading.RLock:
+    """Process-wide re-entrant lock per browser tab (same CDP endpoint = same tab pool)."""
+    key = str(cdp_url or DEFAULT_CDP_URL).rstrip("/")
+    with _CDP_LOCKS_GUARD:
+        lock = _CDP_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _CDP_LOCKS[key] = lock
+        return lock
+
+
+def _unique_run_dir(root: Path, prefix: str) -> tuple[str, Path]:
+    """Create ``<prefix>_<timestamp>[_n]`` under *root* and return ``(name, path)``."""
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = f"{prefix}_{ts}"
+    cand = root / base
+    n = 2
+    while cand.exists():
+        cand = root / f"{base}_{n}"
+        n += 1
+    cand.mkdir(parents=True, exist_ok=False)
+    return cand.name, cand
+
+
+# --------------------------------------------------------------------------- #
+# Results
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class NodeImageResult:
+    status: str
+    prompt: str
+    aspect_ratio: str
+    aspect_enum: int
+    project_id: str = ""
+    seed_used: Optional[int] = None
+    run_id: str = ""
+    run_dir: str = ""
+    file_path: Optional[str] = None
+    file_bytes: Optional[int] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    resolution: Optional[list[int]] = None
+    signed_url: Optional[str] = None
+    media_id: Optional[str] = None
+    reference_sha256: Optional[str] = None
+    reference_media_id: Optional[str] = None
+    dry_run: bool = False
+    elapsed_s: float = 0.0
+    reason: Optional[str] = None
+    hint: Optional[str] = None
+    detail: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class NodeVideoResult:
+    status: str
+    prompt: str
+    aspect_ratio: str
+    run_id: str
+    run_dir: str
+    project_id: str = ""
+    seed_used: Optional[int] = None
+    video_path: Optional[str] = None
+    video_bytes: Optional[int] = None
+    resolution: str = "1080p"
+    duration_s: int = VIDEO_DURATION_S
+    frame_path: Optional[str] = None
+    frame_source: Optional[Literal["provided", "generated"]] = None
+    image_prompt: Optional[str] = None
+    watermark_removed: bool = False
+    dry_run: bool = False
+    elapsed_s: float = 0.0
+    reason: Optional[str] = None
+    hint: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+# --------------------------------------------------------------------------- #
+# Service
+# --------------------------------------------------------------------------- #
+
+
+class MediaService:
+    """One image or one video per call, safe to share across canvas node workers."""
+
+    def __init__(
+        self,
+        cdp_url: str = DEFAULT_CDP_URL,
+        out_dir: Optional[Path | str] = None,
+        *,
+        account_id: str = "default",
+        registry: Optional[ReferenceMediaRegistry] = None,
+        log: Optional[Callable[[str, str], None]] = None,
+        image_client: Optional[FlowClient] = None,
+        video_bridge: Optional[FlowVideoBridge] = None,
+    ):
+        self.cdp_url = cdp_url
+        self.out_root = Path(out_dir) if out_dir else DEFAULT_NODE_OUT
+        self.account_id = account_id or "default"
+        self.registry = registry
+        self._log = log or (lambda kind, msg: None)
+        self._lock = cdp_lock(cdp_url)
+        self._project_cache: Optional[str] = None
+        self.image = image_client or FlowClient(
+            cdp_url=cdp_url,
+            out_dir=self.out_root,
+            log=lambda msg: self._log("info", msg),
+        )
+        self.video = video_bridge or FlowVideoBridge(
+            cdp_url=cdp_url,
+            log=lambda kind, msg: self._log(kind, msg),
+        )
+
+    # -- project -------------------------------------------------------------- #
+
+    def resolve_project(
+        self,
+        project_id: Optional[str] = None,
+        *,
+        create_title: str = "Node Media",
+        on_event: Optional[Callable[..., None]] = None,
+    ) -> str:
+        """Return a usable project id: explicit → open tab → newest → newly created."""
+        if project_id:
+            return parse_project_ref(project_id)
+        with self._lock:
+            if self._project_cache:
+                return self._project_cache
+            ev = on_event
+            st = self.image.status()
+            if st.flow_project_id:
+                self._project_cache = st.flow_project_id
+                self._emit(ev, "info", f"Dùng dự án đang mở trên tab Flow: {self._project_cache}")
+                return self._project_cache
+            listed = self.image.list_projects(on_event=ev)
+            if listed:
+                self._project_cache = parse_project_ref(listed[0].id)
+                self._emit(ev, "info", f"Dùng dự án có sẵn: {listed[0].title or self._project_cache[:8]}")
+                return self._project_cache
+            created = self.image.create_project(create_title, on_event=ev)
+            self._project_cache = created.id
+            self._emit(ev, "info", f"Đã tạo dự án mới: {created.title} ({created.id[:8]}…)")
+            return self._project_cache
+
+    @staticmethod
+    def _emit(ev: Optional[Callable[..., None]], kind: str, message: str, data: Optional[dict] = None) -> None:
+        if ev is None:
+            return
+        try:
+            ev(kind, message, data or {})
+        except TypeError:
+            try:
+                ev(kind, message)
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception:  # noqa: BLE001
+            pass
+
+    # -- reference image ------------------------------------------------------ #
+
+    def _reference_template(
+        self,
+        project_id: str,
+        reference_image: Optional[Path | str],
+        prompt: str,
+        on_event: Optional[Callable[..., None]],
+    ) -> tuple[Optional[ReferenceTemplate], Optional[str]]:
+        if not reference_image:
+            return None, None
+        path = resolve_input_path(reference_image)
+        if not path.is_file():
+            raise FileNotFoundError(f"Không tìm thấy ảnh tham chiếu: {reference_image} (đã thử {path})")
+        sha = sha256_file(path)
+        if self.registry is not None:
+            cached = self.registry.get(self.account_id, sha)
+            if cached:
+                try:
+                    self._emit(on_event, "info", f"Trúng cache ảnh tham chiếu sha {sha[:8]}…")
+                    return ReferenceTemplate(**cached), sha
+                except Exception:  # noqa: BLE001 - stale entry, re-capture
+                    pass
+        self._emit(on_event, "step", f"Upload ảnh tham chiếu lần đầu ({path.name}) — 0 credit")
+        tpl = self.image.upload_reference_image(
+            project_id,
+            path,
+            prompt_probe=(prompt or "reference")[:60],
+            on_event=on_event,
+        )
+        if self.registry is not None:
+            self.registry.put(self.account_id, tpl.model_dump())
+        return tpl, sha
+
+    # -- image ---------------------------------------------------------------- #
+
+    def generate_image(
+        self,
+        *,
+        prompt: str,
+        aspect_ratio: Optional[str] = None,
+        aspect: Optional[int] = None,
+        seed: Optional[int] = None,
+        reference_image: Optional[Path | str] = None,
+        project_id: Optional[str] = None,
+        dry_run: bool = False,
+        remove_watermark: bool = True,
+        on_event: Optional[Callable[..., None]] = None,
+    ) -> NodeImageResult:
+        """Generate exactly one image node output (~1 credit if accepted, 0 if rejected)."""
+        t0 = time.time()
+        label, enum = resolve_image_aspect(aspect_ratio, aspect)
+        prompt = (prompt or "").strip()
+        if not prompt:
+            raise ValueError("prompt rỗng")
+        with self._lock:
+            project = self.resolve_project(project_id, on_event=on_event)
+            tpl, sha = self._reference_template(project, reference_image, prompt, on_event)
+            res: GenerationResult = self.image.generate_image(
+                project,
+                prompt,
+                aspect=enum,
+                seed=seed,
+                dry_run=dry_run,
+                remove_watermark=remove_watermark,
+                reference=tpl,
+                on_event=on_event,
+            )
+        return self._image_result(res, prompt, label, enum, project, sha, tpl, t0)
+
+    @staticmethod
+    def _image_result(
+        res: GenerationResult,
+        prompt: str,
+        label: str,
+        enum: int,
+        project: str,
+        reference_sha: Optional[str],
+        tpl: Optional[ReferenceTemplate],
+        t0: float,
+    ) -> NodeImageResult:
+        img = res.image
+        run_dir = Path(res.run_dir) if res.run_dir else None
+        return NodeImageResult(
+            status=res.status,
+            prompt=prompt,
+            aspect_ratio=label,
+            aspect_enum=enum,
+            project_id=project,
+            seed_used=res.seed_used,
+            run_id=run_dir.name if run_dir else "",
+            run_dir=str(run_dir) if run_dir else "",
+            file_path=img.file_path if img else None,
+            file_bytes=img.file_bytes if img else None,
+            width=img.width if img else None,
+            height=img.height if img else None,
+            resolution=img.resolution if img else None,
+            signed_url=img.signed_url if img else None,
+            media_id=img.media_id if img else None,
+            reference_sha256=reference_sha or (tpl.sha256 if tpl else None),
+            reference_media_id=(tpl.media_id if tpl else None),
+            dry_run=res.status == "dry_run",
+            elapsed_s=res.elapsed_s or round(time.time() - t0, 2),
+            reason=res.reason,
+            hint=res.hint,
+            detail=res.detail,
+        )
+
+    # -- video ---------------------------------------------------------------- #
+
+    def animate_frame(
+        self,
+        *,
+        frame_path: Path | str,
+        prompt: str,
+        dest_path: Path | str,
+        aspect_ratio: str = "9:16",
+        seed: Optional[int] = None,
+        resolution: str = "1080p",
+        duration_s: int = VIDEO_DURATION_S,
+        project_id: Optional[str] = None,
+        timeout_s: float = 300.0,
+        on_event: Optional[Callable[..., None]] = None,
+    ) -> Path:
+        """Bridge-level image→video call (no run dir, no watermark) under the tab lock.
+
+        Used by :meth:`generate_video` and by multi-step workflows (try-on chain)
+        that own their output paths and post-processing.
+        """
+        ratio = normalize_video_ratio(aspect_ratio)
+        res_label = normalize_video_resolution(resolution)
+        duration = validate_video_duration(duration_s)
+        prompt = (prompt or "").strip()
+        if not prompt:
+            raise ValueError("prompt rỗng")
+        frame = resolve_input_path(frame_path)
+        if not frame.is_file():
+            raise FileNotFoundError(f"Không tìm thấy ảnh đính kèm: {frame_path}")
+        dest = Path(dest_path)
+        with self._lock:
+            project = self.resolve_project(project_id, on_event=on_event)
+            self.video.generate_video_flow(
+                frame_path=frame,
+                prompt_text=prompt,
+                dest_path=dest,
+                duration_s=duration,
+                timeout_s=timeout_s,
+                project_id=project,
+                aspect_ratio=ratio,
+                seed=seed,
+                resolution=res_label,
+            )
+        return dest
+
+    def generate_video(
+        self,
+        *,
+        prompt: str,
+        frame_path: Optional[Path | str] = None,
+        aspect_ratio: str = "9:16",
+        seed: Optional[int] = None,
+        resolution: str = "1080p",
+        duration_s: int = VIDEO_DURATION_S,
+        project_id: Optional[str] = None,
+        dry_run: bool = False,
+        remove_watermark: bool = True,
+        timeout_s: float = 300.0,
+        auto_image: bool = True,
+        image_prompt: Optional[str] = None,
+        image_aspect_ratio: str = "16:9",
+        on_event: Optional[Callable[..., None]] = None,
+    ) -> NodeVideoResult:
+        """Generate one 8s video node output from a starting frame (or a generated one).
+
+        ``frame_path`` is the attached image; when omitted and ``auto_image`` is
+        true, an image is generated first (image→video chain) because Flow's
+        protocol only exposes ``abra_i2v_8s`` (no text-to-video RPC).
+        """
+        t0 = time.time()
+        ratio = normalize_video_ratio(aspect_ratio)
+        res_label = normalize_video_resolution(resolution)
+        duration = validate_video_duration(duration_s)
+        prompt = (prompt or "").strip()
+        if not prompt:
+            raise ValueError("prompt rỗng")
+
+        with self._lock:
+            project = self.resolve_project(project_id, on_event=on_event)
+            run_id, run_dir = _unique_run_dir(self.out_root, "video")
+            frame_source: Optional[Literal["provided", "generated"]] = None
+            frame: Optional[Path] = None
+            planned_image_prompt: Optional[str] = None
+            image_status: Optional[str] = None
+
+            if frame_path:
+                src = resolve_input_path(frame_path)
+                if not src.is_file():
+                    raise FileNotFoundError(f"Không tìm thấy ảnh đính kèm: {frame_path}")
+                frame = run_dir / f"starting_frame{src.suffix or '.png'}"
+                if src != frame:
+                    shutil.copy(src, frame)
+                frame_source = "provided"
+                self._emit(on_event, "info", f"Dùng ảnh đính kèm làm starting frame: {src.name}")
+            elif auto_image:
+                planned_image_prompt = (image_prompt or prompt).strip()
+                img_res = self.generate_image(
+                    prompt=planned_image_prompt,
+                    aspect_ratio=image_aspect_ratio,
+                    project_id=project,
+                    dry_run=dry_run,
+                    remove_watermark=remove_watermark,
+                    on_event=on_event,
+                )
+                image_status = img_res.status
+                if img_res.file_path:
+                    frame = run_dir / f"starting_frame{Path(img_res.file_path).suffix or '.png'}"
+                    shutil.copy(img_res.file_path, frame)
+                    frame_source = "generated"
+                elif not dry_run:
+                    raise RuntimeError(
+                        f"Không tạo được ảnh khung hình cho video: {img_res.reason or img_res.status} "
+                        f"({img_res.hint or 'không có hint'})"
+                    )
+            else:
+                raise UnsupportedOptionError(
+                    "Flow chỉ hỗ trợ image-to-video (abra_i2v_8s): cần ảnh đính kèm "
+                    "(frame_path) hoặc bật auto_image=True để tạo ảnh trước."
+                )
+
+            result = NodeVideoResult(
+                status="dry_run" if dry_run else "ok",
+                prompt=prompt,
+                aspect_ratio=ratio,
+                run_id=run_id,
+                run_dir=str(run_dir),
+                project_id=project,
+                seed_used=seed,
+                resolution=res_label,
+                duration_s=duration,
+                frame_path=str(frame) if frame else None,
+                frame_source=frame_source,
+                image_prompt=planned_image_prompt,
+                dry_run=dry_run,
+            )
+
+            if dry_run:
+                if image_status:
+                    result.hint = f"Chuỗi image→video: ảnh dự kiến status={image_status} (dry-run, không tạo file)."
+                self._emit(on_event, "info", "[DRY-RUN] Không gọi bridge video, không tạo file.")
+                result.elapsed_s = round(time.time() - t0, 2)
+                self._write_manifest(result)
+                return result
+
+            if frame is None:
+                raise RuntimeError("Thiếu starting frame sau bước chuẩn bị ảnh.")
+
+            video_path = run_dir / "video.mp4"
+            self._emit(
+                on_event,
+                "step",
+                f"Tạo video {ratio} {res_label} {duration}s từ {frame_source or '?'} frame",
+            )
+            self.animate_frame(
+                frame_path=frame,
+                prompt=prompt,
+                dest_path=video_path,
+                aspect_ratio=ratio,
+                seed=seed,
+                resolution=res_label,
+                duration_s=duration,
+                project_id=project,
+                timeout_s=timeout_s,
+                on_event=on_event,
+            )
+            result.video_path = str(video_path) if video_path.is_file() else None
+            result.video_bytes = video_path.stat().st_size if video_path.is_file() else None
+
+            if remove_watermark and video_path.is_file():
+                self._emit(on_event, "step", "Xóa watermark (✦) trên video…")
+                try:
+                    remove_video_watermark(video_path, log=lambda kind, msg: self._emit(on_event, kind, msg))
+                    result.watermark_removed = True
+                    result.video_bytes = video_path.stat().st_size
+                except Exception as exc:  # noqa: BLE001 - keep the render, warn only
+                    self._emit(on_event, "warn", f"Xóa watermark video bỏ qua: {exc}")
+
+            result.elapsed_s = round(time.time() - t0, 2)
+            self._write_manifest(result)
+            self._emit(on_event, "done", f"Video xong: {video_path.name} ({result.video_bytes or 0} bytes)")
+            return result
+
+    def _write_manifest(self, result: NodeVideoResult) -> None:
+        try:
+            Path(result.run_dir, "manifest.json").write_text(
+                json.dumps(result.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+
+__all__ = [
+    "AspectNotVerifiedError",
+    "UnsupportedOptionError",
+    "MediaService",
+    "NodeImageResult",
+    "NodeVideoResult",
+    "DEFAULT_NODE_OUT",
+    "IMAGE_ASPECT_CONFIG",
+    "VIDEO_RATIOS",
+    "VIDEO_RESOLUTIONS",
+    "VIDEO_DURATION_S",
+    "VERIFIED_IMAGE_ASPECTS",
+    "cdp_lock",
+    "load_image_aspects",
+    "node_options",
+    "normalize_video_ratio",
+    "normalize_video_resolution",
+    "resolve_image_aspect",
+    "resolve_input_path",
+    "validate_video_duration",
+]

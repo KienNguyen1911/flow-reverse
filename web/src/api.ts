@@ -4,6 +4,9 @@ import type {
   BatchItemRequest,
   GalleryRun,
   Job,
+  NodeImageRequest,
+  NodeMediaOptions,
+  NodeVideoRequest,
   PoolAccount,
   PoolInfo,
   Project,
@@ -144,4 +147,27 @@ export const api = {
   }) => post("/api/tryon/start", p).then(j<{ job_id: string }>),
 
   tryonRuns: () => fetch("/api/tryon/runs").then(j<{ runs: TryOnRunManifest[] }>),
+
+  // -- canvas nodes (image / video) -----------------------------------------
+  nodeOptions: () => fetch("/api/node/options").then(j<NodeMediaOptions>),
+
+  nodeImage: (p: NodeImageRequest) =>
+    post("/api/node/image", p).then(
+      j<{ job_id: string; kind: "image"; aspect_ratio: string; aspect: number }>,
+    ),
+
+  nodeVideo: (p: NodeVideoRequest) =>
+    post("/api/node/video", p).then(
+      j<{
+        job_id: string;
+        kind: "video";
+        aspect_ratio: string;
+        resolution: string;
+        duration_s: number;
+        frame_source: "provided" | "generated";
+      }>,
+    ),
+
+  nodeFileUrl: (runId: string, filename: string) =>
+    `/api/node/files/${encodeURIComponent(runId)}/${filename.split("/").map(encodeURIComponent).join("/")}`,
 };

@@ -12,6 +12,10 @@ Serves:
   /api/projects/create   job: jHPbke create-project (0 credit, needs confirm)
   /api/generate          job: ogiZ0b generate image (needs confirm unless dry_run)
   /api/batch             job: J images across N_alloc accounts (needs confirm unless dry_run)
+  /api/node/options      canvas node options (verified aspect enums, video limits)
+  /api/node/image        job: one canvas image node (prompt, ratio, optional attachment)
+  /api/node/video        job: one canvas video node (prompt, ratio, attachment or image→video)
+  /api/node/files/{p}    generated node media (out/nodes)
   /api/jobs, /api/jobs/{id}
   /api/gallery           past runs (scans out/playground/*/meta.json)
   /api/files/{run}/{name}
@@ -40,6 +44,16 @@ from pydantic import BaseModel, Field
 from ..Workflows.account_pool import AccountPoolManager
 from ..Workflows.flow_client import DEFAULT_CDP_URL
 from ..Workflows.flow_models import parse_project_ref
+from ..Workflows.media_service import (
+    AspectNotVerifiedError,
+    UnsupportedOptionError,
+    node_options,
+    normalize_video_ratio,
+    normalize_video_resolution,
+    resolve_image_aspect,
+    resolve_input_path,
+    validate_video_duration,
+)
 from .jobs import JobManager, ProjectsStore
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -57,6 +71,38 @@ class GenerateBody(BaseModel):
     prompt: str = Field(min_length=1, max_length=2000)
     aspect: int = 3
     seed: Optional[int] = None
+    dry_run: bool = False
+    remove_watermark: bool = True
+    confirm: bool = False
+
+
+class NodeImageBody(BaseModel):
+    """One canvas image node: prompt + ratio + optional attached reference image."""
+
+    prompt: str = Field(min_length=1, max_length=2000)
+    aspect_ratio: Optional[str] = None      # "16:9" (verified), other ratios need capture
+    aspect: Optional[int] = None            # raw enum escape hatch (wins over aspect_ratio)
+    seed: Optional[int] = None
+    reference_image_path: Optional[str] = None   # path or /api/uploads|references|assets URL
+    project_id: Optional[str] = None
+    dry_run: bool = False
+    remove_watermark: bool = True
+    confirm: bool = False
+
+
+class NodeVideoBody(BaseModel):
+    """One canvas video node: prompt + ratio + attached frame (or auto image→video chain)."""
+
+    prompt: str = Field(min_length=1, max_length=2000)
+    aspect_ratio: str = "9:16"
+    frame_path: Optional[str] = None        # attached image (path or /api/... URL)
+    image_prompt: Optional[str] = None      # used only when auto_image generates the frame
+    image_aspect_ratio: str = "16:9"        # frame image ratio (only 16:9 verified today)
+    auto_image: bool = True
+    seed: Optional[int] = None
+    resolution: str = "1080p"
+    duration_s: int = 8
+    project_id: Optional[str] = None
     dry_run: bool = False
     remove_watermark: bool = True
     confirm: bool = False
@@ -415,6 +461,92 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
             "dest_dir": body.dest_dir,
         })
         return {"job_id": job.id}
+
+    # -- canvas nodes (image / video, independent of the try-on pipeline) ------- #
+
+    @app.get("/api/node/options")
+    def api_node_options():
+        return node_options()
+
+    @app.post("/api/node/image")
+    def api_node_image(body: NodeImageBody):
+        try:
+            ratio, enum = resolve_image_aspect(body.aspect_ratio, body.aspect)
+        except (AspectNotVerifiedError, UnsupportedOptionError, ValueError) as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if body.seed is not None and not (1 <= int(body.seed) <= 2147483647):
+            raise HTTPException(status_code=400, detail="seed phải nằm trong int32: 1..2147483647")
+        if body.reference_image_path and not resolve_input_path(body.reference_image_path).is_file():
+            raise HTTPException(status_code=400, detail=f"Không tìm thấy ảnh đính kèm: {body.reference_image_path}")
+        if not body.dry_run:
+            if not body.confirm:
+                raise HTTPException(status_code=400,
+                                    detail="Chạy thật cần confirm=true. Mỗi ảnh ~1 credit nếu Google nhận (reject = 0).")
+            if not pool.available_accounts():
+                raise HTTPException(status_code=423,
+                                    detail="Tất cả account đang cooldown/disabled — chờ hết cooldown hoặc reset trong tab Pool.")
+        job = manager.submit("node_image", {
+            "prompt": body.prompt.strip(),
+            "aspect_ratio": ratio,
+            "aspect": enum,
+            "seed": body.seed,
+            "reference_image_path": body.reference_image_path,
+            "project_id": body.project_id,
+            "dry_run": body.dry_run,
+            "remove_watermark": body.remove_watermark,
+        })
+        return {"job_id": job.id, "kind": "image", "aspect_ratio": ratio, "aspect": enum}
+
+    @app.post("/api/node/video")
+    def api_node_video(body: NodeVideoBody):
+        try:
+            ratio = normalize_video_ratio(body.aspect_ratio)
+            resolution = normalize_video_resolution(body.resolution)
+            duration = validate_video_duration(body.duration_s)
+            image_ratio, _image_enum = resolve_image_aspect(body.image_aspect_ratio)
+        except (AspectNotVerifiedError, UnsupportedOptionError, ValueError) as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if not body.frame_path and not body.auto_image:
+            raise HTTPException(
+                status_code=400,
+                detail="Flow chỉ hỗ trợ image-to-video: cần ảnh đính kèm (frame_path) "
+                       "hoặc bật auto_image=true để tạo ảnh khung hình trước.",
+            )
+        if body.frame_path and not resolve_input_path(body.frame_path).is_file():
+            raise HTTPException(status_code=400, detail=f"Không tìm thấy ảnh đính kèm: {body.frame_path}")
+        if not body.dry_run:
+            if not body.confirm:
+                raise HTTPException(status_code=400,
+                                    detail="Chạy thật cần confirm=true. Mỗi video ~1 credit nếu Google nhận (reject = 0).")
+            if not pool.available_accounts():
+                raise HTTPException(status_code=423,
+                                    detail="Tất cả account đang cooldown/disabled — chờ hết cooldown hoặc reset trong tab Pool.")
+        job = manager.submit("node_video", {
+            "prompt": body.prompt.strip(),
+            "frame_path": body.frame_path,
+            "image_prompt": body.image_prompt,
+            "image_aspect_ratio": image_ratio,
+            "auto_image": body.auto_image,
+            "aspect_ratio": ratio,
+            "seed": body.seed,
+            "resolution": resolution,
+            "duration_s": duration,
+            "project_id": body.project_id,
+            "dry_run": body.dry_run,
+            "remove_watermark": body.remove_watermark,
+        })
+        return {
+            "job_id": job.id, "kind": "video", "aspect_ratio": ratio,
+            "resolution": resolution, "duration_s": duration, "frame_source": ("provided" if body.frame_path else "generated"),
+        }
+
+    @app.get("/api/node/files/{file_path:path}")
+    def api_node_file(file_path: str):
+        base = manager.node_out.resolve()
+        p = (base / file_path).resolve()
+        if not p.is_relative_to(base) or not p.is_file():
+            raise HTTPException(status_code=404, detail="không tìm thấy file node")
+        return FileResponse(p)
 
     # -- jobs ------------------------------------------------------------------ #
 

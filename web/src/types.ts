@@ -270,3 +270,109 @@ export interface TryOnRunManifest {
   final_video_url?: string | null;
 }
 
+// --------------------------------------------------------------------------- //
+// Canvas node media (images / videos) — /api/node/*
+// --------------------------------------------------------------------------- //
+
+export interface NodeMediaOptions {
+  image: {
+    aspect_ratios: Record<string, number>;
+    verified_aspect_ratios: string[];
+    default_aspect_ratio: string;
+    supports_reference_image: boolean;
+    supports_seed: boolean;
+    supports_watermark_removal: boolean;
+  };
+  video: {
+    aspect_ratios: string[];
+    default_aspect_ratio: string;
+    durations_s: number[];
+    resolutions: string[];
+    default_resolution: string;
+    supports_starting_frame: boolean;
+    supports_text_to_video: boolean;
+    auto_image_chain: boolean;
+    supports_seed: boolean;
+    supports_watermark_removal: boolean;
+  };
+}
+
+export interface NodeImageRequest {
+  prompt: string;
+  aspect_ratio?: string;
+  aspect?: number;
+  seed?: number | null;
+  reference_image_path?: string | null;
+  project_id?: string | null;
+  dry_run?: boolean;
+  remove_watermark?: boolean;
+  confirm?: boolean;
+}
+
+export interface NodeVideoRequest {
+  prompt: string;
+  aspect_ratio?: string;
+  frame_path?: string | null;
+  image_prompt?: string | null;
+  image_aspect_ratio?: string;
+  auto_image?: boolean;
+  seed?: number | null;
+  resolution?: string;
+  duration_s?: number;
+  project_id?: string | null;
+  dry_run?: boolean;
+  remove_watermark?: boolean;
+  confirm?: boolean;
+}
+
+export interface NodeImageResult {
+  status: "ok" | "ok_no_download" | "rejected" | "dry_run" | "failed" | string;
+  prompt: string;
+  aspect_ratio: string;
+  aspect_enum: number;
+  project_id: string;
+  seed_used?: number | null;
+  run_id: string;
+  run_dir: string;
+  file_path?: string | null;
+  file_url?: string | null;
+  file_bytes?: number | null;
+  width?: number | null;
+  height?: number | null;
+  resolution?: number[] | null;
+  signed_url?: string | null;
+  media_id?: string | null;
+  reference_sha256?: string | null;
+  reference_media_id?: string | null;
+  dry_run?: boolean;
+  elapsed_s?: number;
+  reason?: string | null;
+  hint?: string | null;
+  account_id?: string | null;
+}
+
+export interface NodeVideoResult {
+  status: "ok" | "dry_run" | string;
+  prompt: string;
+  aspect_ratio: string;
+  run_id: string;
+  run_dir: string;
+  project_id: string;
+  seed_used?: number | null;
+  video_path?: string | null;
+  video_url?: string | null;
+  video_bytes?: number | null;
+  resolution: string;
+  duration_s: number;
+  frame_path?: string | null;
+  frame_url?: string | null;
+  frame_source?: "provided" | "generated" | null;
+  image_prompt?: string | null;
+  watermark_removed?: boolean;
+  dry_run?: boolean;
+  elapsed_s?: number;
+  reason?: string | null;
+  hint?: string | null;
+  account_id?: string | null;
+}
+

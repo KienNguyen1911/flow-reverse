@@ -42,9 +42,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
-from ..Bridge.flow_bridge import DEFAULT_CDP_URL, FlowBridge
+from ..Bridge.flow_bridge import DEFAULT_CDP_URL
 from ..Bridge.flow_video_bridge import (
-    FlowVideoBridge,
     concatenate_two_videos,
     extract_last_video_frame,
 )
@@ -55,7 +54,7 @@ from ..Bridge.gemini_bridge import (
     parse_gemini_video_prompts,
 )
 from .flow_client import FlowClient
-from .flow_models import ProjectInfo
+from .media_service import MediaService, resolve_input_path
 from .shopee_downloader import ShopeeAssetDownloader, ShopeeProductInfo
 from .watermark_remover import remove_image_watermark, remove_video_watermark
 
@@ -107,7 +106,11 @@ class AutoTryOnPipeline:
         self.out_root = Path(out_root) if out_root else DEFAULT_OUT_DIR
         self._on_event = on_event or (lambda kind, msg, data: None)
         self.shopee_downloader = ShopeeAssetDownloader(out_dir=self.out_root)
-        self.flow_video = FlowVideoBridge(cdp_url=self.cdp_url, log=self._bridge_log)
+        self.media = MediaService(
+            cdp_url=self.cdp_url,
+            out_dir=self.out_root,
+            log=self._bridge_log,
+        )
 
     def _log(self, kind: str, message: str, data: Optional[dict] = None) -> None:
         self._on_event(kind, message, data or {})
@@ -117,28 +120,7 @@ class AutoTryOnPipeline:
         self._log(kind, message)
 
     def _resolve_local_path(self, raw: Path | str) -> Path:
-        s = str(raw).strip()
-        if s.startswith("/api/tryon/files/"):
-            rel = s[len("/api/tryon/files/"):].lstrip("/")
-            cand = (self.out_root / rel).resolve()
-            if cand.exists():
-                return cand
-        if s.startswith("/api/uploads/"):
-            rel = s[len("/api/uploads/"):].lstrip("/")
-            cand = (ROOT / "out" / "uploads" / rel).resolve()
-            if cand.exists():
-                return cand
-        if s.startswith("/api/assets/"):
-            rel = s[len("/api/assets/"):].lstrip("/")
-            cand = (ROOT / "assets" / rel).resolve()
-            if cand.exists():
-                return cand
-        p = Path(s)
-        if p.is_file():
-            return p.resolve()
-        if (ROOT / p).is_file():
-            return (ROOT / p).resolve()
-        return p.resolve()
+        return resolve_input_path(raw, run_roots=[self.out_root])
 
     def run(
         self,
@@ -457,20 +439,10 @@ class AutoTryOnPipeline:
                 resolved_proj_id = project_id
                 if not dry_run and not resolved_proj_id:
                     try:
-                        client = FlowClient(cdp_url=self.cdp_url)
-                        st = client.status()
-                        if st.flow_project_id:
-                            resolved_proj_id = st.flow_project_id
-                            self._log("info", f"Tự động dùng dự án đang mở trên Flow: {resolved_proj_id}")
-                        else:
-                            listed = client.list_projects()
-                            if listed:
-                                resolved_proj_id = listed[0].id
-                                self._log("info", f"Tự động dùng dự án có sẵn: {listed[0].title} ({resolved_proj_id[:8]}…)")
-                            else:
-                                new_p = client.create_project("Affiliate Try-On")
-                                resolved_proj_id = new_p.id
-                                self._log("info", f"Tự động tạo dự án mới: {new_p.title} ({resolved_proj_id[:8]}…)")
+                        resolved_proj_id = self.media.resolve_project(
+                            create_title="Affiliate Try-On",
+                            on_event=self._on_event,
+                        )
                     except Exception as e:
                         self._log("warn", f"Không thể tự động phát hiện project trên Flow: {e}")
 
@@ -581,15 +553,16 @@ class AutoTryOnPipeline:
                     self._log("info", "[DRY-RUN] Giả lập tạo Video 1...")
                     self._generate_dummy_video(video_1_path, duration_s=2)
                 else:
-                    self.flow_video.generate_video_flow(
+                    self.media.animate_frame(
                         frame_path=first_frame_path,
-                        prompt_text=v_prompt_1,
+                        prompt=v_prompt_1,
                         dest_path=video_1_path,
                         duration_s=8,
                         timeout_s=300.0,
                         project_id=resolved_proj_id,
                         aspect_ratio=aspect_ratio,
                         resolution="1080p",
+                        on_event=self._on_event,
                     )
                     if not is_single and remove_watermark and video_1_path.is_file():
                         self._log("step", "Đang tự động xóa watermark (✦) trên Video 1...")
@@ -672,15 +645,16 @@ class AutoTryOnPipeline:
                         self._log("info", "[DRY-RUN] Giả lập tạo Video 2...")
                         self._generate_dummy_video(video_2_path, duration_s=2)
                     else:
-                        self.flow_video.generate_video_flow(
+                        self.media.animate_frame(
                             frame_path=last_frame_path,
-                            prompt_text=v_prompt_2,
+                            prompt=v_prompt_2,
                             dest_path=video_2_path,
                             duration_s=8,
                             timeout_s=300.0,
                             project_id=resolved_proj_id,
                             aspect_ratio=aspect_ratio,
                             resolution="1080p",
+                            on_event=self._on_event,
                         )
                         if remove_watermark and video_2_path.is_file():
                             self._log("step", "Đang tự động xóa watermark (✦) trên Video 2...")

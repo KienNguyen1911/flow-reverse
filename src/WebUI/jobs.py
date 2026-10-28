@@ -14,6 +14,8 @@ Job kinds:
   batch_generate  J items (t2i/i2i) across the allocated working set
   create_project  jHPbke  (0 credit; creates a REAL project in the account)
   list_projects   UpteDb  (0 credit read)
+  node_image      one canvas image node (MediaService, optional i2i attachment)
+  node_video      one canvas video node (MediaService, i2v or image→video chain)
 
 Batch item format (``params["items"]``, or a storyboard JSON via
 ``params["storyboard_path"]`` — see ``configs/storyboard_100.json``):
@@ -48,6 +50,7 @@ from ..Workflows.account_pool import (
 )
 from ..Workflows.flow_client import CircuitOpenError, FlowClient
 from ..Workflows.flow_models import ProjectInfo, ReferenceTemplate, parse_project_ref
+from ..Workflows.media_service import MediaService
 
 ROOT = Path(__file__).resolve().parents[2]
 TERMINAL_STATES = {"succeeded", "failed", "rejected"}
@@ -735,6 +738,7 @@ class JobManager:
         self.pool = pool
         self.store = store
         self.out_root = Path(out_root)
+        self.node_out = self.out_root.parent / "nodes"
         self._jobs: dict[str, Job] = {}
         self._order: list[str] = []
         self._lock = threading.RLock()
@@ -822,6 +826,12 @@ class JobManager:
             return
         if kind == "auto_tryon":
             self._run_auto_tryon(job)
+            return
+        if kind == "node_image":
+            self._run_node_image(job)
+            return
+        if kind == "node_video":
+            self._run_node_video(job)
             return
         raise ValueError(f"unknown job kind: {kind}")
 
@@ -920,6 +930,89 @@ class JobManager:
             job.set_state("rejected")
         else:
             job.set_state("failed")
+
+    # -- node media (canvas) ------------------------------------------------------ #
+
+    def _node_service(self, account: ActiveAccount, job: Job) -> MediaService:
+        aid = account.config.id
+        return MediaService(
+            cdp_url=account.cdp_url,
+            out_dir=self.node_out,
+            account_id=aid,
+            registry=self.pool.registry,
+            log=lambda kind, msg: job.add_event(kind, f"[{aid}] {msg}"),
+        )
+
+    def _run_node_image(self, job: Job) -> None:
+        params = job.params
+        account, _client = self._acquire_and_client(job)
+        aid = account.config.id
+        svc = self._node_service(account, job)
+        try:
+            res = svc.generate_image(
+                prompt=params["prompt"],
+                aspect_ratio=params.get("aspect_ratio"),
+                aspect=params.get("aspect"),
+                seed=params.get("seed"),
+                reference_image=params.get("reference_image_path"),
+                project_id=params.get("project_id"),
+                dry_run=bool(params.get("dry_run")),
+                remove_watermark=bool(params.get("remove_watermark", True)),
+                on_event=job.add_event,
+            )
+        except Exception as exc:
+            self.pool.report_item_result(aid, "failed", error=f"{type(exc).__name__}: {exc}")
+            raise
+        self.pool.report_item_result(
+            aid,
+            res.status,
+            error=None if res.status in ("ok", "ok_no_download", "dry_run") else (res.reason or res.hint),
+        )
+        d = res.to_dict()
+        d["account_id"] = aid
+        if res.file_path:
+            d["file_url"] = f"/api/node/files/{res.run_id}/{Path(res.file_path).name}"
+        job.result = d
+        if res.status in ("ok", "ok_no_download", "dry_run"):
+            job.set_state("succeeded")
+        elif res.status == "rejected":
+            job.set_state("rejected")
+        else:
+            job.set_state("failed")
+
+    def _run_node_video(self, job: Job) -> None:
+        params = job.params
+        account, _client = self._acquire_and_client(job)
+        aid = account.config.id
+        svc = self._node_service(account, job)
+        try:
+            res = svc.generate_video(
+                prompt=params["prompt"],
+                frame_path=params.get("frame_path"),
+                aspect_ratio=params.get("aspect_ratio") or "9:16",
+                seed=params.get("seed"),
+                resolution=params.get("resolution") or "1080p",
+                duration_s=params.get("duration_s") or 8,
+                project_id=params.get("project_id"),
+                dry_run=bool(params.get("dry_run")),
+                remove_watermark=bool(params.get("remove_watermark", True)),
+                auto_image=bool(params.get("auto_image", True)),
+                image_prompt=params.get("image_prompt"),
+                image_aspect_ratio=params.get("image_aspect_ratio") or "16:9",
+                on_event=job.add_event,
+            )
+        except Exception as exc:
+            self.pool.report_item_result(aid, "failed", error=f"{type(exc).__name__}: {exc}")
+            raise
+        self.pool.report_item_result(aid, "ok" if res.status == "ok" else "dry_run")
+        d = res.to_dict()
+        d["account_id"] = aid
+        if res.video_path:
+            d["video_url"] = f"/api/node/files/{res.run_id}/{Path(res.video_path).name}"
+        if res.frame_path:
+            d["frame_url"] = f"/api/node/files/{res.run_id}/{Path(res.frame_path).name}"
+        job.result = d
+        job.set_state("succeeded")
 
     def _run_project_op(self, job: Job) -> None:
         params = job.params
