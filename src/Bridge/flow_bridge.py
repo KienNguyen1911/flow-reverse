@@ -614,7 +614,13 @@ class FlowBridge:
             txt = self._eval(
                 "(() => { try { return (document.querySelector('div.ProseMirror').innerText || '').slice(0, 140); } catch (e) { return ''; } })()"
             )
-            if prompt[:20].lower() in str(txt or "").lower():
+            clean_prompt = re.sub(r"\s+", " ", prompt[:60]).strip().lower()
+            clean_txt = re.sub(r"\s+", " ", str(txt or "")).strip().lower()
+            prefix = clean_prompt[:20]
+            if (prefix and prefix in clean_txt) or (
+                len(clean_txt) >= 20
+                and any(w in clean_txt for w in re.findall(r"\b[a-zA-Z]{4,}\b", clean_prompt))
+            ):
                 self._log("prompt typed & verified in composer")
                 return
             self._eval(

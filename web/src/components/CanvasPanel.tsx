@@ -387,6 +387,7 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
   const [drawerNodeId, setDrawerNodeId] = useState<string | null>(null);
   const [aiGeneratingId, setAiGeneratingId] = useState<string | null>(null);
   const [jitPromptEnabled, setJitPromptEnabled] = useState<boolean>(true);
+  const [skillsList, setSkillsList] = useState<{ id: string; name: string }[]>([]);
   const [confirmTarget, setConfirmTarget] = useState<
     { mode: "workflow" } | { mode: "node"; nodeId: string } | null
   >(null);
@@ -429,7 +430,7 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
     }
   }, [graph]);
 
-  // -- node options ---------------------------------------------------------- //
+  // -- node options & agent skills ------------------------------------------ //
   useEffect(() => {
     api
       .nodeOptions()
@@ -437,9 +438,21 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
       .catch(() => {
         /* fallback */
       });
+
+    api
+      .agentSkills()
+      .then((res) => {
+        if (res.skills) {
+          setSkillsList(res.skills.map((s) => ({ id: s.id, name: s.name })));
+        }
+      })
+      .catch(() => {});
   }, []);
 
   const patchNode = useCallback((id: string, patch: Partial<CanvasNode>) => {
+    if (nodesRef.current) {
+      nodesRef.current = nodesRef.current.map((n) => (n.id === id ? { ...n, ...patch } : n));
+    }
     setGraph((g) => ({
       ...g,
       nodes: g.nodes.map((n) => (n.id === id ? { ...n, ...patch } : n)),
@@ -659,6 +672,10 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
         }
         const patch = jobPatch(n, final);
         patchNode(nodeId, patch);
+        Object.assign(n, patch);
+        if (nodesRef.current) {
+          nodesRef.current = nodesRef.current.map((x) => (x.id === nodeId ? { ...x, ...patch } : x));
+        }
         const ok = final.state === "succeeded";
         if (!ok && !dry) {
           const typeName =
@@ -702,6 +719,8 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
           node_id: target.id,
           node_type: target.type,
           upstream_media_urls: sRes.urls,
+          skill_id: target.agentSkillId || undefined,
+          custom_hint: target.agentCustomHint || undefined,
           is_video_continuation: isCont,
         });
 
@@ -741,7 +760,8 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
         const srcOk = new Map<string, boolean>();
         for (const n of current.filter((x) => x.type === "ref")) srcOk.set(n.id, !!n.fileUrl);
 
-        for (const n of runnable) {
+        for (const item of runnable) {
+          const n = nodesRef.current.find((x) => x.id === item.id) || item;
           const sids = getNodeSourceIds(n);
           if (sids.some((sid) => srcOk.get(sid) === false)) {
             patchNode(n.id, {
@@ -763,11 +783,14 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
                   node_id: n.id,
                   node_type: n.type,
                   upstream_media_urls: sRes.urls,
+                  skill_id: n.agentSkillId || undefined,
+                  custom_hint: n.agentCustomHint || undefined,
                   is_video_continuation: isVideoContinuation(nodesRef.current, n),
                 });
                 if (aiRes.ok && aiRes.prompt) {
                   patchNode(n.id, { prompt: aiRes.prompt });
                   n.prompt = aiRes.prompt;
+                  item.prompt = aiRes.prompt;
                 }
               } catch (e: any) {
                 console.warn("Lỗi sinh prompt JIT, tiếp tục với prompt sẵn có:", e);
@@ -973,12 +996,16 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
 
   useImperativeHandle(
     ref,
-    () => ({
-      addNode,
-      loadTemplate,
-      runWorkflow,
-      openConfirmWorkflow: () => setConfirmTarget({ mode: "workflow" }),
-    }),
+    () => {
+      const handle = {
+        addNode,
+        loadTemplate,
+        runWorkflow,
+        openConfirmWorkflow: () => setConfirmTarget({ mode: "workflow" }),
+      };
+      if (typeof window !== "undefined") (window as any).__canvas = handle;
+      return handle;
+    },
     [addNode, loadTemplate, runWorkflow],
   );
 
@@ -1224,6 +1251,7 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
               onOpenDrawer={(id) => setDrawerNodeId(id)}
               aiGeneratingId={aiGeneratingId}
               onGenerateAiPrompt={handleGenerateAiPrompt}
+              skillsList={skillsList}
               onHeaderDown={(e) => {
                 e.stopPropagation();
                 dragRef.current = { kind: "node", id: n.id, sx: e.clientX, sy: e.clientY, ox: n.x, oy: n.y };
@@ -1304,6 +1332,7 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
         onRunNode={(id, dry) => void runNodeNow(id, dry)}
         onRemoveNode={removeNode}
         onUpdatePrompt={(id, prompt) => patchNode(id, { prompt })}
+        onUpdateNode={patchNode}
       />
 
       {/* Confirm Modal (Real Run) */}
@@ -1399,9 +1428,10 @@ function CanvasNodeCard(props: {
   onOpenDrawer: (id: string) => void;
   aiGeneratingId?: string | null;
   onGenerateAiPrompt?: (id: string) => void;
+  skillsList?: { id: string; name: string }[];
   onHeaderDown: (e: React.PointerEvent) => void;
 }) {
-  const { n, allNodes, imageRatios, verifiedRatios, videoRatios, resolutions, linking, wfBusy, aiGeneratingId, onGenerateAiPrompt } = props;
+  const { n, allNodes, imageRatios, verifiedRatios, videoRatios, resolutions, linking, wfBusy, aiGeneratingId, onGenerateAiPrompt, skillsList } = props;
   const st = statusStyle(n.status);
   const isRef = n.type === "ref";
   const isImg = n.type === "image";
@@ -1699,29 +1729,46 @@ function CanvasNodeCard(props: {
               )}
             </div>
 
-            <div className="flex items-center justify-between mt-0.5">
-              <span className="text-[10px] font-semibold text-mut">Prompt mô tả ảnh</span>
-              {onGenerateAiPrompt && (
-                <button
-                  type="button"
-                  disabled={aiGeneratingId === n.id || wfBusy}
-                  onClick={() => onGenerateAiPrompt(n.id)}
-                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] border border-acc/40 bg-acc/10 text-[9.5px] font-bold text-acc hover:bg-acc/20 hover:border-acc/70 transition-all cursor-pointer disabled:opacity-40"
-                  title="Local AI Agent sẽ phân tích ảnh kết quả nguồn để sinh prompt chuẩn"
-                >
-                  {aiGeneratingId === n.id ? (
-                    <>
-                      <Spinner size={9} />
-                      <span>Đang tạo…</span>
-                    </>
-                  ) : (
-                    <>
-                      <Sparkle size={10} weight="fill" className="text-acc" />
-                      <span>✨ AI Prompt</span>
-                    </>
-                  )}
-                </button>
-              )}
+            <div className="flex items-center justify-between mt-0.5 gap-1">
+              <span className="text-[10px] font-semibold text-mut shrink-0">Prompt ảnh</span>
+              <div className="flex items-center gap-1 shrink-0">
+                {skillsList && skillsList.length > 0 && (
+                  <select
+                    value={n.agentSkillId ?? ""}
+                    onChange={(e) => props.onFieldChange({ agentSkillId: e.target.value || null })}
+                    className="h-5 rounded border border-line2 bg-panel px-1 text-[9px] text-fg focus:border-acc outline-none cursor-pointer max-w-[115px] truncate"
+                    title="Chọn skill quy chuẩn AI tạo prompt cho node này"
+                  >
+                    <option value="">(Tự động)</option>
+                    {skillsList.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                {onGenerateAiPrompt && (
+                  <button
+                    type="button"
+                    disabled={aiGeneratingId === n.id || wfBusy}
+                    onClick={() => onGenerateAiPrompt(n.id)}
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] border border-acc/40 bg-acc/10 text-[9.5px] font-bold text-acc hover:bg-acc/20 hover:border-acc/70 transition-all cursor-pointer disabled:opacity-40"
+                    title="Local AI Agent sẽ phân tích ảnh kết quả nguồn để sinh prompt chuẩn"
+                  >
+                    {aiGeneratingId === n.id ? (
+                      <>
+                        <Spinner size={9} />
+                        <span>Đang tạo…</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkle size={10} weight="fill" className="text-acc" />
+                        <span>✨ AI Prompt</span>
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
             </div>
 
             <textarea
@@ -1790,29 +1837,46 @@ function CanvasNodeCard(props: {
               </p>
             )}
 
-            <div className="flex items-center justify-between mt-0.5">
-              <span className="text-[10px] font-semibold text-mut">Prompt chuyển động video</span>
-              {onGenerateAiPrompt && (
-                <button
-                  type="button"
-                  disabled={aiGeneratingId === n.id || wfBusy}
-                  onClick={() => onGenerateAiPrompt(n.id)}
-                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] border border-acc/40 bg-acc/10 text-[9.5px] font-bold text-acc hover:bg-acc/20 hover:border-acc/70 transition-all cursor-pointer disabled:opacity-40"
-                  title="Local AI Agent sẽ nhìn vào ảnh First Frame hoặc Last Frame nguồn để viết prompt chuyển động nối tiếp chuẩn xác"
-                >
-                  {aiGeneratingId === n.id ? (
-                    <>
-                      <Spinner size={9} />
-                      <span>Đang tạo…</span>
-                    </>
-                  ) : (
-                    <>
-                      <Sparkle size={10} weight="fill" className="text-acc" />
-                      <span>✨ AI Prompt</span>
-                    </>
-                  )}
-                </button>
-              )}
+            <div className="flex items-center justify-between mt-0.5 gap-1">
+              <span className="text-[10px] font-semibold text-mut shrink-0">Prompt video</span>
+              <div className="flex items-center gap-1 shrink-0">
+                {skillsList && skillsList.length > 0 && (
+                  <select
+                    value={n.agentSkillId ?? ""}
+                    onChange={(e) => props.onFieldChange({ agentSkillId: e.target.value || null })}
+                    className="h-5 rounded border border-line2 bg-panel px-1 text-[9px] text-fg focus:border-acc outline-none cursor-pointer max-w-[115px] truncate"
+                    title="Chọn skill quy chuẩn AI tạo prompt cho video"
+                  >
+                    <option value="">(Tự động)</option>
+                    {skillsList.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                {onGenerateAiPrompt && (
+                  <button
+                    type="button"
+                    disabled={aiGeneratingId === n.id || wfBusy}
+                    onClick={() => onGenerateAiPrompt(n.id)}
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] border border-acc/40 bg-acc/10 text-[9.5px] font-bold text-acc hover:bg-acc/20 hover:border-acc/70 transition-all cursor-pointer disabled:opacity-40"
+                    title="Local AI Agent sẽ nhìn vào ảnh First Frame hoặc Last Frame nguồn để viết prompt chuyển động nối tiếp chuẩn xác"
+                  >
+                    {aiGeneratingId === n.id ? (
+                      <>
+                        <Spinner size={9} />
+                        <span>Đang tạo…</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkle size={10} weight="fill" className="text-acc" />
+                        <span>✨ AI Prompt</span>
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
             </div>
 
             <textarea

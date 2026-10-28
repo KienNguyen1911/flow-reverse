@@ -67,11 +67,9 @@ class PromptAgent:
 
         # Auto-detect default based on node type
         if task.node_type == "video":
-            # If prompt hints or skill mentions lookbook
-            if task.custom_hint and "lookbook" in task.custom_hint.lower():
-                s = self.skill_mgr.get_skill("lookbook-video-prompter")
-                if s:
-                    return s
+            s = self.skill_mgr.get_skill("lookbook-video-prompter")
+            if s:
+                return s
             s = self.skill_mgr.get_skill("try-on-image-prompter")
             if s:
                 return s

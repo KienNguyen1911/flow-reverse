@@ -45,6 +45,8 @@ export interface CanvasDrawerNode {
   frameUrl?: string | null;
   reason?: string | null;
   elapsedS?: number | null;
+  agentSkillId?: string | null;
+  agentCustomHint?: string | null;
 }
 
 interface CanvasDrawerProps {
@@ -54,6 +56,7 @@ interface CanvasDrawerProps {
   onRunNode: (id: string, dry: boolean) => void;
   onRemoveNode: (id: string) => void;
   onUpdatePrompt?: (id: string, prompt: string) => void;
+  onUpdateNode?: (id: string, patch: Partial<CanvasDrawerNode>) => void;
 }
 
 const KIND_CLS: Record<string, string> = {
@@ -178,6 +181,13 @@ export function CanvasDrawer({ node, allNodes, onClose, onRunNode, onRemoveNode,
   const [skillsList, setSkillsList] = useState<{ id: string; name: string }[]>([]);
 
   useEffect(() => {
+    if (node) {
+      setSelectedSkill(node.agentSkillId ?? "");
+      setCustomHint(node.agentCustomHint ?? "");
+    }
+  }, [node?.id, node?.agentSkillId, node?.agentCustomHint]);
+
+  useEffect(() => {
     api.agentSkills().then((res) => {
       if (res.skills) {
         setSkillsList(res.skills.map((s) => ({ id: s.id, name: s.name })));
@@ -204,12 +214,15 @@ export function CanvasDrawer({ node, allNodes, onClose, onRunNode, onRemoveNode,
           return p?.type === "last_frame" || p?.type === "video";
         })();
 
+      const targetSkill = selectedSkill || node.agentSkillId || undefined;
+      const targetHint = customHint.trim() || node.agentCustomHint || undefined;
+
       const res = await api.generateNodePrompt({
         node_id: node.id,
         node_type: node.type as "image" | "video",
         upstream_media_urls: urls,
-        skill_id: selectedSkill || undefined,
-        custom_hint: customHint.trim() || undefined,
+        skill_id: targetSkill,
+        custom_hint: targetHint,
         is_video_continuation: isCont,
       });
 
@@ -615,7 +628,11 @@ export function CanvasDrawer({ node, allNodes, onClose, onRunNode, onRemoveNode,
                         <label className="text-[10px] text-mut font-semibold">Chọn Skill quy chuẩn:</label>
                         <select
                           value={selectedSkill}
-                          onChange={(e) => setSelectedSkill(e.target.value)}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setSelectedSkill(val);
+                            onUpdateNode?.(node.id, { agentSkillId: val });
+                          }}
                           className="h-7 rounded-ctl border border-line2 bg-panel px-2 text-[11px] text-fg outline-none focus:border-acc"
                         >
                           <option value="">Tự động chọn theo loại node</option>
@@ -633,7 +650,11 @@ export function CanvasDrawer({ node, allNodes, onClose, onRunNode, onRemoveNode,
                       <input
                         type="text"
                         value={customHint}
-                        onChange={(e) => setCustomHint(e.target.value)}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setCustomHint(val);
+                          onUpdateNode?.(node.id, { agentCustomHint: val });
+                        }}
                         placeholder="Ví dụ: Áo len cổ lọ màu be, phong cách tối giản studio..."
                         className="h-7 rounded-ctl border border-line2 bg-panel px-2 text-[11px] text-fg outline-none focus:border-acc"
                       />
