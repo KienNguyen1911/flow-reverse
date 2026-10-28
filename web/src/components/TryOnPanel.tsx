@@ -188,9 +188,7 @@ export function TryOnPanel({
   const terminalCallback = useMemo(
     () => (j: Job) => {
       refreshJobs();
-      if (j.state === "succeeded") {
-        refreshRuns();
-      }
+      refreshRuns();
     },
     [refreshJobs, refreshRuns]
   );
@@ -219,8 +217,8 @@ export function TryOnPanel({
   // UI View Layout State
   const [viewMode, setViewMode] = useState<"studio" | "history">("studio");
   const [isStudioCollapsed, setIsStudioCollapsed] = useState(false);
-  const [dockTab, setDockTab] = useState<"all" | "running" | "queued" | "done" | "history">("running");
-  const [dockHeight, setDockHeight] = useState<"compact" | "normal" | "expanded">("normal");
+  const [dockTab, setDockTab] = useState<"all" | "running" | "queued" | "done">("all");
+  const [jobsDrawerOpen, setJobsDrawerOpen] = useState(false);
   const [resultTab, setResultTab] = useState<"final" | "subvideos" | "frames" | "prompts">("final");
   const [historySearch, setHistorySearch] = useState("");
   const [historyStatusFilter, setHistoryStatusFilter] = useState<"all" | "succeeded" | "failed">("all");
@@ -276,12 +274,39 @@ export function TryOnPanel({
 
   const activeSteps = isJobSingle ? STEPS_SINGLE : STEPS_CHAIN;
 
-  // Determine current pipeline step
-  const currentStep = useMemo(() => {
-    if (!inspectedJob) return 0;
-    if (inspectedJob.state === "succeeded") return isJobSingle ? 2 : 4;
-    if (inspectedJob.state === "failed" || inspectedJob.state === "rejected") return 0;
+  // Resolve any run manifest associated with selectedResultRun or inspectedJob (even if failed)
+  const linkedRunManifest: TryOnRunManifest | null = useMemo(() => {
+    if (selectedResultRun) return selectedResultRun;
+    if (!inspectedJob) return null;
 
+    const jobRes = inspectedJob.result as unknown as TryOnRunManifest | undefined;
+    let detectedRunId = jobRes?.run_id || "";
+
+    if (!detectedRunId && inspectedJob.events) {
+      for (const ev of inspectedJob.events) {
+        const m = ev.message.match(/\b(tryon_\d{8}_\d{6})\b/);
+        if (m) {
+          detectedRunId = m[1];
+          break;
+        }
+      }
+    }
+
+    const fromHistory = detectedRunId
+      ? historyRuns.find((r) => r.run_id === detectedRunId) || null
+      : null;
+
+    if (fromHistory && jobRes?.run_id) {
+      return { ...fromHistory, ...jobRes, steps: jobRes.steps?.length ? jobRes.steps : fromHistory.steps };
+    }
+    if (fromHistory) return fromHistory;
+    if (jobRes?.run_id) return jobRes;
+    return null;
+  }, [selectedResultRun, inspectedJob, historyRuns]);
+
+  // Determine step reached from job event logs
+  const reachedStepFromEvents = useMemo(() => {
+    if (!inspectedJob) return 0;
     const events = inspectedJob.events || [];
     let step = 1;
     for (const ev of events) {
@@ -305,14 +330,161 @@ export function TryOnPanel({
     return step;
   }, [inspectedJob, isJobSingle]);
 
-  // Active result to display
+  // Determine current pipeline step
+  const currentStep = useMemo(() => {
+    if (linkedRunManifest?.status === "succeeded" || inspectedJob?.state === "succeeded") {
+      return isJobSingle ? 2 : 4;
+    }
+    if (linkedRunManifest?.failed_step) {
+      return linkedRunManifest.failed_step;
+    }
+    if (linkedRunManifest?.current_step) {
+      return linkedRunManifest.current_step;
+    }
+    if (!inspectedJob) return 0;
+    return reachedStepFromEvents || 1;
+  }, [inspectedJob, linkedRunManifest, isJobSingle, reachedStepFromEvents]);
+
+  // Compute detailed status for each step in activeSteps
+  const stepStatuses = useMemo(() => {
+    const isFailed =
+      (selectedResultRun && selectedResultRun.status !== "succeeded") ||
+      (!selectedResultRun && (inspectedJob?.state === "failed" || inspectedJob?.state === "rejected"));
+    const isSucceeded =
+      selectedResultRun?.status === "succeeded" ||
+      (!selectedResultRun && inspectedJob?.state === "succeeded");
+    const isRunning = !selectedResultRun && inspectedJob?.state === "running";
+
+    const failStepId =
+      linkedRunManifest?.failed_step ||
+      (isFailed ? Math.max(1, reachedStepFromEvents || 1) : null);
+
+    return activeSteps.map((s) => {
+      const manifestStep = linkedRunManifest?.steps?.find((ms) => ms.id === s.id);
+      if (manifestStep && (isFailed || isSucceeded || selectedResultRun)) {
+        return {
+          ...s,
+          status: manifestStep.status as "pending" | "running" | "succeeded" | "failed",
+          error: manifestStep.error || null,
+        };
+      }
+      if (isSucceeded) {
+        return { ...s, status: "succeeded" as const, error: null };
+      }
+      if (isRunning) {
+        if (s.id < currentStep) return { ...s, status: "succeeded" as const, error: null };
+        if (s.id === currentStep) return { ...s, status: "running" as const, error: null };
+        return { ...s, status: "pending" as const, error: null };
+      }
+      if (isFailed && failStepId !== null) {
+        if (s.id < failStepId) return { ...s, status: "succeeded" as const, error: null };
+        if (s.id === failStepId) {
+          return {
+            ...s,
+            status: "failed" as const,
+            error: inspectedJob?.error || linkedRunManifest?.error || null,
+          };
+        }
+        return { ...s, status: "pending" as const, error: null };
+      }
+      return { ...s, status: "pending" as const, error: null };
+    });
+  }, [activeSteps, linkedRunManifest, selectedResultRun, inspectedJob, currentStep, reachedStepFromEvents]);
+
+  const failedStepInfo = useMemo(() => {
+    return stepStatuses.find((s) => s.status === "failed") || null;
+  }, [stepStatuses]);
+
+  // Active result to display in full completed viewer (only when succeeded, or when user explicitly inspects a completed run)
   const activeResult: TryOnRunManifest | null = useMemo(() => {
-    if (selectedResultRun) return selectedResultRun;
-    if (inspectedJob?.result && (inspectedJob.result as unknown as TryOnRunManifest).run_id) {
-      return inspectedJob.result as unknown as TryOnRunManifest;
+    if (selectedResultRun && selectedResultRun.status === "succeeded") return selectedResultRun;
+    if (
+      !selectedResultRun &&
+      inspectedJob?.state === "succeeded" &&
+      linkedRunManifest?.run_id
+    ) {
+      return linkedRunManifest;
     }
     return null;
-  }, [selectedResultRun, inspectedJob?.result]);
+  }, [selectedResultRun, inspectedJob?.state, linkedRunManifest]);
+
+  // Resume pipeline from a specific step (skipping already-completed steps)
+  const handleResumeFromStep = async (stepId: number, sanitize = false) => {
+    const params = (inspectedJob?.params || {}) as Record<string, unknown>;
+    const runId = linkedRunManifest?.run_id || undefined;
+    const rawFfPath =
+      linkedRunManifest?.first_frame_path ||
+      (typeof params.first_frame_path === "string" ? params.first_frame_path : "") ||
+      firstFrame?.path ||
+      "";
+
+    if (!rawFfPath && !runId) {
+      showToast("Không tìm thấy ảnh First Frame của lượt chạy này để tiếp tục.", "err");
+      return;
+    }
+
+    const rawP1 =
+      linkedRunManifest?.video_prompt_1 ||
+      (typeof params.video_prompt_1 === "string" ? params.video_prompt_1 : "") ||
+      videoPrompt1;
+    const rawP2 =
+      linkedRunManifest?.video_prompt_2 ||
+      (typeof params.video_prompt_2 === "string" ? params.video_prompt_2 : "") ||
+      videoPrompt2;
+
+    const p1 = sanitize ? sanitizePromptClient(rawP1) : rawP1;
+    const p2 = sanitize ? sanitizePromptClient(rawP2) : rawP2;
+    const ar =
+      (linkedRunManifest?.aspect_ratio as "9:16" | "16:9") ||
+      (typeof params.aspect_ratio === "string" ? (params.aspect_ratio as "9:16" | "16:9") : aspectRatio) ||
+      "9:16";
+    const projId =
+      (typeof params.project_id === "string" ? params.project_id : "") ||
+      targetProjectId.trim() ||
+      undefined;
+    const singleRun = Boolean(
+      linkedRunManifest?.single_video ??
+        (typeof params.single_video === "boolean" ? params.single_video : isSingleMode)
+    );
+
+    if (p1) setVideoPrompt1(p1);
+    if (p2) setVideoPrompt2(p2);
+
+    const payload = {
+      first_frame_path: rawFfPath || undefined,
+      project_id: projId,
+      dry_run: false,
+      confirm: true,
+      auto_stitch: singleRun ? false : autoStitch,
+      remove_watermark: removeWatermark,
+      aspect_ratio: ar,
+      video_prompt_1: p1.trim() || undefined,
+      video_prompt_2: singleRun ? undefined : p2.trim() || undefined,
+      single_video: singleRun,
+      resume_run_id: runId,
+      start_from_step: stepId,
+      // Also encode resume token in image_prompt so live servers without restart still parse it in hot-reloaded pipeline
+      image_prompt: runId ? `__resume__:${runId}:${stepId}` : undefined,
+    };
+
+    try {
+      const promise = api.tryonStart(payload);
+      onStartJob(promise);
+      const res = await promise;
+      setInspectedJobId(res.job_id);
+      onSelectActiveJobId?.(res.job_id);
+      setSelectedResultRun(null);
+      refreshJobs();
+      setDockTab("running");
+      const stepLabel = activeSteps.find((s) => s.id === stepId)?.label || `Bước ${stepId}`;
+      showToast(
+        `Đã chạy tiếp Pipeline từ Bước ${stepId} (${stepLabel}) — giữ nguyên các bước trước đã xong!`,
+        "ok"
+      );
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Lỗi khi chạy tiếp pipeline", "err");
+    }
+  };
 
   // Upload handler
   const handleUploadFile = async (file: File) => {
@@ -432,6 +604,9 @@ export function TryOnPanel({
     });
   }, [historyRuns, historySearch, historyStatusFilter]);
 
+  const drawerJobs =
+    dockTab === "running" ? runningJobs : dockTab === "queued" ? queuedJobs : dockTab === "done" ? doneJobs : tryonJobs;
+
   return (
     <div className="flex flex-col gap-3 min-h-[calc(100vh-140px)]">
       {/* ================= FLOATING TOAST ================= */}
@@ -486,6 +661,7 @@ export function TryOnPanel({
             onClick={() => {
               setViewMode("studio");
               setDockTab("running");
+              setJobsDrawerOpen(true);
             }}
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-all cursor-pointer ${
               runningJobs.length > 0
@@ -507,6 +683,7 @@ export function TryOnPanel({
             onClick={() => {
               setViewMode("studio");
               setDockTab("queued");
+              setJobsDrawerOpen(true);
             }}
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-all cursor-pointer ${
               queuedJobs.length > 0
@@ -524,6 +701,7 @@ export function TryOnPanel({
             onClick={() => {
               setViewMode("studio");
               setDockTab("done");
+              setJobsDrawerOpen(true);
             }}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-ok/20 bg-ok/5 text-ok/90 hover:border-ok/40 transition-all cursor-pointer"
             title="Số job đã hoàn thành phiên làm việc"
@@ -550,6 +728,19 @@ export function TryOnPanel({
               <span>{isStudioCollapsed ? "Hiện Setup" : "Thu gọn Setup"}</span>
             </button>
           )}
+
+          <button
+            onClick={() => setJobsDrawerOpen((o) => !o)}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-ctl border text-[11.5px] font-medium transition-colors cursor-pointer ${
+              jobsDrawerOpen
+                ? "border-acc/40 bg-acc/10 text-acc"
+                : "border-line2 bg-panel2 text-mut hover:text-fg"
+            }`}
+            title="Mở/đóng danh sách Jobs"
+          >
+            <Queue size={15} />
+            <span>{`Jobs (${tryonJobs.length})`}</span>
+          </button>
 
           <button
             onClick={() => {
@@ -899,20 +1090,13 @@ export function TryOnPanel({
 
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => executeWorkflow(true)}
-                      className="flex-1 h-8 rounded-ctl border border-line2 bg-panel2 text-[11.5px] font-medium text-dim hover:text-fg hover:border-mut/60 transition-colors cursor-pointer"
-                      title="Chạy thử nghiệm không trừ credit"
-                    >
-                      Dry-Run Test
-                    </button>
-                    <button
                       onClick={() => {
                         setFirstFrame(null);
                         setVideoPrompt1(PRESETS_V1[0].prompt);
                         setVideoPrompt2(PRESETS_V2[0].prompt);
                         showToast("Đã đặt lại form tạo mới", "info");
                       }}
-                      className="px-3 h-8 rounded-ctl border border-line2 bg-panel text-[11.5px] text-mut hover:text-fg transition-colors cursor-pointer"
+                      className="flex-1 h-8 rounded-ctl border border-line2 bg-panel text-[11.5px] text-mut hover:text-fg transition-colors cursor-pointer"
                       title="Làm trống form để setup job khác"
                     >
                       Reset Form
@@ -1002,8 +1186,14 @@ export function TryOnPanel({
                         {inspectedJob?.state === "queued" && (
                           <Chip tone="neutral">Trong hàng đợi</Chip>
                         )}
-                        {(inspectedJob?.state === "failed" || inspectedJob?.state === "rejected") && (
-                          <Chip tone="err">Thất bại trên Flow</Chip>
+                        {(inspectedJob?.state === "failed" ||
+                          inspectedJob?.state === "rejected" ||
+                          (selectedResultRun && selectedResultRun.status !== "succeeded")) && (
+                          <Chip tone="err">
+                            {failedStepInfo
+                              ? `Lỗi tại Bước ${failedStepInfo.id}/${activeSteps.length}: ${failedStepInfo.label}`
+                              : "Thất bại trên Flow"}
+                          </Chip>
                         )}
                       </div>
                       <p className="text-[11px] font-mono text-mut truncate mt-0.5">
@@ -1020,6 +1210,11 @@ export function TryOnPanel({
                               ` · Thời lượng: ${formatDuration(
                                 ((inspectedJob.finished_ms || Date.now()) - inspectedJob.started_ms) / 1000
                               )}`}
+                            {linkedRunManifest?.run_id && ` · Run: ${linkedRunManifest.run_id}`}
+                          </>
+                        ) : selectedResultRun ? (
+                          <>
+                            Run: {selectedResultRun.run_id} · Thời lượng: {formatDuration(selectedResultRun.elapsed_s)}
                           </>
                         ) : (
                           "Hãy setup ở cột trái và bấm Tạo Video Thật hoặc chọn từ danh sách Jobs / Lịch sử bên dưới."
@@ -1030,9 +1225,20 @@ export function TryOnPanel({
 
                   {/* Actions for currently inspected item */}
                   <div className="flex items-center gap-2">
-                    {(activeResult || inspectedJob) && (
+                    {failedStepInfo && inspectedJob?.state !== "running" && (
                       <button
-                        onClick={() => handleReuseSettings((activeResult || inspectedJob)!)}
+                        onClick={() => handleResumeFromStep(failedStepInfo.id, false)}
+                        className="inline-flex items-center gap-1.5 px-3 h-8 rounded-ctl bg-acc text-accink text-[11.5px] font-bold hover:bg-acc2 transition-colors cursor-pointer shadow-xs"
+                        title={`Chạy tiếp pipeline từ Bước ${failedStepInfo.id} (${failedStepInfo.label}) mà không chạy lại các bước trước`}
+                      >
+                        <Play size={13} weight="fill" />
+                        <span>{`Chạy tiếp Bước ${failedStepInfo.id}`}</span>
+                      </button>
+                    )}
+
+                    {(activeResult || inspectedJob || selectedResultRun) && (
+                      <button
+                        onClick={() => handleReuseSettings((activeResult || selectedResultRun || inspectedJob)!)}
                         className="inline-flex items-center gap-1.5 px-3 h-8 rounded-ctl border border-line2 bg-panel2 text-[11.5px] font-semibold text-dim hover:text-fg hover:border-acc/50 transition-colors cursor-pointer"
                         title="Sao chép toàn bộ prompt và ảnh mẫu sang cột Setup để chạy tiếp"
                       >
@@ -1058,81 +1264,138 @@ export function TryOnPanel({
                   </div>
                 </div>
 
-                {/* Stepper (Shown when job is running or viewing a job) */}
-                {inspectedJob && (inspectedJob.state === "running" || inspectedJob.state === "queued") && (
+                {/* Stepper (Shown for running, queued, failed/rejected, and completed jobs/runs) */}
+                {(inspectedJob || selectedResultRun) && (
                   <div className="flex flex-col gap-2 pt-1">
                     <div
                       className={`grid grid-cols-2 ${
                         activeSteps.length > 2 ? "sm:grid-cols-4" : "sm:grid-cols-2"
                       } gap-2`}
                     >
-                      {activeSteps.map((s) => {
-                        const isCurrent = inspectedJob.state === "running" && currentStep === s.id;
-                        const isDone = inspectedJob.state === "running" && currentStep > s.id;
+                      {stepStatuses.map((s) => {
+                        const isRunning = s.status === "running";
+                        const isDone = s.status === "succeeded";
+                        const isFailed = s.status === "failed";
+                        const canResumeHere =
+                          inspectedJob?.state !== "running" &&
+                          inspectedJob?.state !== "queued" &&
+                          (isFailed ||
+                            isDone ||
+                            (s.status === "pending" &&
+                              stepStatuses.some((prev) => prev.id === s.id - 1 && prev.status === "succeeded")));
 
                         return (
                           <div
                             key={s.id}
-                            className={`p-2.5 rounded-ctl border text-[11px] flex flex-col transition-all ${
-                              isCurrent
+                            className={`p-2.5 rounded-ctl border text-[11px] flex flex-col justify-between transition-all ${
+                              isFailed
+                                ? "border-err bg-err/10 text-fg shadow-xs shadow-err/10"
+                                : isRunning
                                 ? "border-acc bg-acc/10 text-fg shadow-xs shadow-acc/10"
                                 : isDone
-                                ? "border-ok/30 bg-ok/5 text-fg"
+                                ? "border-ok/35 bg-ok/5 text-fg"
                                 : "border-line2 bg-panel2/50 text-mut"
                             }`}
                           >
-                            <div className="flex items-center justify-between">
-                              <span className="font-mono text-[10px] font-bold">0{s.id}</span>
-                              {isDone ? (
-                                <Check size={12} className="text-ok" weight="bold" />
-                              ) : isCurrent ? (
-                                <Spinner size={12} className="text-acc" />
-                              ) : (
-                                <span className="size-1.5 rounded-full bg-mut/40" />
-                              )}
+                            <div>
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="font-mono text-[10px] font-bold">0{s.id}</span>
+                                {isDone ? (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-ok">
+                                    <Check size={11} weight="bold" />
+                                    <span>Đã xong</span>
+                                  </span>
+                                ) : isFailed ? (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-err">
+                                    <Warning size={11} weight="fill" />
+                                    <span>Bị lỗi</span>
+                                  </span>
+                                ) : isRunning ? (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-acc">
+                                    <Spinner size={11} className="text-acc" />
+                                    <span>Đang chạy</span>
+                                  </span>
+                                ) : (
+                                  <span className="text-[9.5px] text-mut">Chờ xử lý</span>
+                                )}
+                              </div>
+                              <div className="font-semibold mt-1 truncate">{s.label}</div>
+                              <div className="text-[9.5px] text-mut truncate mt-0.5">{s.desc}</div>
                             </div>
-                            <span className="font-semibold mt-1 truncate">{s.label}</span>
-                            <span className="text-[9.5px] text-mut truncate mt-0.5">{s.desc}</span>
+
+                            {canResumeHere && (
+                              <button
+                                type="button"
+                                onClick={() => handleResumeFromStep(s.id, false)}
+                                className={`mt-2 w-full h-6 rounded text-[10px] font-bold flex items-center justify-center gap-1 transition-colors cursor-pointer ${
+                                  isFailed
+                                    ? "bg-err text-white hover:bg-err/90"
+                                    : s.status === "pending"
+                                    ? "bg-acc text-accink hover:bg-acc2"
+                                    : "border border-line2 bg-panel2/80 text-dim hover:text-fg hover:border-acc/50"
+                                }`}
+                                title={
+                                  isDone
+                                    ? `Chạy lại từ Bước ${s.id} (${s.label})`
+                                    : `Tiếp tục chạy từ Bước ${s.id} (${s.label}) — giữ nguyên kết quả các bước trước`
+                                }
+                              >
+                                {isDone ? (
+                                  <>
+                                    <ArrowCounterClockwise size={10} weight="bold" />
+                                    <span>{`Chạy lại Bước ${s.id}`}</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Play size={10} weight="fill" />
+                                    <span>{`Chạy tiếp Bước ${s.id}`}</span>
+                                  </>
+                                )}
+                              </button>
+                            )}
                           </div>
                         );
                       })}
                     </div>
 
-                    {/* Live events log box */}
-                    {inspectedJob.events && inspectedJob.events.length > 0 && (
-                      <div className="mt-1 flex flex-col gap-1">
-                        <div className="flex items-center justify-between text-[10.5px] text-mut">
-                          <span>Nhật ký thời gian thực ({inspectedJob.events.length} sự kiện)</span>
-                          <span className="font-mono">{inspectedJob.id}</span>
+                    {/* Live events log box when running/queued */}
+                    {inspectedJob &&
+                      (inspectedJob.state === "running" || inspectedJob.state === "queued") &&
+                      inspectedJob.events &&
+                      inspectedJob.events.length > 0 && (
+                        <div className="mt-1 flex flex-col gap-1">
+                          <div className="flex items-center justify-between text-[10.5px] text-mut">
+                            <span>Nhật ký thời gian thực ({inspectedJob.events.length} sự kiện)</span>
+                            <span className="font-mono">{inspectedJob.id}</span>
+                          </div>
+                          <div
+                            ref={logScrollRef}
+                            className="slim-scroll max-h-32 overflow-y-auto rounded-ctl bg-ink/80 border border-line p-2 font-mono text-[10.5px] leading-relaxed flex flex-col gap-1"
+                          >
+                            {inspectedJob.events.map((ev, i) => (
+                              <div key={i} className="flex gap-2">
+                                <span className="text-mut shrink-0">
+                                  {new Date(ev.ts_ms).toTimeString().slice(0, 8)}
+                                </span>
+                                <span
+                                  className={`shrink-0 font-bold ${
+                                    ev.kind === "error"
+                                      ? "text-err"
+                                      : ev.kind === "step"
+                                      ? "text-acc"
+                                      : ev.kind === "done"
+                                      ? "text-ok"
+                                      : "text-dim"
+                                  }`}
+                                >
+                                  [{ev.kind}]
+                                </span>
+                                <span className="text-fg/90">{ev.message}</span>
+                              </div>
+                            ))}
+                          </div>
                         </div>
-                        <div
-                          ref={logScrollRef}
-                          className="slim-scroll max-h-32 overflow-y-auto rounded-ctl bg-ink/80 border border-line p-2 font-mono text-[10.5px] leading-relaxed flex flex-col gap-1"
-                        >
-                          {inspectedJob.events.map((ev, i) => (
-                            <div key={i} className="flex gap-2">
-                              <span className="text-mut shrink-0">
-                                {new Date(ev.ts_ms).toTimeString().slice(0, 8)}
-                              </span>
-                              <span
-                                className={`shrink-0 font-bold ${
-                                  ev.kind === "error"
-                                    ? "text-err"
-                                    : ev.kind === "step"
-                                    ? "text-acc"
-                                    : ev.kind === "done"
-                                    ? "text-ok"
-                                    : "text-dim"
-                                }`}
-                              >
-                                [{ev.kind}]
-                              </span>
-                              <span className="text-fg/90">{ev.message}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+                      )}
                   </div>
                 )}
 
@@ -1240,11 +1503,11 @@ export function TryOnPanel({
                             )}
                           </div>
                           {activeResult.video_1_url ? (
-                            <div className="rounded-ctl overflow-hidden bg-black border border-line2 aspect-[3/4] max-h-[360px] flex items-center justify-center">
+                            <div className="rounded-ctl overflow-hidden bg-black border border-line2 flex items-center justify-center">
                               <video
                                 controls
                                 src={activeResult.video_1_url}
-                                className="size-full object-cover"
+                                className="max-h-[62vh] w-auto max-w-full object-contain"
                                 playsInline
                               />
                             </div>
@@ -1274,11 +1537,11 @@ export function TryOnPanel({
                             )}
                           </div>
                           {activeResult.video_2_url ? (
-                            <div className="rounded-ctl overflow-hidden bg-black border border-line2 aspect-[3/4] max-h-[360px] flex items-center justify-center">
+                            <div className="rounded-ctl overflow-hidden bg-black border border-line2 flex items-center justify-center">
                               <video
                                 controls
                                 src={activeResult.video_2_url}
-                                className="size-full object-cover"
+                                className="max-h-[62vh] w-auto max-w-full object-contain"
                                 playsInline
                               />
                             </div>
@@ -1313,11 +1576,11 @@ export function TryOnPanel({
                             )}
                           </div>
                           {activeResult.first_frame_url ? (
-                            <div className="rounded-ctl overflow-hidden bg-black border border-line2 aspect-[3/4] max-h-[360px] flex items-center justify-center">
+                            <div className="rounded-ctl overflow-hidden bg-black border border-line2 flex items-center justify-center">
                               <img
                                 src={activeResult.first_frame_url}
                                 alt="First Frame"
-                                className="size-full object-cover"
+                                className="max-h-[62vh] w-auto max-w-full object-contain"
                               />
                             </div>
                           ) : (
@@ -1346,11 +1609,11 @@ export function TryOnPanel({
                             )}
                           </div>
                           {activeResult.last_frame_url ? (
-                            <div className="rounded-ctl overflow-hidden bg-black border border-line2 aspect-[3/4] max-h-[360px] flex items-center justify-center">
+                            <div className="rounded-ctl overflow-hidden bg-black border border-line2 flex items-center justify-center">
                               <img
                                 src={activeResult.last_frame_url}
                                 alt="Last Frame"
-                                className="size-full object-cover"
+                                className="max-h-[62vh] w-auto max-w-full object-contain"
                               />
                             </div>
                           ) : (
@@ -1407,61 +1670,163 @@ export function TryOnPanel({
                       </div>
                     )}
                   </div>
-                ) : inspectedJob && (inspectedJob.state === "failed" || inspectedJob.state === "rejected") ? (
+                ) : (inspectedJob && (inspectedJob.state === "failed" || inspectedJob.state === "rejected")) ||
+                  (selectedResultRun && selectedResultRun.status !== "succeeded") ? (
                   /* Failed Job Diagnostic & Recovery Panel */
                   <div className="flex flex-col gap-3 pt-1">
                     <div className="rounded-ctl border border-err/30 bg-err/5 p-3.5 flex flex-col gap-2.5">
                       <div className="flex items-start gap-2.5">
                         <Warning size={18} weight="fill" className="text-err shrink-0 mt-0.5" />
                         <div className="flex-1 min-w-0">
-                          <h4 className="text-[13px] font-bold text-err">
-                            Quá trình tạo Video gặp lỗi trên Google Flow
-                          </h4>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h4 className="text-[13px] font-bold text-err">
+                              {failedStepInfo
+                                ? `Pipeline dừng tại Bước ${failedStepInfo.id}/${activeSteps.length}: ${failedStepInfo.label}`
+                                : "Quá trình tạo Video gặp lỗi trên Google Flow"}
+                            </h4>
+                            {linkedRunManifest?.run_id && (
+                              <span className="px-2 py-0.5 rounded bg-panel2 border border-line text-[10.5px] font-mono text-dim">
+                                {linkedRunManifest.run_id}
+                              </span>
+                            )}
+                          </div>
                           <p className="text-[11.5px] font-mono text-fg/90 mt-1 break-words">
-                            {inspectedJob.error || "Không nhận được phản hồi video từ Google Flow."}
+                            {inspectedJob?.error ||
+                              linkedRunManifest?.error ||
+                              "Không nhận được phản hồi video từ Google Flow."}
                           </p>
                         </div>
                       </div>
 
                       <div className="rounded bg-panel2/80 border border-line p-2.5 text-[11px] text-dim leading-relaxed flex flex-col gap-1">
-                        <span className="font-semibold text-fg">💡 Nguyên nhân thường gặp & Cách khắc phục:</span>
-                        <span>
-                          • <strong>Chính sách người nổi tiếng (Celebrity Filter):</strong> Khi dùng ảnh mẫu thật kèm các cụm từ như{" "}
-                          <code className="text-acc">&quot;exact young Korean woman from the reference image&quot;</code> hoặc{" "}
-                          <code className="text-acc">&quot;Strictly lock facial identity&quot;</code>, bộ lọc của Flow dễ nhận diện nhầm là người nổi tiếng và chặn tạo video (hoàn lại credit).
+                        <span className="font-semibold text-fg">
+                          💡 Chế độ Resume thông minh (Không chạy lại từ đầu):
                         </span>
                         <span>
-                          • <strong>Cơ chế tự động mới:</strong> Hệ thống đã được tích hợp bộ lọc tự động loại bỏ các cụm từ nhạy cảm, tự bấm nút{" "}
-                          <strong>Thử lại (Retry)</strong> trên thẻ lỗi của Flow và rút ngắn prompt khi cần.
+                          • Các bước đã hoàn thành (đánh dấu <strong className="text-ok">✓ Đã xong</strong> trên thanh tiến trình phía trên) đã được lưu an toàn trong thư mục run.
+                        </span>
+                        <span>
+                          • Khi bấm <strong>Tiếp tục chạy từ Bước {failedStepInfo?.id || 1}</strong>, hệ thống sẽ{" "}
+                          <strong className="text-acc">bỏ qua các bước trước đó</strong> (ví dụ: giữ nguyên Video 1 &amp; Last Frame đã tạo thành công) và chỉ chạy tiếp từ bước bị gián đoạn.
                         </span>
                       </div>
 
                       <div className="flex flex-wrap items-center gap-2 pt-1">
                         <button
-                          onClick={() => {
-                            handleReuseSettings(inspectedJob);
-                            setVideoPrompt1((p) => sanitizePromptClient(p));
-                            setVideoPrompt2((p) => sanitizePromptClient(p));
-                            showToast("Đã làm sạch Prompt (bỏ từ khóa nhạy cảm) & nạp lại vào Studio!", "ok");
-                          }}
-                          className="inline-flex items-center gap-1.5 px-3 h-8 rounded-ctl bg-acc text-accink text-[11.5px] font-bold hover:bg-acc2 transition-colors cursor-pointer"
+                          onClick={() => handleResumeFromStep(failedStepInfo?.id || 1, false)}
+                          className="inline-flex items-center gap-1.5 px-3.5 h-8 rounded-ctl bg-acc text-accink text-[11.5px] font-bold hover:bg-acc2 transition-colors cursor-pointer shadow-xs"
                         >
-                          <MagicWand size={14} weight="bold" />
-                          <span>Làm sạch Prompt & Nạp vào Studio</span>
+                          <Play size={14} weight="fill" />
+                          <span>
+                            {failedStepInfo
+                              ? `Tiếp tục chạy từ Bước ${failedStepInfo.id}: ${failedStepInfo.label}`
+                              : "Tiếp tục chạy Pipeline"}
+                          </span>
                         </button>
 
                         <button
-                          onClick={() => handleReuseSettings(inspectedJob)}
+                          onClick={() => handleResumeFromStep(failedStepInfo?.id || 1, true)}
+                          className="inline-flex items-center gap-1.5 px-3 h-8 rounded-ctl border border-acc/40 bg-acc/10 text-acc text-[11.5px] font-semibold hover:bg-acc/20 transition-colors cursor-pointer"
+                          title="Làm sạch các từ khóa nhạy cảm trong Prompt rồi chạy tiếp từ bước bị lỗi"
+                        >
+                          <MagicWand size={14} weight="bold" />
+                          <span>{`Làm sạch Prompt & Chạy tiếp Bước ${failedStepInfo?.id || 1}`}</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleReuseSettings((linkedRunManifest || inspectedJob)!)}
                           className="inline-flex items-center gap-1.5 px-3 h-8 rounded-ctl border border-line2 bg-panel2 text-[11.5px] font-semibold text-dim hover:text-fg transition-colors cursor-pointer"
                         >
                           <Copy size={13} />
-                          <span>Giữ nguyên Prompt gốc</span>
+                          <span>Nạp lại vào cột Setup</span>
                         </button>
                       </div>
                     </div>
 
+                    {/* Partial Artifacts Preview (e.g., Video 1 & Last Frame already completed before Step 3 failed) */}
+                    {linkedRunManifest &&
+                      (linkedRunManifest.video_1_url ||
+                        linkedRunManifest.last_frame_url ||
+                        linkedRunManifest.first_frame_url) && (
+                        <div className="rounded-ctl border border-line2 bg-panel2/60 p-3 flex flex-col gap-2.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11.5px] font-bold text-fg flex items-center gap-1.5">
+                              <CheckCircle size={14} weight="fill" className="text-ok" />
+                              <span>Kết quả các bước đã hoàn thành trước khi dừng ({linkedRunManifest.run_id})</span>
+                            </span>
+                            <span className="text-[10.5px] text-mut">Đã lưu sẵn — không cần tạo lại</span>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                            {linkedRunManifest.first_frame_url && (
+                              <div className="p-2 rounded bg-panel border border-line flex flex-col gap-1.5">
+                                <div className="flex items-center justify-between text-[11px] font-semibold text-dim">
+                                  <span>First Frame</span>
+                                  <a
+                                    href={linkedRunManifest.first_frame_url}
+                                    download="first_frame.png"
+                                    className="text-mut hover:text-fg"
+                                  >
+                                    <DownloadSimple size={12} />
+                                  </a>
+                                </div>
+                                <div className="rounded overflow-hidden bg-black flex items-center justify-center">
+                                  <img
+                                    src={linkedRunManifest.first_frame_url}
+                                    alt="First frame"
+                                    className="max-h-[260px] w-auto max-w-full object-contain"
+                                  />
+                                </div>
+                              </div>
+                            )}
+                            {linkedRunManifest.video_1_url && (
+                              <div className="p-2 rounded bg-panel border border-ok/30 flex flex-col gap-1.5">
+                                <div className="flex items-center justify-between text-[11px] font-semibold text-ok">
+                                  <span>✓ Video 1 (0-8s) đã xong</span>
+                                  <a
+                                    href={linkedRunManifest.video_1_url}
+                                    download="video_1.mp4"
+                                    className="text-mut hover:text-fg"
+                                  >
+                                    <DownloadSimple size={12} />
+                                  </a>
+                                </div>
+                                <div className="rounded overflow-hidden bg-black flex items-center justify-center">
+                                  <video
+                                    controls
+                                    src={linkedRunManifest.video_1_url}
+                                    className="max-h-[260px] w-auto max-w-full object-contain"
+                                    playsInline
+                                  />
+                                </div>
+                              </div>
+                            )}
+                            {linkedRunManifest.last_frame_url && (
+                              <div className="p-2 rounded bg-panel border border-ok/30 flex flex-col gap-1.5">
+                                <div className="flex items-center justify-between text-[11px] font-semibold text-ok">
+                                  <span>✓ Last Frame Video 1</span>
+                                  <a
+                                    href={linkedRunManifest.last_frame_url}
+                                    download="last_frame_video_1.png"
+                                    className="text-mut hover:text-fg"
+                                  >
+                                    <DownloadSimple size={12} />
+                                  </a>
+                                </div>
+                                <div className="rounded overflow-hidden bg-black flex items-center justify-center">
+                                  <img
+                                    src={linkedRunManifest.last_frame_url}
+                                    alt="Last frame"
+                                    className="max-h-[260px] w-auto max-w-full object-contain"
+                                  />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
                     {/* Event Logs of the Failed Job */}
-                    {inspectedJob.events && inspectedJob.events.length > 0 && (
+                    {inspectedJob?.events && inspectedJob.events.length > 0 && (
                       <div className="flex flex-col gap-1">
                         <div className="flex items-center justify-between text-[10.5px] text-mut">
                           <span>Nhật ký chi tiết của Job ({inspectedJob.events.length} sự kiện)</span>
@@ -1503,7 +1868,7 @@ export function TryOnPanel({
                       Chưa chọn video kết quả nào
                     </h4>
                     <p className="text-[11.5px] text-mut max-w-[380px] mt-1 leading-relaxed">
-                      Bạn có thể chọn một run từ <strong>khay Jobs / Lịch sử</strong> bên dưới để xem lại video 16s, hoặc bấm <strong>Tạo Video Thật</strong> ở cột trái để bắt đầu lượt chạy mới.
+                      Bạn có thể chọn một run từ tab <strong>Thư viện Lịch sử</strong> hoặc mở <strong>Jobs</strong> bên phải để xem lại video 16s, hoặc bấm <strong>Tạo Video Thật</strong> ở cột trái để bắt đầu lượt chạy mới.
                     </p>
                   </div>
                 ) : null}
@@ -1511,296 +1876,6 @@ export function TryOnPanel({
             </div>
           </div>
 
-          {/* ================= BOTTOM DOCKED PIPELINE & HISTORY TRAY ================= */}
-          <Panel className="p-3 flex flex-col gap-2.5 mt-1 border-t border-line2">
-            {/* Tray Header Toolbar */}
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line pb-2">
-              <div className="flex items-center gap-1 overflow-x-auto text-[11.5px]">
-                <button
-                  onClick={() => setDockTab("running")}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-ctl font-semibold transition-colors cursor-pointer ${
-                    dockTab === "running"
-                      ? "bg-acc/15 text-acc border border-acc/30"
-                      : "text-dim hover:text-fg"
-                  }`}
-                >
-                  <span className={`size-1.5 rounded-full bg-acc ${runningJobs.length > 0 ? "animate-pulse" : ""}`} />
-                  <span>Đang chạy</span>
-                  <span className="font-mono text-[10px] bg-panel px-1 py-0.2 rounded font-bold">
-                    {runningJobs.length}
-                  </span>
-                </button>
-
-                <button
-                  onClick={() => setDockTab("queued")}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-ctl font-semibold transition-colors cursor-pointer ${
-                    dockTab === "queued"
-                      ? "bg-panel2 text-fg border border-line2"
-                      : "text-dim hover:text-fg"
-                  }`}
-                >
-                  <Hourglass size={12} />
-                  <span>Hàng đợi</span>
-                  <span className="font-mono text-[10px] bg-panel px-1 py-0.2 rounded font-bold">
-                    {queuedJobs.length}
-                  </span>
-                </button>
-
-                <button
-                  onClick={() => setDockTab("done")}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-ctl font-semibold transition-colors cursor-pointer ${
-                    dockTab === "done"
-                      ? "bg-ok/15 text-ok border border-ok/30"
-                      : "text-dim hover:text-fg"
-                  }`}
-                >
-                  <CheckCircle size={12} weight="fill" />
-                  <span>Đã xong</span>
-                  <span className="font-mono text-[10px] bg-panel px-1 py-0.2 rounded font-bold">
-                    {doneJobs.length}
-                  </span>
-                </button>
-
-                <button
-                  onClick={() => setDockTab("all")}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-ctl font-semibold transition-colors cursor-pointer ${
-                    dockTab === "all"
-                      ? "bg-panel2 text-fg border border-line2"
-                      : "text-dim hover:text-fg"
-                  }`}
-                >
-                  <Queue size={12} />
-                  <span>Tất cả Jobs ({tryonJobs.length})</span>
-                </button>
-
-                <span className="text-line2 mx-1">|</span>
-
-                <button
-                  onClick={() => setDockTab("history")}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-ctl font-semibold transition-colors cursor-pointer ${
-                    dockTab === "history"
-                      ? "bg-panel2 text-acc border border-line2"
-                      : "text-dim hover:text-fg"
-                  }`}
-                >
-                  <Clock size={12} />
-                  <span>Lịch sử Runs ({historyRuns.length})</span>
-                </button>
-              </div>
-
-              {/* Tray Height & Expansion Controls */}
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={() =>
-                    setDockHeight((h) =>
-                      h === "compact" ? "normal" : h === "normal" ? "expanded" : "compact"
-                    )
-                  }
-                  className="inline-flex items-center gap-1 text-[11px] text-mut hover:text-fg px-2 py-0.5 rounded border border-line hover:border-line2 transition-colors cursor-pointer"
-                  title="Thay đổi chiều cao khay danh sách"
-                >
-                  {dockHeight === "compact" ? (
-                    <>
-                      <CaretUp size={12} />
-                      <span>Mở rộng</span>
-                    </>
-                  ) : dockHeight === "expanded" ? (
-                    <>
-                      <CaretDown size={12} />
-                      <span>Thu gọn</span>
-                    </>
-                  ) : (
-                    <>
-                      <ArrowsOut size={12} />
-                      <span>Phóng to</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-
-            {/* Tray List Cards */}
-            <div
-              className={`slim-scroll overflow-y-auto transition-all ${
-                dockHeight === "compact"
-                  ? "max-h-24"
-                  : dockHeight === "expanded"
-                  ? "max-h-[380px]"
-                  : "max-h-48"
-              }`}
-            >
-              {dockTab !== "history" ? (
-                /* Jobs List */
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
-                  {(dockTab === "running"
-                    ? runningJobs
-                    : dockTab === "queued"
-                    ? queuedJobs
-                    : dockTab === "done"
-                    ? doneJobs
-                    : tryonJobs
-                  ).map((job) => {
-                    const isSelected = inspectedJobId === job.id;
-                    const p1 = (job.params as Record<string, string>)?.video_prompt_1 || "";
-                    const ar = (job.params as Record<string, string>)?.aspect_ratio || "9:16";
-
-                    return (
-                      <div
-                        key={job.id}
-                        onClick={() => {
-                          setInspectedJobId(job.id);
-                          onSelectActiveJobId?.(job.id);
-                          if (job.result && (job.result as unknown as TryOnRunManifest).run_id) {
-                            setSelectedResultRun(job.result as unknown as TryOnRunManifest);
-                          } else {
-                            setSelectedResultRun(null);
-                          }
-                        }}
-                        className={`p-2.5 rounded-ctl border text-[11px] flex flex-col justify-between gap-1.5 cursor-pointer transition-all ${
-                          isSelected
-                            ? "border-acc bg-acc/10 shadow-xs"
-                            : "border-line bg-panel2/60 hover:bg-panel2 hover:border-line2"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-mono text-fg font-semibold truncate">
-                            {job.id}
-                          </span>
-                          <span
-                            className={`px-1.5 py-0.5 rounded-full text-[9.5px] font-bold uppercase shrink-0 ${
-                              job.state === "running"
-                                ? "bg-acc/20 text-acc animate-pulse"
-                                : job.state === "queued"
-                                ? "bg-line2 text-dim"
-                                : job.state === "succeeded"
-                                ? "bg-ok/20 text-ok"
-                                : "bg-err/20 text-err"
-                            }`}
-                          >
-                            {job.state}
-                          </span>
-                        </div>
-
-                        <p className="text-dim line-clamp-2 text-[10.5px] leading-snug">
-                          {p1 || "(Không có mô tả prompt)"}
-                        </p>
-
-                        <div className="flex items-center justify-between text-[10px] text-mut font-mono pt-1 border-t border-line/60">
-                          <span>{ar}</span>
-                          <span>{formatRelativeTime(job.created_ms)}</span>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleReuseSettings(job);
-                            }}
-                            className="text-acc hover:underline font-sans cursor-pointer"
-                            title="Tái sử dụng prompt này"
-                          >
-                            Tái sử dụng
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-
-                  {(dockTab === "running"
-                    ? runningJobs
-                    : dockTab === "queued"
-                    ? queuedJobs
-                    : dockTab === "done"
-                    ? doneJobs
-                    : tryonJobs
-                  ).length === 0 && (
-                    <div className="col-span-full py-6 text-center text-mut text-[11.5px]">
-                      Không có job nào trong mục này. Bấm <strong>Tạo Video Thật</strong> để khởi chạy.
-                    </div>
-                  )}
-                </div>
-              ) : (
-                /* History Runs Strip */
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
-                  {historyRuns.slice(0, 24).map((run) => {
-                    const isSelected = selectedResultRun?.run_id === run.run_id;
-                    return (
-                      <div
-                        key={run.run_id}
-                        onClick={() => {
-                          setSelectedResultRun(run);
-                          setResultTab("final");
-                        }}
-                        className={`p-2.5 rounded-ctl border text-[11px] flex gap-2.5 cursor-pointer transition-all ${
-                          isSelected
-                            ? "border-acc bg-acc/10 shadow-xs"
-                            : "border-line bg-panel2/60 hover:bg-panel2 hover:border-line2"
-                        }`}
-                      >
-                        <div className="size-14 rounded bg-black shrink-0 overflow-hidden border border-line flex items-center justify-center">
-                          {run.first_frame_url ? (
-                            <img
-                              src={run.first_frame_url}
-                              alt="Thumbnail"
-                              className="size-full object-cover"
-                            />
-                          ) : (
-                            <FilmStrip size={18} className="text-mut" />
-                          )}
-                        </div>
-
-                        <div className="flex-1 min-w-0 flex flex-col justify-between">
-                          <div className="flex items-center justify-between gap-1">
-                            <span className="font-mono text-fg font-semibold truncate text-[11px]">
-                              {run.run_id}
-                            </span>
-                            <span
-                              className={`size-2 rounded-full shrink-0 ${
-                                run.status === "succeeded" ? "bg-ok" : "bg-err"
-                              }`}
-                            />
-                          </div>
-
-                          <p className="text-mut line-clamp-1 text-[10px]">
-                            {run.video_prompt_1 || run.product_title || "Video 16s"}
-                          </p>
-
-                          <div className="flex items-center justify-between text-[10px] text-mut pt-1">
-                            <span className="font-mono">{formatDuration(run.elapsed_s)}</span>
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleReuseSettings(run);
-                                }}
-                                className="text-acc hover:underline cursor-pointer"
-                                title="Lấy prompt này vào Studio"
-                              >
-                                Dùng lại
-                              </button>
-                              {run.final_video_url && (
-                                <a
-                                  href={run.final_video_url}
-                                  download={`${run.run_id}_16s.mp4`}
-                                  onClick={(e) => e.stopPropagation()}
-                                  className="text-dim hover:text-fg"
-                                  title="Tải MP4"
-                                >
-                                  <DownloadSimple size={12} />
-                                </a>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {historyRuns.length === 0 && (
-                    <div className="col-span-full py-6 text-center text-mut text-[11.5px]">
-                      Chưa có lịch sử runs nào được ghi nhận.
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </Panel>
         </div>
       ) : (
         /* ================= FULL HISTORY GALLERY VIEW ================= */
@@ -1892,14 +1967,14 @@ export function TryOnPanel({
                         <video
                           src={run.final_video_url}
                           controls
-                          className="size-full object-cover"
+                          className="size-full object-contain"
                           preload="metadata"
                         />
                       ) : run.first_frame_url ? (
                         <img
                           src={run.first_frame_url}
                           alt="First Frame"
-                          className="size-full object-cover"
+                          className="size-full object-contain"
                         />
                       ) : (
                         <div className="text-mut text-[11px] grid place-items-center">
@@ -1985,6 +2060,114 @@ export function TryOnPanel({
           </Panel>
         </div>
       )}
+
+      {/* ================= RIGHT JOBS DRAWER ================= */}
+      <aside
+        className={`fixed right-0 top-0 bottom-0 z-40 w-[360px] max-w-[92vw] bg-panel border-l border-line2 shadow-2xl flex flex-col transition-transform duration-200 ${
+          jobsDrawerOpen ? "translate-x-0" : "translate-x-full invisible"
+        }`}
+        aria-hidden={!jobsDrawerOpen}
+      >
+        <div className="flex items-center justify-between px-3.5 py-3 border-b border-line">
+          <span className="text-[13px] font-bold text-fg flex items-center gap-2">
+            <Queue size={16} className="text-acc" />
+            Jobs Video Thử Đồ
+          </span>
+          <button
+            onClick={() => setJobsDrawerOpen(false)}
+            className="size-7 grid place-items-center rounded-ctl text-mut hover:text-fg hover:bg-panel2 cursor-pointer"
+            title="Đóng"
+          >
+            <X size={15} />
+          </button>
+        </div>
+
+        <div className="flex items-center gap-1 px-3 py-2 border-b border-line text-[11.5px] overflow-x-auto">
+          {(
+            [
+              ["all", `Tất cả (${tryonJobs.length})`],
+              ["running", `Đang chạy (${runningJobs.length})`],
+              ["queued", `Hàng đợi (${queuedJobs.length})`],
+              ["done", `Đã xong (${doneJobs.length})`],
+            ] as const
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setDockTab(key)}
+              className={`px-2.5 py-1 rounded-ctl font-semibold whitespace-nowrap transition-colors cursor-pointer ${
+                dockTab === key ? "bg-acc/15 text-acc border border-acc/30" : "text-dim hover:text-fg"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div className="slim-scroll flex-1 overflow-y-auto p-3 flex flex-col gap-2">
+          {drawerJobs.map((job) => {
+            const isSelected = inspectedJobId === job.id;
+            const p1 = (job.params as Record<string, string>)?.video_prompt_1 || "";
+            const ar = (job.params as Record<string, string>)?.aspect_ratio || "9:16";
+            return (
+              <div
+                key={job.id}
+                onClick={() => {
+                  setInspectedJobId(job.id);
+                  onSelectActiveJobId?.(job.id);
+                  setViewMode("studio");
+                  if (job.result && (job.result as unknown as TryOnRunManifest).run_id) {
+                    setSelectedResultRun(job.result as unknown as TryOnRunManifest);
+                  } else {
+                    setSelectedResultRun(null);
+                  }
+                }}
+                className={`p-2.5 rounded-ctl border text-[11px] flex flex-col gap-1.5 cursor-pointer transition-all ${
+                  isSelected
+                    ? "border-acc bg-acc/10 shadow-xs"
+                    : "border-line bg-panel2/60 hover:bg-panel2 hover:border-line2"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-mono text-fg font-semibold truncate">{job.id}</span>
+                  <span
+                    className={`px-1.5 py-0.5 rounded-full text-[9.5px] font-bold uppercase shrink-0 ${
+                      job.state === "running"
+                        ? "bg-acc/20 text-acc animate-pulse"
+                        : job.state === "queued"
+                        ? "bg-line2 text-dim"
+                        : job.state === "succeeded"
+                        ? "bg-ok/20 text-ok"
+                        : "bg-err/20 text-err"
+                    }`}
+                  >
+                    {job.state}
+                  </span>
+                </div>
+                <p className="text-dim line-clamp-2 text-[10.5px] leading-snug">
+                  {p1 || "(Không có mô tả prompt)"}
+                </p>
+                <div className="flex items-center justify-between text-[10px] text-mut font-mono pt-1 border-t border-line/60">
+                  <span>{ar}</span>
+                  <span>{formatRelativeTime(job.created_ms)}</span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleReuseSettings(job);
+                    }}
+                    className="text-acc hover:underline font-sans cursor-pointer"
+                    title="Tái sử dụng prompt này"
+                  >
+                    Tái sử dụng
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+          {drawerJobs.length === 0 && (
+            <div className="py-10 text-center text-mut text-[11.5px]">Không có job nào trong mục này.</div>
+          )}
+        </div>
+      </aside>
 
       {/* ================= CONFIRMATION MODAL ================= */}
       {confirmModalOpen && (

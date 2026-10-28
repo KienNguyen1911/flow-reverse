@@ -139,6 +139,8 @@ export const api = {
     aspect_ratio?: string;
     remove_watermark?: boolean;
     single_video?: boolean;
+    resume_run_id?: string;
+    start_from_step?: number;
   }) => post("/api/tryon/start", p).then(j<{ job_id: string }>),
 
   tryonRuns: () => fetch("/api/tryon/runs").then(j<{ runs: TryOnRunManifest[] }>),

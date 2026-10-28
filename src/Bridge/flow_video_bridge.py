@@ -93,11 +93,18 @@ VIDEO_HOOK_JS = r"""
 (() => {
   window.__isVideoSubmit = u => {
     const s = String(u || '');
-    return s.indexOf('/data/batchexecute?') >= 0 &&
-           (s.indexOf('rpcids=eb1hJf') >= 0 ||
-            s.indexOf('rpcids=YhhmEf') >= 0 ||
-            s.indexOf('rpcids=ogiZ0b') >= 0 ||
-            s.indexOf('rpcids=p0UkFb') >= 0);
+    if (s.indexOf('/data/batchexecute?') < 0) return false;
+    return (
+      s.indexOf('rpcids=eb1hJf') >= 0 ||
+      s.indexOf('rpcids=MZZa6b') >= 0 ||
+      s.indexOf('rpcids=YhhmEf') >= 0 ||
+      s.indexOf('rpcids=nprQif') >= 0 ||
+      s.indexOf('rpcids=fZytfe') >= 0 ||
+      s.indexOf('rpcids=jIps6') >= 0 ||
+      s.indexOf('rpcids=IJhj9c') >= 0 ||
+      s.indexOf('rpcids=p0UkFb') >= 0 ||
+      s.indexOf('rpcids=ogiZ0b') >= 0
+    );
   };
   const isMaseQ = u => {
     const s = String(u || '');
@@ -108,8 +115,8 @@ VIDEO_HOOK_JS = r"""
     catch (e) { return false; }
   };
 
-  if (!window.__videoHook || (window.__videoHook.v || 0) < 2) {
-    window.__videoHook = {v: 2, cap: null, blocked: false, lastUpload: null};
+  if (!window.__videoHook || (window.__videoHook.v || 0) < 3) {
+    window.__videoHook = {v: 3, cap: null, blocked: false, lastUpload: null};
     const prevFetch = window.__origFetchForVideo || window.fetch;
     window.__origFetchForVideo = prevFetch;
     window.fetch = function(input, init) {
@@ -1268,19 +1275,34 @@ class FlowVideoBridge:
         return bool(info.get("preview_seen"))
 
     def _ensure_ui_video_frames_mode(self, page: Any, target_aspect: str) -> None:
-        """Ensure composer UI is in Video -> Khung hình (Frames Mode) -> 8 giây -> target_aspect."""
+        """Ensure composer UI is in Video -> Khung hình / Frames Mode (crop_free) -> 8s -> target_aspect -> x1 (bilingual VI/EN)."""
         settings_btn = page.query_selector("button.settings-trigger-button")
         if not settings_btn:
             return
         btn_txt = (settings_btn.inner_text() or "").strip()
         need_aspect_icon = "crop_9_16" if target_aspect == "9:16" else "crop_16_9"
-        if "Video" in btn_txt and "8 giây" in btn_txt and need_aspect_icon in btn_txt and page.query_selector('//button[contains(., "Bắt đầu")] | //flow-image-ingredient-chip'):
+        has_8s = ("8 giây" in btn_txt) or ("8s" in btn_txt)
+        has_start_slot = bool(
+            page.query_selector(
+                '//button[contains(., "Bắt đầu") or contains(., "Start")] | //flow-image-ingredient-chip'
+            )
+        )
+        # Note: in Ingredients mode ("Thành phần" / "Ingredients"), the composer shows "Agent" or "+" instead of "Bắt đầu"/"Start"
+        has_start_btn = bool(page.query_selector('//button[contains(., "Bắt đầu") or contains(., "Start")]'))
+        if "Video" in btn_txt and has_8s and need_aspect_icon in btn_txt and "x1" in btn_txt and has_start_btn:
             return
 
         settings_btn.click(force=True)
         page.wait_for_timeout(500)
-        for label in ["Video", "Khung hình", target_aspect, "8 giây"]:
-            r_btn = page.query_selector(f'//button[@role="radio" and contains(., "{label}")]')
+        xpath_selectors = [
+            '//button[@role="radio" and (contains(., "videocam") or contains(., "Video"))]',
+            '//button[@role="radio" and (contains(., "crop_free") or contains(., "Khung hình") or contains(., "Frames"))]',
+            f'//button[@role="radio" and contains(., "{target_aspect}")]',
+            '//button[@role="radio" and (contains(., "8 giây") or normalize-space(.)="8s")]',
+            '//button[@role="radio" and normalize-space(.)="x1"]',
+        ]
+        for xp in xpath_selectors:
+            r_btn = page.query_selector(xp)
             if r_btn and r_btn.get_attribute("aria-checked") != "true":
                 r_btn.click(force=True)
                 page.wait_for_timeout(250)
@@ -1293,8 +1315,8 @@ class FlowVideoBridge:
         page.wait_for_timeout(350)
 
     def _attach_starting_frame_ui_fallback(self, page: Any, frame_p: Path) -> None:
-        """Fallback UI attachment when synthetic paste does not mount flow-image-ingredient-chip."""
-        start_btn = page.query_selector('//button[contains(., "Bắt đầu")]')
+        """Fallback UI attachment when synthetic paste does not mount flow-image-ingredient-chip (bilingual VI/EN)."""
+        start_btn = page.query_selector('//button[contains(., "Bắt đầu") or contains(., "Start")]')
         if start_btn:
             start_btn.click(force=True)
             page.wait_for_timeout(700)
@@ -1331,7 +1353,9 @@ class FlowVideoBridge:
                         first_item.click(force=True)
                         page.wait_for_timeout(700)
                     add_btn = page.query_selector(
-                        'button.detail-add-to-prompt-btn:not([disabled]), button:has-text("Thêm vào câu lệnh"):not([disabled])'
+                        'button.detail-add-to-prompt-btn:not([disabled]), '
+                        'button:has-text("Thêm vào câu lệnh"):not([disabled]), '
+                        'button:has-text("Add to prompt"):not([disabled])'
                     )
                     if add_btn and not page.query_selector("flow-image-ingredient-chip"):
                         add_btn.click(force=True)

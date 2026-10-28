@@ -1010,6 +1010,8 @@ class JobManager:
                 aspect_ratio=params.get("aspect_ratio", "9:16"),
                 remove_watermark=bool(params.get("remove_watermark", True)),
                 single_video=bool(params.get("single_video", False)),
+                resume_run_id=params.get("resume_run_id"),
+                start_from_step=params.get("start_from_step"),
             )
             res_dict = asdict(res)
             res_dict["account_id"] = aid
@@ -1029,6 +1031,19 @@ class JobManager:
             if not dry_run:
                 self.pool.report_item_result(aid, "ok")
         except Exception as exc:
+            partial = getattr(exc, "partial_result", None)
+            if isinstance(partial, dict):
+                partial["account_id"] = aid
+                rid = partial.get("run_id") or ""
+                if partial.get("first_frame_path") and Path(partial["first_frame_path"]).exists():
+                    partial["first_frame_url"] = f"/api/tryon/files/{rid}/{Path(partial['first_frame_path']).name}"
+                if partial.get("video_1_path") and Path(partial["video_1_path"]).exists():
+                    partial["video_1_url"] = f"/api/tryon/files/{rid}/{Path(partial['video_1_path']).name}"
+                if partial.get("last_frame_path") and Path(partial["last_frame_path"]).exists():
+                    partial["last_frame_url"] = f"/api/tryon/files/{rid}/{Path(partial['last_frame_path']).name}"
+                if partial.get("video_2_path") and Path(partial["video_2_path"]).exists():
+                    partial["video_2_url"] = f"/api/tryon/files/{rid}/{Path(partial['video_2_path']).name}"
+                job.result = partial
             if not dry_run:
                 self.pool.report_item_result(aid, "failed", error=f"{type(exc).__name__}: {exc}")
             raise

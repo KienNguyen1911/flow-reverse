@@ -228,9 +228,18 @@ export interface GalleryRun {
   status?: string | null;
 }
 
+export interface TryOnStepInfo {
+  id: number;
+  key: string;
+  label: string;
+  desc?: string;
+  status: "pending" | "running" | "succeeded" | "failed" | string;
+  error?: string | null;
+}
+
 export interface TryOnRunManifest {
   run_id: string;
-  status: "succeeded" | "failed" | string;
+  status: "succeeded" | "failed" | "running" | string;
   product_title?: string;
   dest_dir?: string;
   shopee_images?: string[];
@@ -247,6 +256,11 @@ export interface TryOnRunManifest {
   elapsed_s?: number;
   dry_run?: boolean;
   single_video?: boolean;
+  aspect_ratio?: string;
+  current_step?: number;
+  failed_step?: number | null;
+  failed_step_label?: string | null;
+  steps?: TryOnStepInfo[];
   error?: string | null;
   account_id?: string | null;
   first_frame_url?: string | null;

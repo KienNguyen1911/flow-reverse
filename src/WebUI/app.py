@@ -130,6 +130,8 @@ class AutoTryOnBody(BaseModel):
     aspect_ratio: str = "9:16"
     remove_watermark: bool = True
     single_video: bool = False
+    resume_run_id: Optional[str] = None
+    start_from_step: Optional[int] = None
     confirm: bool = False
 
 
@@ -550,10 +552,11 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
             and not body.transfer_image
             and not body.shopee_url
             and not body.product_dir
+            and not body.resume_run_id
         ):
             raise HTTPException(
                 status_code=400,
-                detail="Cần cung cấp first_frame_path hoặc garment_path/transfer_image/product_dir/shopee_url",
+                detail="Cần cung cấp first_frame_path hoặc resume_run_id hoặc garment_path/transfer_image/product_dir/shopee_url",
             )
         if not body.dry_run and not body.confirm:
             raise HTTPException(status_code=400, detail="Chạy thật cần confirm=true.")
@@ -597,20 +600,20 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
                         data = json.loads(mf.read_text(encoding="utf-8"))
                         rid = data.get("run_id") or d.name
                         data["run_id"] = rid
-                        ff_name = Path(data.get("first_frame_path", "")).name or "first_frame.png"
-                        if (d / ff_name).exists():
+                        ff_name = Path(data.get("first_frame_path") or "").name or "first_frame.png"
+                        if (d / ff_name).is_file():
                             data["first_frame_url"] = f"/api/tryon/files/{rid}/{ff_name}"
-                        v1_name = Path(data.get("video_1_path", "")).name or "video_1.mp4"
-                        if (d / v1_name).exists():
+                        v1_name = Path(data.get("video_1_path") or "").name or "video_1.mp4"
+                        if (d / v1_name).is_file():
                             data["video_1_url"] = f"/api/tryon/files/{rid}/{v1_name}"
-                        lf_name = Path(data.get("last_frame_path", "")).name or "last_frame_video_1.png"
-                        if (d / lf_name).exists():
+                        lf_name = Path(data.get("last_frame_path") or "").name or "last_frame_video_1.png"
+                        if (d / lf_name).is_file():
                             data["last_frame_url"] = f"/api/tryon/files/{rid}/{lf_name}"
-                        v2_name = Path(data.get("video_2_path", "")).name or "video_2.mp4"
-                        if (d / v2_name).exists():
+                        v2_name = Path(data.get("video_2_path") or "").name or "video_2.mp4"
+                        if (d / v2_name).is_file():
                             data["video_2_url"] = f"/api/tryon/files/{rid}/{v2_name}"
-                        fv_name = Path(data.get("final_video_path", "")).name or "final_tryon_video_16s.mp4"
-                        if (d / fv_name).exists():
+                        fv_name = Path(data.get("final_video_path") or "").name or "final_tryon_video_16s.mp4"
+                        if (d / fv_name).is_file():
                             data["final_video_url"] = f"/api/tryon/files/{rid}/{fv_name}"
                         runs.append(data)
                     except Exception:
