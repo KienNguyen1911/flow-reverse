@@ -1,0 +1,6 @@
+{
+  "preferred_agent": "agy",
+  "agy_model": "gemini-3.8-flash-low",
+  "pi_model": "agnes-3.0-flash",
+  "timeout_s": 75.0
+}

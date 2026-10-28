@@ -12,6 +12,7 @@ import {
   MagnifyingGlassPlus,
   Play,
   Plus,
+  Sparkle,
   Trash,
   UploadSimple,
   VideoCamera,
@@ -172,6 +173,12 @@ function chainDepth(nodes: CanvasNode[], n: CanvasNode, seen = new Set<string>()
     }
   }
   return maxD;
+}
+
+function isVideoContinuation(nodes: CanvasNode[], n: CanvasNode): boolean {
+  if (n.type !== "video" || !n.sourceImageId) return false;
+  const parent = nodes.find((x) => x.id === n.sourceImageId);
+  return parent?.type === "last_frame" || parent?.type === "video";
 }
 
 let seq = Date.now() % 100000;
@@ -378,6 +385,8 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
   const [wfBusy, setWfBusy] = useState(false);
   const [canvasDrag, setCanvasDrag] = useState(false);
   const [drawerNodeId, setDrawerNodeId] = useState<string | null>(null);
+  const [aiGeneratingId, setAiGeneratingId] = useState<string | null>(null);
+  const [jitPromptEnabled, setJitPromptEnabled] = useState<boolean>(true);
   const [confirmTarget, setConfirmTarget] = useState<
     { mode: "workflow" } | { mode: "node"; nodeId: string } | null
   >(null);
@@ -675,6 +684,42 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
     [patchNode, showToast],
   );
 
+  // -- Local AI Prompt Agent generator ------------------------------------- //
+  const handleGenerateAiPrompt = useCallback(
+    async (nodeId: string) => {
+      const current = nodesRef.current;
+      const target = current.find((x) => x.id === nodeId);
+      if (!target || (target.type !== "image" && target.type !== "video")) return;
+
+      const sRes = resolveSource(current, target, false);
+      const isCont = isVideoContinuation(current, target);
+
+      setAiGeneratingId(nodeId);
+      showToast("Local AI Agent đang phân tích ảnh nguồn để tạo prompt...", "info", nodeId);
+
+      try {
+        const res = await api.generateNodePrompt({
+          node_id: target.id,
+          node_type: target.type,
+          upstream_media_urls: sRes.urls,
+          is_video_continuation: isCont,
+        });
+
+        if (res.ok && res.prompt) {
+          patchNode(nodeId, { prompt: res.prompt });
+          showToast(`Đã tối ưu prompt bằng ${res.agent.toUpperCase()} (${res.elapsed_s}s)`, "ok", nodeId);
+        } else {
+          showToast("AI Agent không tạo được prompt.", "err", nodeId);
+        }
+      } catch (err: any) {
+        showToast(`Lỗi AI Agent: ${err?.message || err}`, "err", nodeId);
+      } finally {
+        setAiGeneratingId(null);
+      }
+    },
+    [patchNode, showToast],
+  );
+
   // -- run whole workflow (topological execution in chain order) ---------------- //
   const runWorkflow = useCallback(
     async (dry: boolean) => {
@@ -706,6 +751,32 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
             srcOk.set(n.id, false);
             continue;
           }
+
+          // Dynamic JIT Prompt generation before running
+          if (!dry && jitPromptEnabled && (n.type === "image" || n.type === "video")) {
+            const sRes = resolveSource(nodesRef.current, n, false);
+            if (sRes.ok && sRes.urls.length > 0) {
+              setAiGeneratingId(n.id);
+              try {
+                showToast(`JIT Agent: Đang phân tích kết quả node trước để tối ưu prompt...`, "info", n.id);
+                const aiRes = await api.generateNodePrompt({
+                  node_id: n.id,
+                  node_type: n.type,
+                  upstream_media_urls: sRes.urls,
+                  is_video_continuation: isVideoContinuation(nodesRef.current, n),
+                });
+                if (aiRes.ok && aiRes.prompt) {
+                  patchNode(n.id, { prompt: aiRes.prompt });
+                  n.prompt = aiRes.prompt;
+                }
+              } catch (e: any) {
+                console.warn("Lỗi sinh prompt JIT, tiếp tục với prompt sẵn có:", e);
+              } finally {
+                setAiGeneratingId(null);
+              }
+            }
+          }
+
           const r = await runNodeNow(n.id, dry);
           srcOk.set(n.id, r.ok);
           if (!r.ok && !dry) {
@@ -718,7 +789,7 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
         setWfBusy(false);
       }
     },
-    [wfBusy, runNodeNow, patchNode, showToast],
+    [wfBusy, jitPromptEnabled, runNodeNow, patchNode, showToast],
   );
 
   // -- node / edge actions ----------------------------------------------------- //
@@ -1151,6 +1222,8 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
               onDot={(side) => handleDotClick(n, side)}
               onUpload={(file) => void uploadRef(n.id, file)}
               onOpenDrawer={(id) => setDrawerNodeId(id)}
+              aiGeneratingId={aiGeneratingId}
+              onGenerateAiPrompt={handleGenerateAiPrompt}
               onHeaderDown={(e) => {
                 e.stopPropagation();
                 dragRef.current = { kind: "node", id: n.id, sx: e.clientX, sy: e.clientY, ox: n.x, oy: n.y };
@@ -1230,6 +1303,7 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
         onClose={() => setDrawerNodeId(null)}
         onRunNode={(id, dry) => void runNodeNow(id, dry)}
         onRemoveNode={removeNode}
+        onUpdatePrompt={(id, prompt) => patchNode(id, { prompt })}
       />
 
       {/* Confirm Modal (Real Run) */}
@@ -1260,6 +1334,23 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
                 : " 1 credit"}{" "}
               nếu Google nhận (bị từ chối = 0 credit).
             </p>
+
+            {confirmTarget.mode === "workflow" && (
+              <label className="flex items-start gap-2.5 p-2.5 rounded-ctl border border-acc/35 bg-acc/10 text-[12px] text-fg cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={jitPromptEnabled}
+                  onChange={(e) => setJitPromptEnabled(e.target.checked)}
+                  className="mt-0.5 accent-acc"
+                />
+                <div>
+                  <span className="font-bold text-acc">Dynamic JIT: Tự động tối ưu prompt theo kết quả node trước</span>
+                  <p className="text-[10.5px] text-mut mt-0.5 leading-snug">
+                    AI Agent cục bộ sẽ nhìn ảnh thật vừa sinh để viết prompt chính xác cho node tiếp theo trước khi chạy.
+                  </p>
+                </div>
+              </label>
+            )}
             <div className="flex justify-end gap-2 mt-1">
               <button
                 onClick={() => setConfirmTarget(null)}
@@ -1306,9 +1397,11 @@ function CanvasNodeCard(props: {
   onDot: (side: "in" | "out") => void;
   onUpload: (file: File) => void;
   onOpenDrawer: (id: string) => void;
+  aiGeneratingId?: string | null;
+  onGenerateAiPrompt?: (id: string) => void;
   onHeaderDown: (e: React.PointerEvent) => void;
 }) {
-  const { n, allNodes, imageRatios, verifiedRatios, videoRatios, resolutions, linking, wfBusy } = props;
+  const { n, allNodes, imageRatios, verifiedRatios, videoRatios, resolutions, linking, wfBusy, aiGeneratingId, onGenerateAiPrompt } = props;
   const st = statusStyle(n.status);
   const isRef = n.type === "ref";
   const isImg = n.type === "image";
@@ -1606,6 +1699,31 @@ function CanvasNodeCard(props: {
               )}
             </div>
 
+            <div className="flex items-center justify-between mt-0.5">
+              <span className="text-[10px] font-semibold text-mut">Prompt mô tả ảnh</span>
+              {onGenerateAiPrompt && (
+                <button
+                  type="button"
+                  disabled={aiGeneratingId === n.id || wfBusy}
+                  onClick={() => onGenerateAiPrompt(n.id)}
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] border border-acc/40 bg-acc/10 text-[9.5px] font-bold text-acc hover:bg-acc/20 hover:border-acc/70 transition-all cursor-pointer disabled:opacity-40"
+                  title="Local AI Agent sẽ phân tích ảnh kết quả nguồn để sinh prompt chuẩn"
+                >
+                  {aiGeneratingId === n.id ? (
+                    <>
+                      <Spinner size={9} />
+                      <span>Đang tạo…</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkle size={10} weight="fill" className="text-acc" />
+                      <span>✨ AI Prompt</span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+
             <textarea
               rows={2}
               value={n.prompt}
@@ -1671,6 +1789,31 @@ function CanvasNodeCard(props: {
                 Node nguồn chưa chạy xong — video sẽ chờ/bỏ qua khi chạy workflow.
               </p>
             )}
+
+            <div className="flex items-center justify-between mt-0.5">
+              <span className="text-[10px] font-semibold text-mut">Prompt chuyển động video</span>
+              {onGenerateAiPrompt && (
+                <button
+                  type="button"
+                  disabled={aiGeneratingId === n.id || wfBusy}
+                  onClick={() => onGenerateAiPrompt(n.id)}
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] border border-acc/40 bg-acc/10 text-[9.5px] font-bold text-acc hover:bg-acc/20 hover:border-acc/70 transition-all cursor-pointer disabled:opacity-40"
+                  title="Local AI Agent sẽ nhìn vào ảnh First Frame hoặc Last Frame nguồn để viết prompt chuyển động nối tiếp chuẩn xác"
+                >
+                  {aiGeneratingId === n.id ? (
+                    <>
+                      <Spinner size={9} />
+                      <span>Đang tạo…</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkle size={10} weight="fill" className="text-acc" />
+                      <span>✨ AI Prompt</span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
 
             <textarea
               rows={2}

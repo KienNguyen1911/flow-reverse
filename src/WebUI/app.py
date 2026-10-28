@@ -45,6 +45,12 @@ from pydantic import BaseModel, Field
 from ..Workflows.account_pool import AccountPoolManager
 from ..Workflows.flow_client import DEFAULT_CDP_URL
 from ..Workflows.flow_models import parse_project_ref
+from ..Workflows.local_agent_runner import (
+    LocalAgentConfig,
+    get_agent_runner,
+    load_agent_config,
+    save_agent_config,
+)
 from ..Workflows.media_service import (
     AspectNotVerifiedError,
     UnsupportedOptionError,
@@ -55,6 +61,8 @@ from ..Workflows.media_service import (
     resolve_input_path,
     validate_video_duration,
 )
+from ..Workflows.prompt_agent import NodePromptTask, get_prompt_agent
+from ..Workflows.skill_manager import get_skill_manager
 from .jobs import JobManager, ProjectsStore
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -151,6 +159,28 @@ class BatchBody(BaseModel):
 class PoolConfigBody(BaseModel):
     target_jobs_per_account: Optional[int] = None
     max_active_browsers: Optional[int] = None
+
+
+class AgentConfigBody(BaseModel):
+    preferred_agent: Optional[str] = "agy"
+    agy_model: Optional[str] = "gemini-3.8-flash-low"
+    pi_model: Optional[str] = "agnes-3.0-flash"
+    timeout_s: Optional[float] = 75.0
+
+
+class GenerateNodePromptBody(BaseModel):
+    node_id: str
+    node_type: str = "image"
+    upstream_media_urls: list[str] = Field(default_factory=list)
+    skill_id: Optional[str] = None
+    custom_hint: Optional[str] = None
+    is_video_continuation: bool = False
+    agent: Optional[str] = None
+    model: Optional[str] = None
+
+
+class TestAgentBody(BaseModel):
+    agent: Optional[str] = None
 
 
 class AddAccountBody(BaseModel):
@@ -794,6 +824,67 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
                     except Exception:
                         pass
         return {"runs": runs}
+
+    # -- AI Prompt Agent ------------------------------------------------------------ #
+
+    @app.get("/api/agent/skills")
+    def api_agent_skills():
+        mgr = get_skill_manager()
+        mgr.reload()
+        return {
+            "skills": [
+                {
+                    "id": s.id,
+                    "name": s.name,
+                    "description": s.description,
+                    "file_path": s.file_path,
+                    "policy_clause": s.policy_clause,
+                }
+                for s in mgr.list_skills()
+            ]
+        }
+
+    @app.get("/api/agent/config")
+    def api_get_agent_config():
+        cfg = load_agent_config()
+        return cfg.to_dict()
+
+    @app.post("/api/agent/config")
+    def api_set_agent_config(body: AgentConfigBody):
+        cfg = LocalAgentConfig(
+            preferred_agent=body.preferred_agent or "agy",
+            agy_model=body.agy_model or "gemini-3.8-flash-low",
+            pi_model=body.pi_model or "agnes-3.0-flash",
+            timeout_s=body.timeout_s or 75.0,
+        )
+        save_agent_config(cfg)
+        return {"ok": True, "config": cfg.to_dict()}
+
+    @app.post("/api/agent/test")
+    async def api_test_agent(body: Optional[TestAgentBody] = None):
+        target = body.agent if body else None
+        runner = get_agent_runner()
+        res = await runner.test_agent(target)
+        return res
+
+    @app.post("/api/agent/generate-node-prompt")
+    async def api_generate_node_prompt(body: GenerateNodePromptBody):
+        agent = get_prompt_agent()
+        task = NodePromptTask(
+            node_id=body.node_id,
+            node_type=body.node_type,
+            upstream_media_urls=body.upstream_media_urls,
+            skill_id=body.skill_id,
+            custom_hint=body.custom_hint,
+            is_video_continuation=body.is_video_continuation,
+            agent=body.agent,
+            model=body.model,
+        )
+        try:
+            res = await agent.generate_prompt_for_node(task)
+            return {"ok": True, **res.to_dict()}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Lỗi AI Prompt Agent: {e}")
 
     # -- static UI ------------------------------------------------------------------ #
 

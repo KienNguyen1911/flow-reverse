@@ -14,6 +14,11 @@ import type {
   Status,
   TryOnRunManifest,
   UpdateAccountPayload,
+  AgentSkillInfo,
+  LocalAgentConfig,
+  GenerateNodePromptRequest,
+  GenerateNodePromptResponse,
+  TestAgentResponse,
 } from "./types";
 
 async function j<T>(r: Response): Promise<T> {
@@ -188,4 +193,18 @@ export const api = {
 
   nodeFileUrl: (runId: string, filename: string) =>
     `/api/node/files/${encodeURIComponent(runId)}/${filename.split("/").map(encodeURIComponent).join("/")}`,
+
+  // -- AI Prompt Agent (Local agy / pi) -------------------------------------
+  agentSkills: () => fetch("/api/agent/skills").then(j<{ skills: AgentSkillInfo[] }>),
+
+  agentConfig: () => fetch("/api/agent/config").then(j<LocalAgentConfig>),
+
+  setAgentConfig: (cfg: Partial<LocalAgentConfig>) =>
+    post("/api/agent/config", cfg).then(j<{ ok: boolean; config: LocalAgentConfig }>),
+
+  testAgent: (agent?: string) =>
+    post("/api/agent/test", { agent }).then(j<TestAgentResponse>),
+
+  generateNodePrompt: (p: GenerateNodePromptRequest) =>
+    post("/api/agent/generate-node-prompt", p).then(j<GenerateNodePromptResponse>),
 };

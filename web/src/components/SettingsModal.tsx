@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
-import { BookOpen, Code, Gear, Images, Users, X } from "@phosphor-icons/react";
+import { BookOpen, Code, Cpu, Gear, Images, Users, X } from "@phosphor-icons/react";
 import type { PoolInfo, RunItem } from "../types";
 import { AccountPanel } from "./AccountPanel";
+import { AgentSettingsPanel } from "./AgentSettingsPanel";
 import { ApiDocsPanel } from "./ApiDocsPanel";
 import { Gallery } from "./Gallery";
 import { GuidePanel } from "./GuidePanel";
 
-export type SettingsTab = "gallery" | "accounts" | "guide" | "docs";
+export type SettingsTab = "gallery" | "accounts" | "agent" | "guide" | "docs";
 
 interface SettingsModalProps {
   open: boolean;
@@ -84,6 +85,12 @@ export function SettingsModal({
       ) : pool ? (
         <span className="font-mono text-[10px] text-mut">{pool.n_total}</span>
       ) : undefined,
+    },
+    {
+      key: "agent",
+      label: "AI Agent",
+      desc: "Local agy & pi CLI",
+      icon: <Cpu size={17} />,
     },
     {
       key: "guide",
@@ -210,6 +217,8 @@ export function SettingsModal({
                 }}
               />
             )}
+
+            {activeTab === "agent" && <AgentSettingsPanel />}
 
             {activeTab === "guide" && <GuidePanel />}
 

@@ -9,6 +9,7 @@ import {
   Info,
   ListDashes,
   Play,
+  Sparkle,
   Terminal,
   Trash,
   UploadSimple,
@@ -52,6 +53,7 @@ interface CanvasDrawerProps {
   onClose: () => void;
   onRunNode: (id: string, dry: boolean) => void;
   onRemoveNode: (id: string) => void;
+  onUpdatePrompt?: (id: string, prompt: string) => void;
 }
 
 const KIND_CLS: Record<string, string> = {
@@ -162,13 +164,64 @@ function diagnoseError(reason: string | null | undefined): ErrorDiagnosis {
   };
 }
 
-export function CanvasDrawer({ node, allNodes, onClose, onRunNode, onRemoveNode }: CanvasDrawerProps) {
+export function CanvasDrawer({ node, allNodes, onClose, onRunNode, onRemoveNode, onUpdatePrompt }: CanvasDrawerProps) {
   const [job, setJob] = useState<Job | null>(null);
   const [loadingJob, setLoadingJob] = useState(false);
   const [activeTab, setActiveTab] = useState<"error" | "logs" | "config" | "preview">("error");
   const [copiedError, setCopiedError] = useState(false);
   const [copiedLogs, setCopiedLogs] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [customHint, setCustomHint] = useState("");
+  const [selectedSkill, setSelectedSkill] = useState("");
+  const [skillsList, setSkillsList] = useState<{ id: string; name: string }[]>([]);
+
+  useEffect(() => {
+    api.agentSkills().then((res) => {
+      if (res.skills) {
+        setSkillsList(res.skills.map((s) => ({ id: s.id, name: s.name })));
+      }
+    }).catch(() => {});
+  }, []);
+
+  const handleDrawerGeneratePrompt = async () => {
+    if (!node) return;
+    setAiGenerating(true);
+    try {
+      const sids = node.type === "image" && node.sourceImageIds && node.sourceImageIds.length > 0
+        ? node.sourceImageIds
+        : node.sourceImageId ? [node.sourceImageId] : [];
+      const urls: string[] = [];
+      for (const sid of sids) {
+        const p = allNodes.find((x) => x.id === sid);
+        if (p?.fileUrl) urls.push(p.fileUrl);
+        else if (p?.videoUrl) urls.push(p.videoUrl);
+      }
+      const isCont = node.type === "video" && !!node.sourceImageId &&
+        (() => {
+          const p = allNodes.find((x) => x.id === node.sourceImageId);
+          return p?.type === "last_frame" || p?.type === "video";
+        })();
+
+      const res = await api.generateNodePrompt({
+        node_id: node.id,
+        node_type: node.type as "image" | "video",
+        upstream_media_urls: urls,
+        skill_id: selectedSkill || undefined,
+        custom_hint: customHint.trim() || undefined,
+        is_video_continuation: isCont,
+      });
+
+      if (res.ok && res.prompt) {
+        onUpdatePrompt?.(node.id, res.prompt);
+      }
+    } catch (err: any) {
+      alert(`Lỗi sinh prompt: ${err?.message || err}`);
+    } finally {
+      setAiGenerating(false);
+    }
+  };
 
   const hasError =
     node &&
@@ -538,6 +591,57 @@ export function CanvasDrawer({ node, allNodes, onClose, onRunNode, onRemoveNode 
           {/* TAB: CONFIG */}
           {activeTab === "config" && (
             <div className="flex flex-col gap-3">
+              {(node.type === "image" || node.type === "video") && (
+                <div className="rounded-ctl border border-acc/35 bg-acc/5 p-3 flex flex-col gap-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11.5px] font-bold text-fg flex items-center gap-1.5">
+                      <Sparkle size={13} weight="fill" className="text-acc" />
+                      <span>AI Prompter Director</span>
+                    </span>
+                    <button
+                      type="button"
+                      disabled={aiGenerating}
+                      onClick={handleDrawerGeneratePrompt}
+                      className="inline-flex items-center gap-1 px-2.5 h-6 rounded-ctl bg-acc text-accink text-[10.5px] font-bold hover:bg-acc2 transition-colors cursor-pointer disabled:opacity-40"
+                    >
+                      {aiGenerating ? <Spinner size={10} /> : <Sparkle size={10} weight="fill" />}
+                      <span>{aiGenerating ? "Đang sinh…" : "Tạo lại Prompt"}</span>
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-2">
+                    {skillsList.length > 0 && (
+                      <div className="flex flex-col gap-1">
+                        <label className="text-[10px] text-mut font-semibold">Chọn Skill quy chuẩn:</label>
+                        <select
+                          value={selectedSkill}
+                          onChange={(e) => setSelectedSkill(e.target.value)}
+                          className="h-7 rounded-ctl border border-line2 bg-panel px-2 text-[11px] text-fg outline-none focus:border-acc"
+                        >
+                          <option value="">Tự động chọn theo loại node</option>
+                          {skillsList.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[10px] text-mut font-semibold">Ghi chú phong cách bổ sung (tùy chọn):</label>
+                      <input
+                        type="text"
+                        value={customHint}
+                        onChange={(e) => setCustomHint(e.target.value)}
+                        placeholder="Ví dụ: Áo len cổ lọ màu be, phong cách tối giản studio..."
+                        className="h-7 rounded-ctl border border-line2 bg-panel px-2 text-[11px] text-fg outline-none focus:border-acc"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {node.prompt && (
                 <div className="flex flex-col gap-1">
                   <span className="text-[11px] font-semibold text-mut">Prompt</span>

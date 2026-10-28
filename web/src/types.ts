@@ -382,3 +382,51 @@ export interface NodeVideoResult {
   account_id?: string | null;
 }
 
+// --------------------------------------------------------------------------- //
+// AI Prompt Agent types (Local agy / pi CLI)
+// --------------------------------------------------------------------------- //
+
+export interface AgentSkillInfo {
+  id: string;
+  name: string;
+  description: string;
+  file_path: string;
+  policy_clause?: string;
+}
+
+export interface LocalAgentConfig {
+  preferred_agent: "agy" | "pi" | string;
+  agy_model: string;
+  pi_model: string;
+  timeout_s: number;
+}
+
+export interface GenerateNodePromptRequest {
+  node_id: string;
+  node_type: "image" | "video";
+  upstream_media_urls?: string[];
+  skill_id?: string;
+  custom_hint?: string;
+  is_video_continuation?: boolean;
+  agent?: string;
+  model?: string;
+}
+
+export interface GenerateNodePromptResponse {
+  ok: boolean;
+  node_id: string;
+  prompt: string;
+  skill_id: string;
+  agent: string;
+  upstream_files: string[];
+  elapsed_s: number;
+}
+
+export interface TestAgentResponse {
+  ok: boolean;
+  agent: string;
+  latency_ms: number;
+  message: string;
+  sample_response?: string;
+}
+
