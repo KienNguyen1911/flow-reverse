@@ -196,7 +196,15 @@ function diagnoseError(reason: string | null | undefined): ErrorDiagnosis {
   };
 }
 
-export function CanvasDrawer({ node, allNodes, onClose, onRunNode, onRemoveNode, onUpdatePrompt }: CanvasDrawerProps) {
+export function CanvasDrawer({
+  node,
+  allNodes,
+  onClose,
+  onRunNode,
+  onRemoveNode,
+  onUpdatePrompt,
+  onUpdateNode,
+}: CanvasDrawerProps) {
   const [job, setJob] = useState<Job | null>(null);
   const [loadingJob, setLoadingJob] = useState(false);
   const [activeTab, setActiveTab] = useState<"error" | "logs" | "config" | "preview">("error");
