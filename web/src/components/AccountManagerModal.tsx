@@ -33,9 +33,13 @@ export function AccountManagerModal({ open, onClose, pool, onRefreshPool }: Prop
   const [newId, setNewId] = useState("");
   const [newPort, setNewPort] = useState<number | "">("");
   const [newNote, setNewNote] = useState("");
+  const [newProxy, setNewProxy] = useState("");
   const [createProfile, setCreateProfile] = useState(true);
   const [addBusy, setAddBusy] = useState(false);
   const [addMsg, setAddMsg] = useState<{ type: "ok" | "err"; text: string; newAccId?: string } | null>(null);
+
+  // Per-account proxy editor state
+  const [proxyDraft, setProxyDraft] = useState<Record<string, string>>({});
 
   // Pool tuning states
   const [targetJobs, setTargetJobs] = useState<number>(25);
@@ -90,6 +94,7 @@ export function AccountManagerModal({ open, onClose, pool, onRefreshPool }: Prop
         note: newNote.trim(),
         create_profile: createProfile,
         enabled: true,
+        proxy: newProxy.trim() || null,
       });
       setAddMsg({
         type: "ok",
@@ -98,6 +103,7 @@ export function AccountManagerModal({ open, onClose, pool, onRefreshPool }: Prop
       });
       setNewId("");
       setNewNote("");
+      setNewProxy("");
       void loadNextPort();
       onRefreshPool();
     } catch (err: unknown) {
@@ -180,6 +186,28 @@ export function AccountManagerModal({ open, onClose, pool, onRefreshPool }: Prop
       onRefreshPool();
     } catch (err: unknown) {
       alert(`Lỗi reset cooldown: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusyAcc((b) => {
+        const next = { ...b };
+        delete next[aid];
+        return next;
+      });
+    }
+  };
+
+  const handleSaveProxy = async (aid: string) => {
+    const draft = (proxyDraft[aid] ?? "").trim();
+    setBusyAcc((b) => ({ ...b, [aid]: "proxy" }));
+    try {
+      await api.updatePoolAccount(aid, draft ? { proxy: draft } : { clear_proxy: true });
+      setProxyDraft((p) => {
+        const next = { ...p };
+        delete next[aid];
+        return next;
+      });
+      onRefreshPool();
+    } catch (err: unknown) {
+      alert(`Không lưu được proxy: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setBusyAcc((b) => {
         const next = { ...b };
@@ -332,6 +360,23 @@ export function AccountManagerModal({ open, onClose, pool, onRefreshPool }: Prop
                     className="w-full rounded-ctl border border-line2 bg-panel px-3 py-1.5 text-[12.5px] text-fg focus:border-acc/70 focus:outline-none"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-[11.5px] font-semibold text-dim">
+                  Proxy riêng cho browser (Tùy chọn — để trống = Direct IP)
+                </label>
+                <input
+                  type="text"
+                  placeholder="socks5://user:pass@host:1080  •  http://host:8080  •  host:port"
+                  value={newProxy}
+                  onChange={(e) => setNewProxy(e.target.value)}
+                  className="w-full rounded-ctl border border-line2 bg-panel px-3 py-1.5 text-[12.5px] text-fg focus:border-acc/70 focus:outline-none font-mono"
+                />
+                <p className="mt-1 text-[11px] text-mut">
+                  Hỗ trợ <code>http</code>, <code>https</code>, <code>socks5</code>, dạng{" "}
+                  <code>host:port</code> hoặc <code>username:password@host:port</code>. Bỏ trống để dùng IP trực tiếp.
+                </p>
               </div>
 
               <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
@@ -526,6 +571,12 @@ export function AccountManagerModal({ open, onClose, pool, onRefreshPool }: Prop
                             Profile: <code className="text-dim">{a.profile_id}</code>
                           </span>
                           {a.note && <span className="text-dim italic">"{a.note}"</span>}
+                          <span
+                            className={a.has_proxy ? "text-acc" : "text-mut"}
+                            title={a.has_proxy ? "Browser này đi qua proxy riêng" : "Browser này dùng IP trực tiếp"}
+                          >
+                            {a.has_proxy ? `🌐 ${a.proxy}` : "🌐 Direct IP"}
+                          </span>
                         </div>
                         <div className="flex items-center gap-3">
                           <span className="text-ok">✓ {a.total_completed} thành công</span>
@@ -536,6 +587,27 @@ export function AccountManagerModal({ open, onClose, pool, onRefreshPool }: Prop
                             </span>
                           )}
                         </div>
+                      </div>
+
+                      {/* Per-account proxy editor (Task 2) */}
+                      <div className="flex flex-wrap items-center gap-2 border-t border-line2/50 pt-2">
+                        <span className="text-[11.5px] font-semibold text-dim shrink-0">Proxy:</span>
+                        <input
+                          type="text"
+                          value={proxyDraft[a.id] ?? a.proxy ?? ""}
+                          onChange={(e) => setProxyDraft((p) => ({ ...p, [a.id]: e.target.value }))}
+                          placeholder="Để trống = Direct IP (host:port | user:pass@host:port | socks5://...)"
+                          className="min-w-0 flex-1 rounded-ctl border border-line2 bg-panel px-2 py-1 text-[11.5px] text-fg focus:border-acc/70 focus:outline-none font-mono"
+                        />
+                        <Btn
+                          variant="solid"
+                          className="h-7 text-[11.5px] shrink-0"
+                          busy={busyAction === "proxy"}
+                          onClick={() => void handleSaveProxy(a.id)}
+                          title="Lưu proxy và ghi vào browser_vault/<profile>/config.json"
+                        >
+                          Lưu proxy
+                        </Btn>
                       </div>
 
                       {/* Probed Session Detail */}

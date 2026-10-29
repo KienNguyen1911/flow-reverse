@@ -42,7 +42,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from ..Workflows.account_pool import AccountPoolManager
+from ..Workflows.account_pool import AccountPoolManager, proxy_label
 from ..Workflows.flow_client import DEFAULT_CDP_URL
 from ..Workflows.flow_models import parse_project_ref
 from ..Workflows.local_agent_runner import (
@@ -190,12 +190,17 @@ class AddAccountBody(BaseModel):
     enabled: bool = True
     note: Optional[str] = None
     create_profile: bool = True
+    proxy: Optional[str] = None          # "" / null ⇒ direct IP
+    proxy_bypass: Optional[str] = None
 
 
 class UpdateAccountBody(BaseModel):
     enabled: Optional[bool] = None
     note: Optional[str] = None
     cdp_port: Optional[int] = None
+    proxy: Optional[str] = None
+    proxy_bypass: Optional[str] = None
+    clear_proxy: bool = False
 
 
 class AutoTryOnBody(BaseModel):
@@ -366,6 +371,8 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
                 enabled=body.enabled,
                 note=body.note or "",
                 create_profile=body.create_profile,
+                proxy=body.proxy,
+                proxy_bypass=body.proxy_bypass,
             )
             return {
                 "ok": True,
@@ -375,6 +382,8 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
                     "cdp_port": acc.cdp_port,
                     "enabled": acc.enabled,
                     "note": acc.note,
+                    "proxy": proxy_label(acc.proxy),
+                    "has_proxy": bool(acc.proxy),
                 },
             }
         except (ValueError, KeyError) as e:
@@ -388,6 +397,9 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
                 enabled=body.enabled,
                 note=body.note,
                 cdp_port=body.cdp_port,
+                proxy=body.proxy,
+                proxy_bypass=body.proxy_bypass,
+                clear_proxy=body.clear_proxy,
             )
             return {
                 "ok": True,
@@ -397,6 +409,8 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
                     "cdp_port": acc.cdp_port,
                     "enabled": acc.enabled,
                     "note": acc.note,
+                    "proxy": proxy_label(acc.proxy),
+                    "has_proxy": bool(acc.proxy),
                 },
             }
         except KeyError as e:
@@ -633,6 +647,17 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
         if job is None:
             raise HTTPException(status_code=404, detail="job không tồn tại")
         return job.to_dict(with_events=True)
+
+    @app.post("/api/jobs/{jid}/cancel")
+    def api_cancel_job(jid: str):
+        """Stop a running job; interruptible waits (retry backoff) abort at once."""
+        job = manager.get(jid)
+        if job is None:
+            raise HTTPException(status_code=404, detail="job không tồn tại")
+        if job.state in ("succeeded", "failed", "rejected"):
+            return {"ok": True, "state": job.state, "note": "job đã kết thúc"}
+        job.cancel()
+        return {"ok": True, "state": job.state, "cancelled": True}
 
     # -- gallery ----------------------------------------------------------------- #
 

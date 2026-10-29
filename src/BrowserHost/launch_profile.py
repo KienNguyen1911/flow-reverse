@@ -70,7 +70,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlsplit
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 VAULT_DIR = PROJECT_ROOT / "browser_vault"
@@ -140,28 +140,114 @@ def validate_and_repair(cfg: dict[str, Any], cfg_path: Path, profile_id: str) ->
     if extra_flags is not None and not (isinstance(extra_flags, list) and all(isinstance(f, str) for f in extra_flags)):
         raise SystemExit(f"[launch] config {cfg_path}: extra_flags must be a list of strings")
     proxy = cfg.get("proxy")
-    if proxy is not None and not isinstance(proxy, (str, dict)):
-        raise SystemExit(f"[launch] config {cfg_path}: proxy must be null, a URL string, or a dict")
+    if proxy is not None:
+        try:
+            normalize_proxy(proxy)
+        except ValueError as exc:
+            raise SystemExit(f"[launch] config {cfg_path}: {exc}") from exc
+    bypass = cfg.get("proxy_bypass")
+    if bypass is not None and not (isinstance(bypass, (str, list))):
+        raise SystemExit(f"[launch] config {cfg_path}: proxy_bypass must be a string or list of strings")
+
     if cfg.get("profile_id") != profile_id:
         print(f"[launch] !! config profile_id={cfg.get('profile_id')!r} != directory {profile_id!r}")
 
 
+PROXY_SCHEMES = ("http", "https", "socks5", "socks5h")
+DEFAULT_PROXY_SCHEME = "http"
+
+
+def _split_proxy_string(raw: str) -> dict[str, str]:
+    """Parse ``host:port`` / ``user:pass@host:port`` / ``scheme://...`` into parts."""
+    text = raw.strip()
+    candidate = text if "://" in text else f"{DEFAULT_PROXY_SCHEME}://{text}"
+    try:
+        parts = urlsplit(candidate)
+        port = parts.port
+    except ValueError as exc:  # malformed port / IPv6 literal
+        raise ValueError(f"proxy không hợp lệ ({raw!r}): {exc}") from exc
+
+    scheme = (parts.scheme or DEFAULT_PROXY_SCHEME).lower()
+    if scheme not in PROXY_SCHEMES:
+        raise ValueError(
+            f"proxy scheme {scheme!r} không hỗ trợ (chỉ {', '.join(PROXY_SCHEMES)})"
+        )
+    host = parts.hostname
+    if not host:
+        raise ValueError(f"proxy thiếu host ({raw!r})")
+    if not port:
+        raise ValueError(f"proxy thiếu port ({raw!r}), ví dụ host:port")
+
+    out = {"scheme": scheme, "host": host, "port": str(port)}
+    if parts.username:
+        out["username"] = unquote(parts.username)
+    if parts.password:
+        out["password"] = unquote(parts.password)
+    return out
+
+
+def normalize_proxy(proxy: Any) -> Optional[dict[str, str]]:
+    """Normalize any accepted proxy shape; ``None`` means "direct IP".
+
+    Accepted inputs (all optional — empty values fall back to direct):
+      * ``None`` / ``""`` / ``"   "``            → direct connection
+      * ``"http://user:pass@host:port"``          → full URL
+      * ``"user:pass@host:port"``                 → schemeless, http assumed
+      * ``"host:port"`` / ``"socks5://host:port"``
+      * ``{"server": ..., "username": ..., "password": ...}``
+    """
+    if proxy is None:
+        return None
+    if isinstance(proxy, str):
+        if not proxy.strip():
+            return None
+        return _split_proxy_string(proxy)
+    if isinstance(proxy, dict):
+        server = str(proxy.get("server") or proxy.get("url") or "").strip()
+        username = proxy.get("username")
+        password = proxy.get("password")
+        if not server:
+            return None
+        if "://" not in server:
+            server = f"{proxy.get('scheme') or DEFAULT_PROXY_SCHEME}://{server}"
+        if username and "://" in server:
+            scheme, rest = server.split("://", 1)
+            cred = quote(str(username), safe="")
+            if password:
+                cred += ":" + quote(str(password), safe="")
+            server = f"{scheme}://{cred}@{rest}"
+        return _split_proxy_string(server)
+    raise ValueError(f"proxy phải là null, chuỗi URL hoặc object (nhận {type(proxy).__name__})")
+
+
 def proxy_to_url(proxy: Any) -> str:
-    """Normalize a config proxy into a --proxy-server URL.
+    """Normalize a config proxy into a ``--proxy-server`` URL (empty = direct).
 
     Inline credentials in the URL are accepted by this binary generation
     (windows-x64 >= 146.0.7680.177.5, see cloakbrowser config
     HTTP_PROXY_INLINE_AUTH_MIN_VERSION), so user:pass is inlined safely.
     """
-    if isinstance(proxy, str):
-        return proxy
-    server = str(proxy.get("server") or "")
-    username = proxy.get("username")
-    password = proxy.get("password")
-    if username and password and "://" in server:
-        scheme, rest = server.split("://", 1)
-        return f"{scheme}://{quote(str(username), safe='')}:{quote(str(password), safe='')}@{rest}"
-    return server
+    parts = normalize_proxy(proxy)
+    if parts is None:
+        return ""
+    host = f"[{parts['host']}]" if ":" in parts["host"] else parts["host"]
+    cred = ""
+    if parts.get("username"):
+        cred = quote(parts["username"], safe="")
+        if parts.get("password"):
+            cred += ":" + quote(parts["password"], safe="")
+        cred += "@"
+    return f"{parts['scheme']}://{cred}{host}:{parts['port']}"
+
+
+def describe_proxy(proxy: Any) -> str:
+    """Credential-free proxy label for logs (never print passwords)."""
+    parts = normalize_proxy(proxy)
+    if parts is None:
+        return "direct (không proxy)"
+    host = f"[{parts['host']}]" if ":" in parts["host"] else parts["host"]
+    who = f"{parts['username']}@" if parts.get("username") else ""
+    return f"{parts['scheme']}://{who}{host}:{parts['port']}"
 
 
 # Switches that make Chromium show the "unsupported command-line flag -
@@ -199,8 +285,16 @@ def build_command(cfg: dict[str, Any], binary_path: str, user_data_dir: Path, po
     extra.append(f"--user-data-dir={user_data_dir}")
     extra.append(f"--remote-debugging-port={port}")
     extra.append("--remote-allow-origins=*")
-    if cfg.get("proxy"):
-        extra.append(f"--proxy-server={proxy_to_url(cfg['proxy'])}")
+    proxy_url = proxy_to_url(cfg.get("proxy"))
+    if proxy_url:
+        # Per-browser proxy (Task 2). Empty/absent proxy ⇒ direct IP, no flag.
+        extra.append(f"--proxy-server={proxy_url}")
+        bypass = cfg.get("proxy_bypass")
+        if bypass:
+            joined = bypass if isinstance(bypass, str) else ",".join(str(b) for b in bypass)
+            if joined.strip():
+                extra.append(f"--proxy-bypass-list={joined}")
+
 
     args = cloakbrowser.build_args(
         True,
@@ -421,6 +515,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"[launch] profile      : {args.profile}")
     print(f"[launch] platform     : {cfg.get('platform')} | timezone: {cfg.get('timezone_id')} | locale: {cfg.get('locale')}")
     print(f"[launch] seed         : {cfg['fingerprint_seed']}")
+    print(f"[launch] proxy        : {describe_proxy(cfg.get('proxy'))}")
+
     print(f"[launch] user_data_dir: {user_data_dir}")
     print(f"[launch] CDP port     : {args.port}")
 

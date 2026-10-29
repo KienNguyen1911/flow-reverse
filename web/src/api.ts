@@ -117,6 +117,9 @@ export const api = {
 
   poolAccountDetail: (id: string) => fetch(`/api/pool/accounts/${id}/detail`).then(j<AccountDetail>),
 
+  cancelJob: (id: string) =>
+    post(`/api/jobs/${id}/cancel`, {}).then(j<{ ok: boolean; state?: string; cancelled?: boolean }>),
+
   nextPoolPort: () => fetch("/api/pool/next_port").then(j<{ next_port: number }>),
 
   batch: (p: {

@@ -56,6 +56,45 @@ class PoolUnavailableError(RuntimeError):
 
 
 # --------------------------------------------------------------------------- #
+# Proxy helpers (Task 2: per-browser proxy, direct IP fallback)
+# --------------------------------------------------------------------------- #
+
+
+def normalize_proxy_value(proxy: Optional[str], *, field: str = "proxy") -> Optional[str]:
+    """Validate a pool-level proxy string; ``None``/blank ⇒ direct IP.
+
+    Accepts ``http(s)://``, ``socks5://``, bare ``host:port`` and
+    ``user:pass@host:port``. Returns the canonical URL string to persist
+    (credentials preserved — they are required to authenticate), or ``None``.
+    """
+    if proxy is None:
+        return None
+    text = str(proxy).strip()
+    if not text:
+        return None
+    from ..BrowserHost.launch_profile import normalize_proxy
+
+    try:
+        normalize_proxy(text)
+    except ValueError as exc:
+        raise ValueError(f"{field} không hợp lệ: {exc}") from exc
+    return text
+
+
+def proxy_label(proxy: Optional[str]) -> Optional[str]:
+    """Credential-free label for UI/logs (password never leaves the machine)."""
+    if not proxy:
+        return None
+    from ..BrowserHost.launch_profile import describe_proxy
+
+    try:
+        return describe_proxy(proxy)
+    except ValueError:
+        return "(proxy không hợp lệ)"
+
+
+
+# --------------------------------------------------------------------------- #
 # Config / state carriers
 # --------------------------------------------------------------------------- #
 
@@ -67,6 +106,16 @@ class AccountConfig:
     cdp_port: int
     enabled: bool = True
     note: str = ""
+    #: Per-browser proxy (Task 2). ``None``/``""`` ⇒ direct IP (unchanged
+    #: pre-existing behaviour). Persisted into browser_vault/<profile>/config.json
+    #: at launch time so the launcher stays the single source of truth.
+    proxy: Optional[str] = None
+    proxy_bypass: Optional[str] = None
+    #: True only when the proxy was set/cleared *through the pool*. Legacy
+    #: profiles configured directly in browser_vault/<id>/config.json stay
+    #: untouched (the launcher keeps reading that file).
+    proxy_managed: bool = False
+
 
 
 @dataclass
@@ -231,6 +280,9 @@ class AccountPoolManager:
                 cdp_port=int(a.get("cdp_port") or (self.port_base + len(accounts))),
                 enabled=bool(a.get("enabled", True)),
                 note=str(a.get("note") or ""),
+                proxy=(str(a.get("proxy")).strip() or None) if a.get("proxy") else None,
+                proxy_bypass=(str(a.get("proxy_bypass")).strip() or None) if a.get("proxy_bypass") else None,
+                proxy_managed=bool(a.get("proxy_managed", bool(a.get("proxy")))),
             ))
         self._explicit_accounts = bool(accounts)
 
@@ -286,7 +338,10 @@ class AccountPoolManager:
         if self._explicit_accounts:
             raw["accounts"] = [
                 {"id": a.id, "profile_id": a.profile_id, "cdp_port": a.cdp_port,
-                 "enabled": a.enabled, **({"note": a.note} if a.note else {})}
+                 "enabled": a.enabled, **({"note": a.note} if a.note else {}),
+                 **({"proxy": a.proxy} if a.proxy else {}),
+                 **({"proxy_bypass": a.proxy_bypass} if a.proxy_bypass else {}),
+                 **({"proxy_managed": True} if a.proxy_managed else {})}
                 for a in self.accounts
             ]
         else:
@@ -335,6 +390,8 @@ class AccountPoolManager:
         enabled: bool = True,
         note: str = "",
         create_profile: bool = True,
+        proxy: Optional[str] = None,
+        proxy_bypass: Optional[str] = None,
     ) -> AccountConfig:
         """Add a new account/profile to the pool, optionally creating the vault profile."""
         from ..BrowserHost.launch_profile import PROFILE_ID_RE, load_or_create_profile
@@ -346,6 +403,9 @@ class AccountPoolManager:
         pid = str(profile_id or aid).strip()
         if not PROFILE_ID_RE.match(pid) or pid == "_template":
             raise ValueError(f"Profile ID không hợp lệ: {pid!r}")
+
+        proxy_value = normalize_proxy_value(proxy)
+        bypass_value = normalize_proxy_value(proxy_bypass, field="proxy_bypass")
 
         with self._lock:
             if any(a.id == aid for a in self.accounts):
@@ -367,13 +427,47 @@ class AccountPoolManager:
                 cdp_port=port,
                 enabled=bool(enabled),
                 note=str(note or ""),
+                proxy=proxy_value,
+                proxy_bypass=bypass_value,
             )
             self.accounts.append(acc)
             self._explicit_accounts = True
+            if acc.proxy or acc.proxy_bypass:
+                acc.proxy_managed = True
+                self._sync_profile_proxy(acc)
             self._save_config()
             self._save_state()
-            self._log(f"[pool] Đã thêm account mới: {aid} (profile={pid}, cdp_port={port})")
+            self._log(f"[pool] Đã thêm account mới: {aid} (profile={pid}, cdp_port={port}, "
+                      f"proxy={proxy_label(proxy_value) or 'direct'})")
             return acc
+
+    def _sync_profile_proxy(self, acc: AccountConfig) -> None:
+        """Mirror the account's proxy into browser_vault/<profile>/config.json.
+
+        The launcher reads config.json, so this keeps a single source of truth.
+        Only proxies managed by the pool are written — a legacy profile that
+        configures its proxy directly in the vault file keeps working
+        untouched. Failures are logged and swallowed: a broken vault file must
+        never block account edits.
+        """
+        if not acc.proxy_managed:
+            return
+        cfg_path = self.vault_dir / acc.profile_id / "config.json"
+        try:
+            data: dict = {}
+            if cfg_path.is_file():
+                data = json.loads(cfg_path.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    data = {}
+            data["proxy"] = acc.proxy or None
+            if acc.proxy_bypass:
+                data["proxy_bypass"] = acc.proxy_bypass
+            else:
+                data.pop("proxy_bypass", None)
+            cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            cfg_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except (OSError, ValueError) as exc:  # noqa: BLE001 - best effort mirror
+            self._log(f"[pool] không ghi được proxy vào {cfg_path}: {exc}")
 
     def update_account(
         self,
@@ -381,8 +475,13 @@ class AccountPoolManager:
         enabled: Optional[bool] = None,
         note: Optional[str] = None,
         cdp_port: Optional[int] = None,
+        proxy: Optional[str] = None,
+        proxy_bypass: Optional[str] = None,
+        clear_proxy: bool = False,
     ) -> AccountConfig:
-        """Update an existing account's status, note, or CDP port."""
+        """Update an existing account's status, note, CDP port or proxy."""
+        proxy_value = None if clear_proxy else normalize_proxy_value(proxy)
+        bypass_value = None if clear_proxy else normalize_proxy_value(proxy_bypass, field="proxy_bypass")
         with self._lock:
             acc = self._account(account_id)
             if acc is None:
@@ -398,10 +497,21 @@ class AccountPoolManager:
                 acc.enabled = bool(enabled)
             if note is not None:
                 acc.note = str(note)
+            if clear_proxy:
+                acc.proxy = None
+                acc.proxy_bypass = None
+                acc.proxy_managed = True
+            elif proxy_value is not None or proxy_bypass is not None:
+                if proxy_value is not None:
+                    acc.proxy = proxy_value
+                if proxy_bypass is not None:
+                    acc.proxy_bypass = bypass_value
+                acc.proxy_managed = True
 
             self._explicit_accounts = True
+            self._sync_profile_proxy(acc)
             self._save_config()
-            self._log(f"[pool] Đã cập nhật account: {account_id}")
+            self._log(f"[pool] Đã cập nhật account: {account_id} (proxy={proxy_label(acc.proxy) or 'direct'})")
             return acc
 
     def remove_account(self, account_id: str, delete_vault: bool = False) -> dict:
@@ -459,6 +569,8 @@ class AccountPoolManager:
                 "cdp_url": self.supervisor.cdp_url(a.cdp_port),
                 "enabled": a.enabled,
                 "note": a.note,
+                "proxy": proxy_label(a.proxy),
+                "has_proxy": bool(a.proxy),
                 "running": alive,
                 "managed": self.supervisor.is_managed(a.profile_id),
                 "status": "disabled" if not a.enabled else ("cooldown" if self.cooldown_remaining_s(a.id) > 0 else "ready"),
@@ -656,6 +768,9 @@ class AccountPoolManager:
         return active, errors
 
     def _wake_one(self, account: AccountConfig, wait_timeout_s: float) -> bool:
+        # Keep browser_vault/<profile>/config.json in sync before launching so a
+        # proxy edited in the pool is actually applied by launch_profile.py.
+        self._sync_profile_proxy(account)
         ok = self.supervisor.ensure_running(account.profile_id, account.cdp_port, wait_timeout_s=wait_timeout_s)
         if ok:
             st = self._account_state(account.id)
@@ -716,6 +831,9 @@ class AccountPoolManager:
                 st["total_completed"] = int(st.get("total_completed") or 0) + 1
             elif status == "rejected":
                 st["total_rejected"] = int(st.get("total_rejected") or 0) + 1
+            elif status == "cancelled":
+                st["last_error"] = (error or "người dùng dừng job")[:400]
+                st["last_error_ms"] = now
             elif status == "failed":
                 st["total_failed"] = int(st.get("total_failed") or 0) + 1
                 st["last_error"] = (error or "unknown")[:400]
@@ -784,6 +902,8 @@ class AccountPoolManager:
                     "cdp_url": self.supervisor.cdp_url(a.cdp_port),
                     "enabled": bool(a.enabled),
                     "note": a.note or None,
+                    "proxy": proxy_label(a.proxy),
+                    "has_proxy": bool(a.proxy),
                     "running": bool(running.get(a.id, False)),
                     "managed": self.supervisor.is_managed(a.profile_id),
                     "status": status,

@@ -84,6 +84,20 @@ interface ErrorDiagnosis {
   fixHint: string;
 }
 
+/** True when the latest log line is an anti-abuse retry countdown (Task 3). */
+function isWaitingRetry(events?: JobEvent[] | null): boolean {
+  if (!events || events.length === 0) return false;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.kind === "retry") {
+      return /Đang chờ|trước khi thử lại/.test(e.message || "");
+    }
+    if (e.kind === "info" && /Hết thời gian chờ/.test(e.message || "")) return false;
+    if (e.kind === "done" || e.kind === "error") return false;
+  }
+  return false;
+}
+
 function diagnoseError(reason: string | null | undefined): ErrorDiagnosis {
   const r = (reason || "").trim();
   const lower = r.toLowerCase();
@@ -100,6 +114,21 @@ function diagnoseError(reason: string | null | undefined): ErrorDiagnosis {
         "Google Flow từ chối xử lý vì phát hiện khuôn mặt trong ảnh tham chiếu (hoặc tên nhân vật trong prompt) có nét tương đồng với người nổi tiếng hoặc nhân vật công chúng được bảo vệ bản quyền.",
       fixHint:
         "1. Thay ảnh tham chiếu bằng hình ảnh người mẫu khác (hoặc đổi góc mặt, làm mờ nhẹ).\n2. Kiểm tra lại prompt và loại bỏ tên người nổi tiếng, ca sĩ, diễn viên hoặc từ khóa thương hiệu.",
+    };
+  }
+
+  if (
+    lower.includes("unusual_activity") ||
+    lower.includes("chống lạm dụng") ||
+    lower.includes("permission_denied")
+  ) {
+    return {
+      code: "UNUSUAL_ACTIVITY",
+      title: "Hệ thống chống lạm dụng của Google từ chối (tạm thời)",
+      explanation:
+        "Google Flow đánh giá phiên đăng nhập của browser này có dấu hiệu bất thường (tốc độ, fingerprint hoặc IP) nên chặn ngay khi submit. Lỗi này không mất credit và thường chỉ là tạm thời.",
+      fixHint:
+        "1. Node đã tự động thử lại 2 lần (Ảnh: 10s/20s, Video: 30s/60s) — xem tab Nhật ký (Logs).\n2. Nếu vẫn lỗi: gắn proxy riêng cho browser trong tab Tài khoản/Pool để đổi IP, hoặc thêm account khác vào pool.\n3. Giảm số browser chạy song song (M_RAM) nếu đang chạy batch lớn, rồi thử lại sau vài phút.",
     };
   }
 
@@ -173,6 +202,7 @@ export function CanvasDrawer({ node, allNodes, onClose, onRunNode, onRemoveNode,
   const [activeTab, setActiveTab] = useState<"error" | "logs" | "config" | "preview">("error");
   const [copiedError, setCopiedError] = useState(false);
   const [copiedLogs, setCopiedLogs] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const [aiGenerating, setAiGenerating] = useState(false);
@@ -300,6 +330,21 @@ export function CanvasDrawer({ node, allNodes, onClose, onRunNode, onRemoveNode,
   const diagnosis = useMemo(() => {
     return diagnoseError(node?.reason || job?.error || (job?.result?.reason as string));
   }, [node?.reason, job?.error, job?.result]);
+
+  const waitingRetry = useMemo(() => isWaitingRetry(job?.events), [job?.events]);
+  const isRunning = node?.status === "running" || node?.status === "queued";
+
+  const stopRetry = async () => {
+    if (!node?.jobId) return;
+    setStopping(true);
+    try {
+      await api.cancelJob(node.jobId);
+    } catch {
+      /* the next poll reflects the real state */
+    } finally {
+      setStopping(false);
+    }
+  };
 
   const copyErrorText = () => {
     if (!node) return;
@@ -549,6 +594,30 @@ export function CanvasDrawer({ node, allNodes, onClose, onRunNode, onRemoveNode,
           {/* TAB: LOGS */}
           {activeTab === "logs" && (
             <div className="flex flex-col gap-3 flex-1">
+              {waitingRetry && isRunning && (
+                <div className="rounded-ctl border border-warn/40 bg-warn/10 p-3 flex items-center justify-between gap-3">
+                  <div className="flex items-start gap-2 min-w-0">
+                    <Spinner size={13} className="text-warn mt-0.5 shrink-0" />
+                    <div className="min-w-0">
+                      <p className="text-[11.5px] font-bold text-warn">
+                        Đang chờ để tự động thử lại (anti-abuse)
+                      </p>
+                      <p className="text-[11px] text-dim leading-relaxed">
+                        PUBLIC_ERROR_UNUSUAL_ACTIVITY là lỗi tạm thời — node sẽ tự chạy lại sau khi hết thời gian chờ.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => void stopRetry()}
+                    disabled={stopping}
+                    className="shrink-0 inline-flex items-center gap-1 px-2.5 h-7 rounded-ctl border border-err/40 bg-err/10 hover:bg-err/20 text-err text-[11px] font-semibold cursor-pointer transition-colors disabled:opacity-50"
+                  >
+                    <X size={12} />
+                    <span>{stopping ? "Đang dừng…" : "Dừng chờ"}</span>
+                  </button>
+                </div>
+              )}
+
               {/* Job summary bar */}
               <div className="flex items-center justify-between text-[11px] text-mut pb-1">
                 <div className="flex items-center gap-2 truncate">
@@ -803,6 +872,17 @@ export function CanvasDrawer({ node, allNodes, onClose, onRunNode, onRemoveNode,
           </button>
 
           <div className="flex items-center gap-2">
+            {isRunning && node.jobId && (
+              <button
+                onClick={() => void stopRetry()}
+                disabled={stopping}
+                className="inline-flex items-center gap-1.5 px-3 h-8 rounded-ctl border border-err/40 bg-err/10 hover:bg-err/20 text-err text-[11.5px] font-semibold cursor-pointer transition-colors disabled:opacity-50"
+                title="Dừng node đang chạy (hủy cả thời gian chờ retry)"
+              >
+                <X size={12} weight="bold" />
+                <span>{stopping ? "Đang dừng…" : "Dừng"}</span>
+              </button>
+            )}
             <button
               onClick={() => onRunNode(node.id, false)}
               className="inline-flex items-center gap-1.5 px-4 h-8 rounded-ctl bg-acc hover:bg-acc2 text-accink text-[12px] font-bold cursor-pointer transition-colors shadow-sm"

@@ -51,6 +51,11 @@ from ..Workflows.account_pool import (
 from ..Workflows.flow_client import CircuitOpenError, FlowClient
 from ..Workflows.flow_models import ProjectInfo, ReferenceTemplate, parse_project_ref
 from ..Workflows.media_service import MediaService
+from ..Workflows.node_retry import (
+    NodeExecutionError,
+    RetryAborted,
+    run_with_retry,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 TERMINAL_STATES = {"succeeded", "failed", "rejected"}
@@ -77,7 +82,21 @@ class Job:
         self.created_ms = int(time.time() * 1000)
         self.started_ms: Optional[int] = None
         self.finished_ms: Optional[int] = None
+        #: Set when the user stops the run; long waits (e.g. retry backoff) poll it.
+        self.cancel_event = threading.Event()
         self._lock = threading.Lock()
+
+    # -- cancellation --------------------------------------------------------- #
+
+    @property
+    def cancelled(self) -> bool:
+        return self.cancel_event.is_set()
+
+    def cancel(self, reason: str = "") -> None:
+        """Ask the running job to stop; interruptible waits abort immediately."""
+        self.cancel_event.set()
+        self.add_event("warn", reason or "Đã yêu cầu dừng job — hủy các bước đang chờ…")
+
 
     def add_event(self, kind: str, message: str, data: Optional[dict] = None) -> None:
         with self._lock:
@@ -797,6 +816,19 @@ class JobManager:
                 job.set_state("failed")
                 job.error = str(e)
                 job.add_event("error", str(e))
+            except NodeExecutionError as e:
+                # Anti-abuse retries exhausted: this is the final EXECUTION_ERROR.
+                job.set_state("failed")
+                job.error = f"[{e.code}] {e}"
+                job.add_event("error", f"[{e.code}] {e}", {
+                    "code": e.code,
+                    "attempts": e.attempts,
+                    "reason": e.reason,
+                })
+            except RetryAborted as e:
+                job.set_state("failed")
+                job.error = str(e)
+                job.add_event("warn", str(e), {"code": e.code, "cancelled": True})
             except Exception as e:  # noqa: BLE001
                 job.set_state("failed")
                 job.error = f"{type(e).__name__}: {e}"
@@ -953,18 +985,28 @@ class JobManager:
         aid = account.config.id
         svc = self._node_service(account, job)
         try:
-            res = svc.generate_image(
-                prompt=params["prompt"],
-                aspect_ratio=params.get("aspect_ratio"),
-                aspect=params.get("aspect"),
-                seed=params.get("seed"),
-                reference_image=params.get("reference_image_path"),
-                reference_images=params.get("reference_image_paths"),
-                project_id=params.get("project_id"),
-                dry_run=bool(params.get("dry_run")),
-                remove_watermark=bool(params.get("remove_watermark", True)),
-                on_event=job.add_event,
+            res = run_with_retry(
+                lambda: svc.generate_image(
+                    prompt=params["prompt"],
+                    aspect_ratio=params.get("aspect_ratio"),
+                    aspect=params.get("aspect"),
+                    seed=params.get("seed"),
+                    reference_image=params.get("reference_image_path"),
+                    reference_images=params.get("reference_image_paths"),
+                    project_id=params.get("project_id"),
+                    dry_run=bool(params.get("dry_run")),
+                    remove_watermark=bool(params.get("remove_watermark", True)),
+                    on_event=job.add_event,
+                ),
+                kind="image",
+                log=job.add_event,
+                abort=job.cancel_event,
             )
+        except RetryAborted:
+            self.pool.report_item_result(aid, "cancelled", error="người dùng dừng job")
+            job.set_state("failed")
+            job.error = "Đã dừng node tạo ảnh theo yêu cầu (hủy trong lúc chờ retry)."
+            return
         except Exception as exc:
             self.pool.report_item_result(aid, "failed", error=f"{type(exc).__name__}: {exc}")
             raise
@@ -991,21 +1033,31 @@ class JobManager:
         aid = account.config.id
         svc = self._node_service(account, job)
         try:
-            res = svc.generate_video(
-                prompt=params["prompt"],
-                frame_path=params.get("frame_path"),
-                aspect_ratio=params.get("aspect_ratio") or "9:16",
-                seed=params.get("seed"),
-                resolution=params.get("resolution") or "1080p",
-                duration_s=params.get("duration_s") or 8,
-                project_id=params.get("project_id"),
-                dry_run=bool(params.get("dry_run")),
-                remove_watermark=bool(params.get("remove_watermark", True)),
-                auto_image=bool(params.get("auto_image", True)),
-                image_prompt=params.get("image_prompt"),
-                image_aspect_ratio=params.get("image_aspect_ratio") or "16:9",
-                on_event=job.add_event,
+            res = run_with_retry(
+                lambda: svc.generate_video(
+                    prompt=params["prompt"],
+                    frame_path=params.get("frame_path"),
+                    aspect_ratio=params.get("aspect_ratio") or "9:16",
+                    seed=params.get("seed"),
+                    resolution=params.get("resolution") or "1080p",
+                    duration_s=params.get("duration_s") or 8,
+                    project_id=params.get("project_id"),
+                    dry_run=bool(params.get("dry_run")),
+                    remove_watermark=bool(params.get("remove_watermark", True)),
+                    auto_image=bool(params.get("auto_image", True)),
+                    image_prompt=params.get("image_prompt"),
+                    image_aspect_ratio=params.get("image_aspect_ratio") or "16:9",
+                    on_event=job.add_event,
+                ),
+                kind="video",
+                log=job.add_event,
+                abort=job.cancel_event,
             )
+        except RetryAborted:
+            self.pool.report_item_result(aid, "cancelled", error="người dùng dừng job")
+            job.set_state("failed")
+            job.error = "Đã dừng node tạo video theo yêu cầu (hủy trong lúc chờ retry)."
+            return
         except Exception as exc:
             self.pool.report_item_result(aid, "failed", error=f"{type(exc).__name__}: {exc}")
             raise

@@ -282,6 +282,24 @@ const GROUPS: Group[] = [
 }`,
       },
       {
+        method: "POST",
+        path: "/api/jobs/{jid}/cancel",
+        title: "Dừng job đang chạy",
+        desc: "Đánh dấu job cần dừng. Các bước đang chờ (retry backoff của node Ảnh/Video) hủy ngay trong ~250ms, không phải chờ hết thời gian đếm ngược.",
+        notes: [
+          "Dùng khi node đang ở trạng thái [Retry 1/2] hoặc [Retry 2/2] và bạn muốn dừng luồng.",
+          "Job đã kết thúc (succeeded/failed/rejected) thì chỉ trả về trạng thái hiện tại, không lỗi.",
+          "Node đang chờ sẽ kết thúc với state=failed và error nêu rõ 'đã dừng theo yêu cầu'.",
+        ],
+        tryIt: true,
+        curl: `curl -s -X POST ${BASE}/api/jobs/j_20261019_170230_cd34ef/cancel`,
+        res: `{
+  "ok": true,
+  "state": "running",
+  "cancelled": true
+}`,
+      },
+      {
         method: "GET",
         path: "/api/gallery",
         title: "Lịch sử ảnh đã tạo",

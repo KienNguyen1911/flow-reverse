@@ -28,6 +28,9 @@ export interface PoolAccount {
   cdp_url: string;
   enabled: boolean;
   note?: string | null;
+  /** Credential-free proxy label, e.g. "http://user@host:8080". */
+  proxy?: string | null;
+  has_proxy?: boolean;
   running: boolean;
   managed: boolean;
   status: "ready" | "cooldown" | "disabled" | "error" | string;
@@ -48,12 +51,19 @@ export interface AddAccountPayload {
   enabled?: boolean;
   note?: string;
   create_profile?: boolean;
+  /** Per-browser proxy: http/https/socks5, "host:port" or "user:pass@host:port". Empty ⇒ direct IP. */
+  proxy?: string | null;
+  proxy_bypass?: string | null;
 }
 
 export interface UpdateAccountPayload {
   enabled?: boolean;
   note?: string;
   cdp_port?: number;
+  proxy?: string | null;
+  proxy_bypass?: string | null;
+  /** Drop the proxy and go back to the direct IP. */
+  clear_proxy?: boolean;
 }
 
 export interface AccountDetail {
@@ -64,6 +74,8 @@ export interface AccountDetail {
     cdp_url: string;
     enabled: boolean;
     note?: string | null;
+    proxy?: string | null;
+    has_proxy?: boolean;
     running: boolean;
     managed: boolean;
     status: string;
