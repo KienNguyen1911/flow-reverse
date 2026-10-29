@@ -8,6 +8,8 @@ export interface CanvasStats {
   nRunning: number;
   nDone: number;
   nPending: number;
+  groupCount: number;
+  selectedCount: number;
   wfBusy: boolean;
   linking: boolean;
 }
@@ -29,6 +31,15 @@ export function TopBar({
     (canvasStats?.lastFrameCount ?? 0);
 
   const wfBusy = !!canvasStats?.wfBusy;
+  const selectedCount = canvasStats?.selectedCount ?? 0;
+  const groupCount = canvasStats?.groupCount ?? 0;
+  const scopeLabel = selectedCount > 0 ? `Chạy vùng chọn (${selectedCount})` : "Chạy Workflow";
+  const scopeTitle =
+    selectedCount > 0
+      ? "Chạy các nhóm chứa node đang chọn (mỗi nhóm độc lập — node lỗi chỉ dừng nhóm đó)"
+      : groupCount > 0
+        ? `Chạy ${groupCount} nhóm theo thứ tự (node lỗi chỉ dừng nhóm đó, nhóm khác vẫn chạy)`
+        : "Chạy toàn bộ workflow theo chuỗi phụ thuộc";
 
   return (
     <header className="h-[52px] shrink-0 border-b border-line bg-panel/95 backdrop-blur-md px-4 flex items-center justify-between gap-3 overflow-hidden select-none z-30">
@@ -69,6 +80,8 @@ export function TopBar({
             {canvasStats.nRunning > 0 && <Chip tone="acc" live>{`${canvasStats.nRunning} chạy`}</Chip>}
             {canvasStats.nDone > 0 && <Chip tone="ok">{`${canvasStats.nDone} xong`}</Chip>}
             {canvasStats.nPending > 0 && <Chip tone="warn">{`${canvasStats.nPending} chờ`}</Chip>}
+            {groupCount > 0 && <Chip tone="acc">{`${groupCount} nhóm`}</Chip>}
+            {selectedCount > 0 && <Chip tone="neutral">{`${selectedCount} chọn`}</Chip>}
           </div>
         )}
 
@@ -79,10 +92,10 @@ export function TopBar({
           onClick={onRunWorkflow}
           disabled={wfBusy || totalNodes === 0}
           className="inline-flex items-center gap-1.5 px-3.5 h-8 rounded-ctl bg-acc text-accink text-[12px] font-bold hover:bg-acc2 transition-colors cursor-pointer disabled:opacity-40 disabled:pointer-events-none shadow-sm shadow-acc/10"
-          title="Chạy toàn bộ workflow theo chuỗi phụ thuộc"
+          title={scopeTitle}
         >
           {wfBusy ? <Spinner size={12} /> : <Play size={12} weight="fill" />}
-          <span>Chạy Workflow</span>
+          <span>{scopeLabel}</span>
         </button>
 
         <button

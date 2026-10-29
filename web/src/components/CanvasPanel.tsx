@@ -34,6 +34,10 @@ import { Chip, Spinner } from "./ui";
 
 const NODE_W = 280;
 const ANCHOR_Y = 22;
+const GROUP_PAD = 26;
+const GROUP_HEADER_H = 40;
+const FALLBACK_NODE_H = 220;
+const GROUP_COLORS = ["#7c9cff", "#4ade80", "#f59e0b", "#c084fc", "#f472b6", "#22d3ee"];
 const STORAGE_KEY = "fb_canvas_graph_v1";
 const TERMINAL = new Set(["succeeded", "failed", "rejected"]);
 const ACTIVE = new Set(["queued", "running"]);
@@ -43,8 +47,26 @@ type NodeType = "ref" | "image" | "video" | "last_frame";
 
 type CanvasNode = CanvasDrawerNode;
 
+/**
+ * Visual Group / Scope: a labelled frame that owns a set of nodes.
+ * Failure policy: when a node inside a group fails, the rest of THAT group is
+ * skipped and the workflow continues with the next group.
+ */
+interface CanvasGroup {
+  id: string;
+  name: string;
+  nodeIds: string[];
+  color?: string | null;
+  /** Manual frame override (set when the user drags/resizes the frame itself). */
+  x?: number | null;
+  y?: number | null;
+  w?: number | null;
+  h?: number | null;
+}
+
 interface Graph {
   nodes: CanvasNode[];
+  groups: CanvasGroup[];
 }
 
 interface View {
@@ -65,12 +87,21 @@ function loadGraph(): Graph {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const g = JSON.parse(raw) as Graph;
-      if (Array.isArray(g?.nodes)) return g;
+      if (Array.isArray(g?.nodes)) {
+        return {
+          nodes: g.nodes,
+          groups: Array.isArray(g.groups)
+            ? g.groups
+                .filter((gr) => gr && typeof gr.id === "string" && Array.isArray(gr.nodeIds))
+                .map((gr) => ({ ...gr, nodeIds: gr.nodeIds.filter((id) => typeof id === "string") }))
+            : [],
+        };
+      }
     }
   } catch {
     /* ignore */
   }
-  return { nodes: [] };
+  return { nodes: [], groups: [] };
 }
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -179,6 +210,160 @@ function isVideoContinuation(nodes: CanvasNode[], n: CanvasNode): boolean {
   if (n.type !== "video" || !n.sourceImageId) return false;
   const parent = nodes.find((x) => x.id === n.sourceImageId);
   return parent?.type === "last_frame" || parent?.type === "video";
+}
+
+// --------------------------------------------------------------------------- //
+// Visual Group / Scope
+// A group is a labelled frame owning a set of nodes. Execution treats every
+// group as an isolated unit: a node failure aborts only that group, the next
+// group still runs. Ungrouped nodes form one virtual, implicit unit.
+// --------------------------------------------------------------------------- //
+
+interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+interface RunUnit {
+  id: string;
+  name: string;
+  color: string | null;
+  kind: "group" | "loose";
+  nodeIds: string[];
+}
+
+function nodeHeight(n: CanvasNode, heights: Record<string, number>): number {
+  return heights[n.id] ?? FALLBACK_NODE_H;
+}
+
+/** Frame that encloses all member nodes (derived, so it always stays tight). */
+function groupFrame(
+  group: CanvasGroup,
+  byId: Map<string, CanvasNode>,
+  heights: Record<string, number>,
+): Rect | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let count = 0;
+  for (const id of group.nodeIds) {
+    const m = byId.get(id);
+    if (!m) continue;
+    count++;
+    minX = Math.min(minX, m.x);
+    minY = Math.min(minY, m.y);
+    maxX = Math.max(maxX, m.x + NODE_W);
+    maxY = Math.max(maxY, m.y + nodeHeight(m, heights));
+  }
+  if (count === 0) return null;
+  const x = minX - GROUP_PAD;
+  const y = minY - GROUP_PAD - GROUP_HEADER_H;
+  return {
+    x,
+    y,
+    w: maxX - minX + GROUP_PAD * 2,
+    h: maxY - minY + GROUP_PAD * 2 + GROUP_HEADER_H,
+  };
+}
+
+/** Weakly-connected components of the given node ids (via source links). */
+function componentsOf(nodes: CanvasNode[], ids: string[]): string[][] {
+  const allowed = new Set(ids);
+  const parent = new Map<string, string>();
+  const find = (x: string): string => {
+    let p = parent.get(x) ?? x;
+    while (p !== (parent.get(p) ?? p)) p = parent.get(p) ?? p;
+    return p;
+  };
+  const union = (a: string, b: string) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+  ids.forEach((id) => parent.set(id, id));
+  for (const n of nodes) {
+    if (!allowed.has(n.id)) continue;
+    for (const sid of getNodeSourceIds(n)) {
+      if (allowed.has(sid)) union(n.id, sid);
+    }
+  }
+  const buckets = new Map<string, string[]>();
+  for (const id of ids) {
+    const root = find(id);
+    const arr = buckets.get(root);
+    if (arr) arr.push(id);
+    else buckets.set(root, [id]);
+  }
+  return Array.from(buckets.values());
+}
+
+/**
+ * Build the ordered execution plan.
+ * - No selection: every group runs (plus virtual units for ungrouped nodes,
+ *   split into connected components so separate pipelines stay independent).
+ * - With a selection: only groups touched by the selection run (whole group,
+ *   because a group is one unit), plus the selected ungrouped nodes.
+ * Units are ordered by the shallowest chain depth they contain.
+ */
+function buildRunUnits(nodes: CanvasNode[], groups: CanvasGroup[], selectedIds: string[]): RunUnit[] {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const sel = new Set(selectedIds.filter((id) => byId.has(id)));
+
+  const units: RunUnit[] = [];
+  const inGroup = new Set<string>();
+
+  for (const g of groups) {
+    const ids = g.nodeIds.filter((id) => byId.has(id));
+    if (ids.length === 0) continue;
+    ids.forEach((id) => inGroup.add(id));
+    if (sel.size > 0 && !ids.some((id) => sel.has(id))) continue;
+    units.push({
+      id: g.id,
+      name: g.name || "Nhóm chưa đặt tên",
+      color: g.color ?? null,
+      kind: "group",
+      nodeIds: ids,
+    });
+  }
+
+  const loose = nodes
+    .filter((n) => !inGroup.has(n.id))
+    .filter((n) => sel.size === 0 || sel.has(n.id))
+    .map((n) => n.id);
+  const comps = componentsOf(nodes, loose);
+  comps.forEach((comp, i) => {
+    units.push({
+      id: `__loose_${i}`,
+      name: comps.length > 1 ? `Node lẻ (nhánh ${i + 1})` : "Node lẻ (không thuộc nhóm)",
+      color: null,
+      kind: "loose",
+      nodeIds: comp,
+    });
+  });
+
+  const depthOf = (unit: RunUnit): number => {
+    let min = Infinity;
+    for (const id of unit.nodeIds) {
+      const n = byId.get(id);
+      if (!n || n.type === "ref") continue;
+      min = Math.min(min, chainDepth(nodes, n));
+    }
+    return Number.isFinite(min) ? min : 0;
+  };
+
+  return units.sort((a, b) => depthOf(a) - depthOf(b));
+}
+
+/** Executable (non-ref) members of a unit, parents first. */
+function unitMembers(nodes: CanvasNode[], unit: RunUnit): CanvasNode[] {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  return unit.nodeIds
+    .map((id) => byId.get(id))
+    .filter((n): n is CanvasNode => !!n && n.type !== "ref")
+    .sort((a, b) => chainDepth(nodes, a) - chainDepth(nodes, b));
 }
 
 let seq = Date.now() % 100000;
@@ -355,6 +540,8 @@ export interface CanvasStats {
   nRunning: number;
   nDone: number;
   nPending: number;
+  groupCount: number;
+  selectedCount: number;
   wfBusy: boolean;
   linking: boolean;
 }
@@ -391,6 +578,10 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
   const [confirmTarget, setConfirmTarget] = useState<
     { mode: "workflow" } | { mode: "node"; nodeId: string } | null
   >(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [marquee, setMarquee] = useState<Rect | null>(null);
+  const [nodeHeights, setNodeHeights] = useState<Record<string, number>>({});
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -404,12 +595,29 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
   const dragRef = useRef<
     | { kind: "pan"; sx: number; sy: number; ox: number; oy: number }
     | { kind: "node"; id: string; sx: number; sy: number; ox: number; oy: number }
+    | { kind: "group"; id: string; sx: number; sy: number; origin: { id: string; x: number; y: number }[] }
+    | { kind: "marquee"; sx: number; sy: number; cx: number; cy: number; additive: boolean; base: string[]; moved: boolean; keep: boolean }
     | null
   >(null);
 
   const nodes = graph.nodes;
+  const groups = graph.groups;
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
+  const groupsRef = useRef(groups);
+  groupsRef.current = groups;
+  const selectedRef = useRef(selectedIds);
+  selectedRef.current = selectedIds;
+
+  const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
+  const heightRef = useRef<Record<string, number>>({});
+  heightRef.current = nodeHeights;
+  const spaceDownRef = useRef(false);
+
+  const measureNode = useCallback((id: string, h: number) => {
+    if (h <= 0) return;
+    setNodeHeights((cur) => (Math.abs((cur[id] ?? 0) - h) < 1 ? cur : { ...cur, [id]: h }));
+  }, []);
 
 
   const showToast = useCallback(
@@ -459,26 +667,82 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
     }));
   }, []);
 
-  // -- background pan + node drag ------------------------------------------- //
+  // -- background pan + node / group drag + marquee selection ---------------- //
   useEffect(() => {
+    const toCanvas = (clientX: number, clientY: number) => {
+      const rect = viewportRef.current?.getBoundingClientRect();
+      const v = viewRef.current;
+      return {
+        x: (clientX - (rect?.left ?? 0) - v.x) / v.z,
+        y: (clientY - (rect?.top ?? 0) - v.y) / v.z,
+      };
+    };
+
     const move = (e: PointerEvent) => {
       const d = dragRef.current;
       if (!d) return;
       if (d.kind === "pan") {
         setView((v) => ({ ...v, x: d.ox + (e.clientX - d.sx), y: d.oy + (e.clientY - d.sy) }));
-      } else {
+        return;
+      }
+      if (d.kind === "marquee") {
+        const p = toCanvas(e.clientX, e.clientY);
+        d.cx = p.x;
+        d.cy = p.y;
+        const rect: Rect = {
+          x: Math.min(d.sx, p.x),
+          y: Math.min(d.sy, p.y),
+          w: Math.abs(p.x - d.sx),
+          h: Math.abs(p.y - d.sy),
+        };
+        if (rect.w > 3 || rect.h > 3) d.moved = true;
+        setMarquee(rect);
+        // Live preview: nodes intersecting the marquee.
+        const hits = nodesRef.current
+          .filter((n) => {
+            const h = nodeHeight(n, heightRef.current);
+            return !(
+              n.x > rect.x + rect.w ||
+              n.x + NODE_W < rect.x ||
+              n.y > rect.y + rect.h ||
+              n.y + h < rect.y
+            );
+          })
+          .map((n) => n.id);
+        setSelectedIds(d.additive ? Array.from(new Set([...d.base, ...hits])) : hits);
+        return;
+      }
+      if (d.kind === "group") {
         const z = viewRef.current.z;
+        const dx = (e.clientX - d.sx) / z;
+        const dy = (e.clientY - d.sy) / z;
+        const pos = new Map(d.origin.map((o) => [o.id, o]));
         setGraph((g) => ({
           ...g,
-          nodes: g.nodes.map((n) =>
-            n.id === d.id
-              ? { ...n, x: d.ox + (e.clientX - d.sx) / z, y: d.oy + (e.clientY - d.sy) / z }
-              : n,
-          ),
+          nodes: g.nodes.map((n) => {
+            const o = pos.get(n.id);
+            return o ? { ...n, x: o.x + dx, y: o.y + dy } : n;
+          }),
         }));
+        return;
       }
+      const z = viewRef.current.z;
+      setGraph((g) => ({
+        ...g,
+        nodes: g.nodes.map((n) =>
+          n.id === d.id
+            ? { ...n, x: d.ox + (e.clientX - d.sx) / z, y: d.oy + (e.clientY - d.sy) / z }
+            : n,
+        ),
+      }));
     };
     const up = () => {
+      const d = dragRef.current;
+      if (d?.kind === "marquee") {
+        // A plain click (no meaningful drag) on empty canvas clears the selection.
+        if (!d.moved && !d.keep) setSelectedIds([]);
+        setMarquee(null);
+      }
       dragRef.current = null;
     };
     window.addEventListener("pointermove", move);
@@ -509,14 +773,14 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
-  // -- escape cancels linking, context menu, or closes drawer ----------------- //
+  // -- escape cancels linking, context menu, drawer, or clears the selection --- //
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        if (contextMenu) setContextMenu(null);
-        else if (linking) setLinking(null);
-        else if (drawerNodeId) setDrawerNodeId(null);
-      }
+      if (e.key !== "Escape") return;
+      if (contextMenu) setContextMenu(null);
+      else if (linking) setLinking(null);
+      else if (drawerNodeId) setDrawerNodeId(null);
+      else if (selectedRef.current.length > 0) setSelectedIds([]);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -739,7 +1003,9 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
     [patchNode, showToast],
   );
 
-  // -- run whole workflow (topological execution in chain order) ---------------- //
+  // -- run whole workflow (per group, isolated failure) ------------------------- //
+  // Each Visual Group is an independent execution unit. A node failure aborts
+  // only the unit that owns it; the following units still run from scratch.
   const runWorkflow = useCallback(
     async (dry: boolean) => {
       if (wfBusy) return;
@@ -747,67 +1013,107 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
       setConfirmTarget(null);
       try {
         const current = nodesRef.current;
-        // Non-ref nodes sorted by chain depth so parent outputs are ready before child runs
-        const runnable = current
-          .filter((n) => n.type !== "ref")
-          .sort((a, b) => chainDepth(current, a) - chainDepth(current, b));
+        const units = buildRunUnits(current, groupsRef.current, selectedRef.current);
 
-        if (runnable.length === 0) {
-          showToast("Canvas trống — thêm node trước khi chạy.", "err");
+        if (units.length === 0) {
+          showToast("Không có node nào để chạy.", "err");
           return;
         }
 
         const srcOk = new Map<string, boolean>();
         for (const n of current.filter((x) => x.type === "ref")) srcOk.set(n.id, !!n.fileUrl);
 
-        for (const item of runnable) {
-          const n = nodesRef.current.find((x) => x.id === item.id) || item;
-          const sids = getNodeSourceIds(n);
-          if (sids.some((sid) => srcOk.get(sid) === false)) {
-            patchNode(n.id, {
-              status: "skipped",
-              reason: "Node nguồn không thành công — bỏ qua node này.",
-            });
-            srcOk.set(n.id, false);
-            continue;
+        const executable = units.reduce((acc, u) => acc + unitMembers(current, u).length, 0);
+        if (executable === 0) {
+          showToast("Không có node ảnh/video nào để chạy.", "err");
+          return;
+        }
+
+        const aborted: string[] = [];
+
+        for (const unit of units) {
+          const members = unitMembers(current, unit);
+          if (members.length === 0) continue;
+
+          if (units.length > 1) {
+            showToast(`▶ Bắt đầu ${unit.name} (${members.length} node)`, "info", members[0].id);
           }
 
-          // Dynamic JIT Prompt generation before running
-          if (!dry && jitPromptEnabled && (n.type === "image" || n.type === "video")) {
-            const sRes = resolveSource(nodesRef.current, n, false);
-            if (sRes.ok && sRes.urls.length > 0) {
-              setAiGeneratingId(n.id);
-              try {
-                showToast(`JIT Agent: Đang phân tích kết quả node trước để tối ưu prompt...`, "info", n.id);
-                const aiRes = await api.generateNodePrompt({
-                  node_id: n.id,
-                  node_type: n.type,
-                  upstream_media_urls: sRes.urls,
-                  skill_id: n.agentSkillId || undefined,
-                  custom_hint: n.agentCustomHint || undefined,
-                  is_video_continuation: isVideoContinuation(nodesRef.current, n),
-                });
-                if (aiRes.ok && aiRes.prompt) {
-                  patchNode(n.id, { prompt: aiRes.prompt });
-                  n.prompt = aiRes.prompt;
-                  item.prompt = aiRes.prompt;
+          let unitFailed = false;
+          for (const item of members) {
+            const n = nodesRef.current.find((x) => x.id === item.id) || item;
+
+            if (unitFailed) {
+              patchNode(n.id, {
+                status: "skipped",
+                reason: `Đã hủy vì ${unit.name} gặp lỗi trước đó.`,
+              });
+              srcOk.set(n.id, false);
+              continue;
+            }
+
+            const sids = getNodeSourceIds(n);
+            if (sids.some((sid) => srcOk.get(sid) === false)) {
+              patchNode(n.id, {
+                status: "skipped",
+                reason: "Node nguồn không thành công — bỏ qua node này.",
+              });
+              srcOk.set(n.id, false);
+              continue;
+            }
+
+            // Dynamic JIT prompt generation before running
+            if (!dry && jitPromptEnabled && (n.type === "image" || n.type === "video")) {
+              const sRes = resolveSource(nodesRef.current, n, false);
+              if (sRes.ok && sRes.urls.length > 0) {
+                setAiGeneratingId(n.id);
+                try {
+                  showToast(`JIT Agent: Đang phân tích kết quả node trước để tối ưu prompt...`, "info", n.id);
+                  const aiRes = await api.generateNodePrompt({
+                    node_id: n.id,
+                    node_type: n.type,
+                    upstream_media_urls: sRes.urls,
+                    skill_id: n.agentSkillId || undefined,
+                    custom_hint: n.agentCustomHint || undefined,
+                    is_video_continuation: isVideoContinuation(nodesRef.current, n),
+                  });
+                  if (aiRes.ok && aiRes.prompt) {
+                    patchNode(n.id, { prompt: aiRes.prompt });
+                    n.prompt = aiRes.prompt;
+                    item.prompt = aiRes.prompt;
+                  }
+                } catch (e: any) {
+                  console.warn("Lỗi sinh prompt JIT, tiếp tục với prompt sẵn có:", e);
+                } finally {
+                  setAiGeneratingId(null);
                 }
-              } catch (e: any) {
-                console.warn("Lỗi sinh prompt JIT, tiếp tục với prompt sẵn có:", e);
-              } finally {
-                setAiGeneratingId(null);
               }
             }
-          }
 
-          const r = await runNodeNow(n.id, dry);
-          srcOk.set(n.id, r.ok);
-          if (!r.ok && !dry) {
-            showToast(`Dừng workflow: node lỗi.`, "err", n.id);
-            return;
+            const r = await runNodeNow(n.id, dry);
+            srcOk.set(n.id, r.ok);
+            if (!r.ok && !dry) {
+              unitFailed = true;
+              aborted.push(unit.name);
+              showToast(
+                `Dừng ${unit.name}: node lỗi. Chuyển sang nhóm tiếp theo.`,
+                "err",
+                n.id,
+              );
+            }
           }
         }
-        showToast(dry ? "Dry-run workflow hoàn tất." : "Workflow hoàn tất!", "ok");
+
+        if (aborted.length > 0) {
+          showToast(
+            dry
+              ? "Dry-run hoàn tất."
+              : `Workflow kết thúc — ${aborted.length} nhóm bị dừng: ${aborted.join(", ")}.`,
+            "err",
+          );
+        } else {
+          showToast(dry ? "Dry-run workflow hoàn tất." : "Workflow hoàn tất!", "ok");
+        }
       } finally {
         setWfBusy(false);
       }
@@ -854,10 +1160,148 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
             sourceImageIds: sids,
           };
         }),
+      groups: g.groups
+        .map((gr) => ({ ...gr, nodeIds: gr.nodeIds.filter((nid) => nid !== id) }))
+        .filter((gr) => gr.nodeIds.length > 0),
     }));
+    setSelectedIds((cur) => cur.filter((nid) => nid !== id));
     if (linking?.id === id) setLinking(null);
     if (drawerNodeId === id) setDrawerNodeId(null);
   };
+
+  // -- selection -------------------------------------------------------------- //
+  const toggleSelect = useCallback((id: string, additive: boolean) => {
+    setSelectedIds((cur) => {
+      if (!additive) return cur.length === 1 && cur[0] === id ? [] : [id];
+      return cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+    });
+  }, []);
+
+  const selectGroup = useCallback((groupId: string) => {
+    const g = groupsRef.current.find((x) => x.id === groupId);
+    if (!g) return;
+    setSelectedIds(g.nodeIds);
+  }, []);
+
+  // -- group actions ---------------------------------------------------------- //
+  const createGroupFromSelection = useCallback(() => {
+    const sel = selectedRef.current;
+    if (sel.length === 0) {
+      showToast("Chọn node trước (Shift + click hoặc quét chuột) để tạo nhóm.", "err");
+      return;
+    }
+    const existing = groupsRef.current;
+    const taken = new Set(existing.flatMap((g) => g.nodeIds));
+    const ids = sel.filter((id) => !taken.has(id));
+    if (ids.length === 0) {
+      showToast("Các node đã chọn đều thuộc nhóm khác — giải tán nhóm cũ trước.", "err");
+      return;
+    }
+    const group: CanvasGroup = {
+      id: nextId("group"),
+      name: `Nhóm ${existing.length + 1}`,
+      nodeIds: ids,
+      color: GROUP_COLORS[existing.length % GROUP_COLORS.length],
+    };
+    setGraph((g) => ({ ...g, groups: [...g.groups, group] }));
+    setEditingGroupId(group.id);
+    showToast(`Đã tạo "${group.name}" gồm ${ids.length} node.`, "ok");
+  }, [showToast]);
+
+  const renameGroup = useCallback((groupId: string, name: string) => {
+    setGraph((g) => ({
+      ...g,
+      groups: g.groups.map((gr) => (gr.id === groupId ? { ...gr, name } : gr)),
+    }));
+  }, []);
+
+  const dissolveGroup = useCallback(
+    (groupId: string) => {
+      const g = groupsRef.current.find((x) => x.id === groupId);
+      setGraph((cur) => ({ ...cur, groups: cur.groups.filter((gr) => gr.id !== groupId) }));
+      if (g) showToast(`Đã giải tán "${g.name}".`, "info");
+    },
+    [showToast],
+  );
+
+  const addSelectionToGroup = useCallback(
+    (groupId: string) => {
+      const sel = new Set(selectedRef.current);
+      if (sel.size === 0) {
+        showToast("Chưa chọn node nào để thêm vào nhóm.", "err");
+        return;
+      }
+      const target = groupsRef.current.find((gr) => gr.id === groupId);
+      if (!target) return;
+      const added = Array.from(sel).filter((id) => !target.nodeIds.includes(id)).length;
+      setGraph((g) => ({
+        ...g,
+        groups: g.groups
+          .map((gr) => {
+            if (gr.id !== groupId) {
+              // Nodes can only belong to one group.
+              return { ...gr, nodeIds: gr.nodeIds.filter((id) => !sel.has(id)) };
+            }
+            return { ...gr, nodeIds: Array.from(new Set([...gr.nodeIds, ...sel])) };
+          })
+          .filter((gr) => gr.nodeIds.length > 0),
+      }));
+      showToast(added > 0 ? `Đã thêm ${added} node vào nhóm.` : "Các node này đã ở trong nhóm.", "ok");
+    },
+    [showToast],
+  );
+
+  const removeFromGroup = useCallback(
+    (groupId: string) => {
+      const sel = new Set(selectedRef.current);
+      if (sel.size === 0) return;
+      setGraph((g) => ({
+        ...g,
+        groups: g.groups
+          .map((gr) =>
+            gr.id === groupId
+              ? { ...gr, nodeIds: gr.nodeIds.filter((id) => !sel.has(id)) }
+              : gr,
+          )
+          .filter((gr) => gr.nodeIds.length > 0),
+      }));
+      showToast("Đã bỏ node khỏi nhóm.", "info");
+    },
+    [showToast],
+  );
+
+  // -- Ctrl/Cmd+G groups the current selection ------------------------------- //
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "g") {
+        e.preventDefault();
+        createGroupFromSelection();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [createGroupFromSelection]);
+
+  // -- hold Space to pan the canvas (drag on empty canvas selects instead) ---- //
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      spaceDownRef.current = true;
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.code === "Space") spaceDownRef.current = false;
+    };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+    };
+  }, []);
 
   const uploadRef = useCallback(
     async (id: string, file: File) => {
@@ -982,13 +1426,36 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
 
   const drawerNode = nodes.find((n) => n.id === drawerNodeId) ?? null;
 
+  // Execution plan preview for the confirm modal + TopBar.
+  const runUnits = useMemo(
+    () => buildRunUnits(nodes, groups, selectedIds),
+    [nodes, groups, selectedIds],
+  );
+
   const loadTemplate = useCallback(
     (name: "tryon") => {
       if (name === "tryon") {
         const tplNodes = createTryOnTemplate();
-        setGraph({ nodes: tplNodes });
+        setGraph({
+          nodes: tplNodes,
+          groups: [
+            {
+              id: "tryon_group_image",
+              name: "Nhóm 1: Sinh ảnh Lookbook",
+              nodeIds: ["tryon_ref_model", "tryon_ref_garment", "tryon_node_image"],
+              color: GROUP_COLORS[0],
+            },
+            {
+              id: "tryon_group_video",
+              name: "Nhóm 2: Render Video Try-on",
+              nodeIds: ["tryon_node_video_1", "tryon_node_last_frame", "tryon_node_video_2"],
+              color: GROUP_COLORS[1],
+            },
+          ],
+        });
+        setSelectedIds([]);
         setView({ x: 20, y: 30, z: 0.82 });
-        showToast("Đã khởi tạo Mẫu Workflow: Video Thử Đồ (6 nodes liên kết)", "ok");
+        showToast("Đã khởi tạo Mẫu Workflow: Video Thử Đồ (2 nhóm, 6 nodes liên kết)", "ok");
       }
     },
     [showToast],
@@ -1018,6 +1485,8 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
       nRunning,
       nDone,
       nPending,
+      groupCount: groups.length,
+      selectedCount: selectedIds.length,
       wfBusy,
       linking: !!linking,
     });
@@ -1028,6 +1497,8 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
     nRunning,
     nDone,
     nPending,
+    groups.length,
+    selectedIds.length,
     wfBusy,
     linking,
     onStatsChange,
@@ -1116,10 +1587,114 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
           if (contextMenu) setContextMenu(null);
           const t = e.target as HTMLElement;
           if (t.closest("button, select, input, textarea, a, video")) return;
-          dragRef.current = { kind: "pan", sx: e.clientX, sy: e.clientY, ox: view.x, oy: view.y };
           setLinking(null);
+
+          const toCanvas = (clientX: number, clientY: number) => {
+            const rect = viewportRef.current?.getBoundingClientRect();
+            const v = viewRef.current;
+            return {
+              x: (clientX - (rect?.left ?? 0) - v.x) / v.z,
+              y: (clientY - (rect?.top ?? 0) - v.y) / v.z,
+            };
+          };
+
+          // Middle button or Space+drag pans the canvas; left drag on empty
+          // canvas sweeps a selection rectangle (Shift = additive).
+          if (e.button === 1 || spaceDownRef.current) {
+            e.preventDefault();
+            dragRef.current = { kind: "pan", sx: e.clientX, sy: e.clientY, ox: view.x, oy: view.y };
+            return;
+          }
+          if (e.button !== 0) return;
+
+          const p = toCanvas(e.clientX, e.clientY);
+          const additive = e.shiftKey;
+          dragRef.current = {
+            kind: "marquee",
+            sx: p.x,
+            sy: p.y,
+            cx: p.x,
+            cy: p.y,
+            additive,
+            base: additive ? selectedRef.current : [],
+            moved: false,
+            keep: false,
+          };
+          if (!additive) setSelectedIds([]);
+          setMarquee({ x: p.x, y: p.y, w: 0, h: 0 });
         }}
       >
+        {/* Selection / group toolbar */}
+        <div className="absolute left-3 top-3 z-20 flex flex-col gap-1.5">
+          {selectedIds.length > 0 && (
+            <div className="flex items-center gap-1.5 rounded-ctl border border-acc/45 bg-panel/95 backdrop-blur-md px-2.5 py-1.5 shadow-lg text-[11.5px]">
+              <span className="font-bold text-acc">{selectedIds.length} node chọn</span>
+              <span className="h-3.5 w-px bg-line2" />
+              <button
+                type="button"
+                onClick={createGroupFromSelection}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-[6px] bg-acc text-accink font-bold hover:bg-acc2 cursor-pointer"
+                title="Tạo nhóm từ node đã chọn (Ctrl+G)"
+              >
+                <Plus size={11} weight="bold" />
+                Tạo nhóm
+              </button>
+              <select
+                value=""
+                onChange={(e) => {
+                  if (e.target.value) addSelectionToGroup(e.target.value);
+                  e.currentTarget.value = "";
+                }}
+                className="text-[11px] bg-panel2 border border-line2 rounded-[6px] px-1.5 py-1 text-dim cursor-pointer"
+                title="Thêm node đã chọn vào nhóm có sẵn"
+              >
+                <option value="">Thêm vào nhóm…</option>
+                {groups.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+              {groups.some((g) => g.nodeIds.some((id) => selectedIds.includes(id))) && (
+                <select
+                  value=""
+                  onChange={(e) => {
+                    if (e.target.value) removeFromGroup(e.target.value);
+                    e.currentTarget.value = "";
+                  }}
+                  className="text-[11px] bg-panel2 border border-line2 rounded-[6px] px-1.5 py-1 text-dim cursor-pointer"
+                  title="Bỏ node đã chọn khỏi nhóm"
+                >
+                  <option value="">Bỏ khỏi nhóm…</option>
+                  {groups
+                    .filter((g) => g.nodeIds.some((id) => selectedIds.includes(id)))
+                    .map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.name}
+                      </option>
+                    ))}
+                </select>
+              )}
+              <button
+                type="button"
+                onClick={() => setSelectedIds([])}
+                className="text-mut hover:text-fg cursor-pointer"
+                title="Bỏ chọn (Esc)"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          )}
+
+          {groups.length === 0 && selectedIds.length === 0 && nodes.length > 0 && (
+            <div className="text-[10.5px] text-mut bg-panel/85 border border-line rounded-ctl px-2.5 py-1.5 max-w-[300px] leading-relaxed">
+              Kéo chuột trên nền để <strong className="text-fg">quét chọn</strong> node · Giữ{" "}
+              <kbd className="font-mono bg-panel2 px-1 rounded text-[10px]">Shift</kbd> + click để chọn
+              từng node · Ctrl+G để gom nhóm.
+            </div>
+          )}
+        </div>
+
         {/* Zoom Controls */}
         <div className="absolute left-3 bottom-3 z-20 flex items-center gap-1.5">
           <button
@@ -1146,8 +1721,11 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
           <span className="text-[11px] font-mono text-mut px-1">{Math.round(view.z * 100)}%</span>
         </div>
 
-        <div className="absolute right-3 bottom-3 z-20 text-[10.5px] text-mut bg-panel/85 border border-line rounded-ctl px-2.5 py-1.5 max-w-[320px] leading-relaxed">
-          Nối <strong>Video → Frame Cuối → Video tiếp theo</strong> để tạo chuỗi video liền mạch giống Try-On.
+        <div className="absolute right-3 bottom-3 z-20 text-[10.5px] text-mut bg-panel/85 border border-line rounded-ctl px-2.5 py-1.5 max-w-[340px] leading-relaxed">
+          Kéo nền để <strong className="text-fg">quét chọn</strong> ·{" "}
+          <kbd className="font-mono bg-panel2 px-1 rounded text-[10px]">Shift</kbd>+click chọn từng
+          node · Giữ <kbd className="font-mono bg-panel2 px-1 rounded text-[10px]">Space</kbd> hoặc
+          chuột giữa để <strong className="text-fg">di chuyển canvas</strong>.
         </div>
 
         {canvasDrag && (
@@ -1212,6 +1790,159 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
             })}
           </svg>
 
+          {/* Rubber-band selection rectangle */}
+          {marquee && (marquee.w > 2 || marquee.h > 2) && (
+            <div
+              className="absolute border-2 border-acc bg-acc/10 rounded-[4px] pointer-events-none"
+              style={{ left: marquee.x, top: marquee.y, width: marquee.w, height: marquee.h, zIndex: 5 }}
+            />
+          )}
+
+          {/* Visual Groups: frames drawn behind nodes */}
+          {groups.map((gr) => {
+            const frame = groupFrame(gr, nodeById, nodeHeights);
+            if (!frame) return null;
+            const color = gr.color || "var(--color-acc)";
+            const members = gr.nodeIds.filter((id) => nodeById.has(id));
+            const selCount = members.filter((id) => selectedIds.includes(id)).length;
+            const allSelected = members.length > 0 && selCount === members.length;
+            const statuses = members
+              .map((id) => nodeById.get(id)?.status)
+              .filter(Boolean) as NodeStatus[];
+            const hasFailed = statuses.some((s) => s === "failed" || s === "rejected");
+            const hasRunning = statuses.some((s) => s === "running" || s === "queued");
+            const allDone =
+              statuses.length > 0 && statuses.every((s) => s === "succeeded");
+            const label = hasFailed
+              ? "Lỗi — dừng nhóm"
+              : hasRunning
+                ? "Đang chạy"
+                : allDone
+                  ? "Hoàn tất"
+                  : `${members.length} node`;
+            const labelCls = hasFailed
+              ? "text-err"
+              : hasRunning
+                ? "text-acc"
+                : allDone
+                  ? "text-ok"
+                  : "text-mut";
+
+            return (
+              <div
+                key={gr.id}
+                className="absolute rounded-[14px] border-2 transition-colors pointer-events-none"
+                style={{
+                  left: frame.x,
+                  top: frame.y,
+                  width: frame.w,
+                  height: frame.h,
+                  zIndex: -1,
+                  borderColor: color,
+                  borderStyle: allSelected || selectedIds.some((id) => members.includes(id)) ? "solid" : "dashed",
+                  opacity: allSelected ? 1 : 0.72,
+                  background: `color-mix(in srgb, ${color} 7%, transparent)`,
+                }}
+              >
+                {/* Group header: drag to move all members, double-click to rename */}
+                <div
+                  className="group-header absolute left-0 top-0 h-[40px] flex items-center gap-1.5 px-2 rounded-t-[12px] pointer-events-auto cursor-grab active:cursor-grabbing"
+                  style={{ width: Math.max(210, Math.min(frame.w, 460)) }}
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    if (e.button !== 0) return;
+                    dragRef.current = {
+                      kind: "group",
+                      id: gr.id,
+                      sx: e.clientX,
+                      sy: e.clientY,
+                      origin: members
+                        .map((id) => nodeById.get(id))
+                        .filter(Boolean)
+                        .map((m) => ({ id: m!.id, x: m!.x, y: m!.y })),
+                    };
+                  }}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    setEditingGroupId(gr.id);
+                  }}
+                >
+                  <span
+                    className="size-2.5 rounded-full shrink-0"
+                    style={{ background: color }}
+                  />
+                  {editingGroupId === gr.id ? (
+                    <input
+                      autoFocus
+                      value={gr.name}
+                      onChange={(e) => renameGroup(gr.id, e.target.value)}
+                      onBlur={() => {
+                        if (!gr.name.trim()) renameGroup(gr.id, "Nhóm chưa đặt tên");
+                        setEditingGroupId(null);
+                      }}
+                      onKeyDown={(e) => {
+                        e.stopPropagation();
+                        if (e.key === "Enter" || e.key === "Escape") {
+                          if (!gr.name.trim()) renameGroup(gr.id, "Nhóm chưa đặt tên");
+                          setEditingGroupId(null);
+                        }
+                      }}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      className="flex-1 min-w-0 bg-panel border border-line2 rounded px-1.5 py-0.5 text-[12.5px] font-bold text-fg outline-none"
+                    />
+                  ) : (
+                    <span
+                      className="text-[12.5px] font-bold truncate flex-1"
+                      style={{ color }}
+                      title="Nháy đúp để đổi tên"
+                    >
+                      {gr.name}
+                    </span>
+                  )}
+                  <span className={`text-[10px] font-mono shrink-0 ${labelCls}`}>{label}</span>
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedIds(members);
+                      setConfirmTarget({ mode: "workflow" });
+                    }}
+                    className="grid place-items-center size-8 rounded-[8px] text-mut hover:text-ok hover:bg-panel2 cursor-pointer shrink-0 disabled:opacity-40 disabled:pointer-events-none"
+                    title={`Chạy riêng nhóm "${gr.name}"`}
+                    disabled={wfBusy}
+                  >
+                    <Play size={18} weight="fill" />
+                  </button>
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      selectGroup(gr.id);
+                    }}
+                    className="grid place-items-center size-8 rounded-[8px] text-mut hover:text-fg hover:bg-panel2 cursor-pointer shrink-0"
+                    title="Chọn toàn bộ node trong nhóm"
+                  >
+                    <CheckCircle size={18} weight={allSelected ? "fill" : "regular"} />
+                  </button>
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      dissolveGroup(gr.id);
+                    }}
+                    className="grid place-items-center size-8 rounded-[8px] text-mut hover:text-err hover:bg-panel2 cursor-pointer shrink-0"
+                    title="Giải tán nhóm (giữ nguyên các node)"
+                  >
+                    <X size={18} weight="bold" />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+
           {nodes.map((n) => (
             <CanvasNodeCard
               key={n.id}
@@ -1252,9 +1983,36 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
               aiGeneratingId={aiGeneratingId}
               onGenerateAiPrompt={handleGenerateAiPrompt}
               skillsList={skillsList}
+              selected={selectedIds.includes(n.id)}
+              onSelect={(additive) => toggleSelect(n.id, additive)}
+              onMeasure={measureNode}
               onHeaderDown={(e) => {
                 e.stopPropagation();
-                dragRef.current = { kind: "node", id: n.id, sx: e.clientX, sy: e.clientY, ox: n.x, oy: n.y };
+                // Shift/Ctrl+click toggles membership instead of starting a drag.
+                if (e.shiftKey || e.ctrlKey || e.metaKey) {
+                  toggleSelect(n.id, true);
+                  return;
+                }
+                // Dragging a node that is already part of the selection moves
+                // the whole selection. A plain click never changes selection —
+                // selection is explicit (Shift+click / rubber-band) so the
+                // "Chạy N node chọn" scope cannot change by accident.
+                const moving = selectedRef.current.includes(n.id) ? selectedRef.current : [n.id];
+                const members = moving
+                  .map((id) => nodesRef.current.find((x) => x.id === id))
+                  .filter(Boolean)
+                  .map((m) => ({ id: m!.id, x: m!.x, y: m!.y }));
+                if (members.length > 1) {
+                  dragRef.current = {
+                    kind: "group",
+                    id: n.id,
+                    sx: e.clientX,
+                    sy: e.clientY,
+                    origin: members,
+                  };
+                } else {
+                  dragRef.current = { kind: "node", id: n.id, sx: e.clientX, sy: e.clientY, ox: n.x, oy: n.y };
+                }
               }}
             />
           ))}
@@ -1321,6 +2079,44 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
             </span>
             <span>Frame Cuối</span>
           </button>
+
+          <div className="px-2.5 py-1 mt-1 mb-1 text-[10px] font-bold text-mut uppercase tracking-wider border-t border-line pt-1.5">
+            Nhóm
+          </div>
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => {
+              createGroupFromSelection();
+              setContextMenu(null);
+            }}
+            disabled={selectedIds.length === 0}
+            className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-[6px] text-left text-dim hover:text-fg hover:bg-panel2 transition-colors cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
+          >
+            <span className="grid place-items-center size-5 rounded-[4px] bg-acc/15 text-acc">
+              <Plus size={13} />
+            </span>
+            <span>Tạo nhóm từ node đã chọn</span>
+          </button>
+          {groups.length > 0 && (
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => {
+                if (groups[0]) {
+                  addSelectionToGroup(groups[0].id);
+                  setContextMenu(null);
+                }
+              }}
+              disabled={selectedIds.length === 0}
+              className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-[6px] text-left text-dim hover:text-fg hover:bg-panel2 transition-colors cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
+            >
+              <span className="grid place-items-center size-5 rounded-[4px] bg-ok/15 text-ok">
+                <FlowArrow size={13} />
+              </span>
+              <span>Thêm vào {groups[0].name}</span>
+            </button>
+          )}
         </div>
       )}
 
@@ -1353,13 +2149,51 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
             </div>
             <p className="text-[12.5px] leading-relaxed text-dim">
               {confirmTarget.mode === "workflow"
-                ? `Sẽ chạy ${imageNodes.length} node ảnh + ${videoNodes.length} node video + ${lastFrameNodes.length} node frame cuối qua tài khoản Flow theo chuỗi.`
+                ? selectedIds.length > 0
+                  ? `Sẽ chạy ${runUnits.length} nhóm chứa ${selectedIds.length} node đã chọn. Mỗi nhóm là một đơn vị độc lập — node lỗi chỉ dừng nhóm đó.`
+                  : `Sẽ chạy ${runUnits.length} nhóm (${imageNodes.length} node ảnh + ${videoNodes.length} node video + ${lastFrameNodes.length} node frame cuối). Mỗi nhóm là một đơn vị độc lập — node lỗi chỉ dừng nhóm đó, các nhóm khác vẫn chạy.`
                 : "Sẽ chạy node này qua tài khoản Flow."}
             </p>
+
+            {confirmTarget.mode === "workflow" && runUnits.length > 0 && (
+              <div className="flex flex-col gap-1 max-h-44 overflow-y-auto slim-scroll">
+                {runUnits.map((u) => {
+                  const imgs = u.nodeIds.filter((id) => nodeById.get(id)?.type === "image").length;
+                  const vids = u.nodeIds.filter((id) => nodeById.get(id)?.type === "video").length;
+                  const frames = u.nodeIds.filter((id) => nodeById.get(id)?.type === "last_frame").length;
+                  return (
+                    <div
+                      key={u.id}
+                      className="flex items-center justify-between gap-2 rounded-ctl border border-line bg-panel2 px-2.5 py-1.5 text-[11.5px]"
+                    >
+                      <span className="flex items-center gap-1.5 min-w-0">
+                        <span
+                          className="size-1.5 rounded-full shrink-0"
+                          style={{ background: u.color ?? "var(--color-mut)" }}
+                        />
+                        <span className="truncate font-semibold text-fg">{u.name}</span>
+                      </span>
+                      <span className="font-mono text-[10.5px] text-mut shrink-0">
+                        {imgs} ảnh · {vids} video · {frames} frame
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
             <p className="text-[12px] leading-relaxed text-warn bg-warn/5 border border-warn/25 rounded-ctl px-3 py-2">
               Chi phí ước tính ~
               {confirmTarget.mode === "workflow"
-                ? ` ${imageNodes.length + videoNodes.length} credit (các node Frame Cuối: 0 credit)`
+                ? ` ${runUnits.reduce(
+                    (acc, u) =>
+                      acc +
+                      u.nodeIds.filter((id) => {
+                        const t = nodeById.get(id)?.type;
+                        return t === "image" || t === "video";
+                      }).length,
+                    0,
+                  )} credit (các node Frame Cuối: 0 credit)`
                 : " 1 credit"}{" "}
               nếu Google nhận (bị từ chối = 0 credit).
             </p>
@@ -1429,9 +2263,12 @@ function CanvasNodeCard(props: {
   aiGeneratingId?: string | null;
   onGenerateAiPrompt?: (id: string) => void;
   skillsList?: { id: string; name: string }[];
+  selected?: boolean;
+  onSelect?: (additive: boolean) => void;
+  onMeasure?: (id: string, height: number) => void;
   onHeaderDown: (e: React.PointerEvent) => void;
 }) {
-  const { n, allNodes, imageRatios, verifiedRatios, videoRatios, resolutions, linking, wfBusy, aiGeneratingId, onGenerateAiPrompt, skillsList } = props;
+  const { n, allNodes, imageRatios, verifiedRatios, videoRatios, resolutions, linking, wfBusy, aiGeneratingId, onGenerateAiPrompt, skillsList, selected } = props;
   const st = statusStyle(n.status);
   const isRef = n.type === "ref";
   const isImg = n.type === "image";
@@ -1440,6 +2277,19 @@ function CanvasNodeCard(props: {
 
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  // Report card height so group frames can wrap nodes tightly.
+  // offsetHeight is layout-space (unaffected by the canvas scale transform).
+  useEffect(() => {
+    const el = cardRef.current;
+    if (!el || !props.onMeasure) return;
+    const report = () => props.onMeasure?.(n.id, el.offsetHeight);
+    report();
+    const ro = new ResizeObserver(report);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [n.id, props.onMeasure]);
 
   const currentSids = getNodeSourceIds(n);
   const connectedSources = currentSids
@@ -1518,9 +2368,20 @@ function CanvasNodeCard(props: {
 
   return (
     <div
-      className={`canvas-node-card absolute rounded-panel border-2 bg-panel shadow-xl ${st.border}`}
+      ref={cardRef}
+      className={`canvas-node-card absolute rounded-panel border-2 bg-panel shadow-xl ${st.border} ${
+        selected ? "ring-2 ring-acc ring-offset-2 ring-offset-ink" : ""
+      }`}
       style={{ left: n.x, top: n.y, width: NODE_W }}
-      onPointerDown={(e) => e.stopPropagation()}
+      onPointerDown={(e) => {
+        e.stopPropagation();
+        const t = e.target as HTMLElement;
+        if (t.closest("input, textarea, select, button")) return;
+        if (e.shiftKey || e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          props.onSelect?.(true);
+        }
+      }}
     >
       {/* Header (Drag handle) */}
       <div
@@ -1729,14 +2590,14 @@ function CanvasNodeCard(props: {
               )}
             </div>
 
-            <div className="flex items-center justify-between mt-0.5 gap-1">
+            <div className="flex items-center justify-between mt-0.5 gap-1.5 min-w-0">
               <span className="text-[10px] font-semibold text-mut shrink-0">Prompt ảnh</span>
-              <div className="flex items-center gap-1 shrink-0">
+              <div className="flex items-center gap-1 min-w-0 flex-1 justify-end">
                 {skillsList && skillsList.length > 0 && (
                   <select
                     value={n.agentSkillId ?? ""}
                     onChange={(e) => props.onFieldChange({ agentSkillId: e.target.value || null })}
-                    className="h-5 rounded border border-line2 bg-panel px-1 text-[9px] text-fg focus:border-acc outline-none cursor-pointer max-w-[115px] truncate"
+                    className="h-5 min-w-0 flex-1 max-w-[110px] rounded border border-line2 bg-panel px-1 text-[9px] text-fg focus:border-acc outline-none cursor-pointer"
                     title="Chọn skill quy chuẩn AI tạo prompt cho node này"
                   >
                     <option value="">(Tự động)</option>
@@ -1752,7 +2613,7 @@ function CanvasNodeCard(props: {
                     type="button"
                     disabled={aiGeneratingId === n.id || wfBusy}
                     onClick={() => onGenerateAiPrompt(n.id)}
-                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] border border-acc/40 bg-acc/10 text-[9.5px] font-bold text-acc hover:bg-acc/20 hover:border-acc/70 transition-all cursor-pointer disabled:opacity-40"
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] border border-acc/40 bg-acc/10 text-[9.5px] font-bold text-acc hover:bg-acc/20 hover:border-acc/70 transition-all cursor-pointer disabled:opacity-40 shrink-0 whitespace-nowrap"
                     title="Local AI Agent sẽ phân tích ảnh kết quả nguồn để sinh prompt chuẩn"
                   >
                     {aiGeneratingId === n.id ? (
@@ -1763,7 +2624,7 @@ function CanvasNodeCard(props: {
                     ) : (
                       <>
                         <Sparkle size={10} weight="fill" className="text-acc" />
-                        <span>✨ AI Prompt</span>
+                        <span>AI Prompt</span>
                       </>
                     )}
                   </button>
@@ -1837,14 +2698,14 @@ function CanvasNodeCard(props: {
               </p>
             )}
 
-            <div className="flex items-center justify-between mt-0.5 gap-1">
+            <div className="flex items-center justify-between mt-0.5 gap-1.5 min-w-0">
               <span className="text-[10px] font-semibold text-mut shrink-0">Prompt video</span>
-              <div className="flex items-center gap-1 shrink-0">
+              <div className="flex items-center gap-1 min-w-0 flex-1 justify-end">
                 {skillsList && skillsList.length > 0 && (
                   <select
                     value={n.agentSkillId ?? ""}
                     onChange={(e) => props.onFieldChange({ agentSkillId: e.target.value || null })}
-                    className="h-5 rounded border border-line2 bg-panel px-1 text-[9px] text-fg focus:border-acc outline-none cursor-pointer max-w-[115px] truncate"
+                    className="h-5 min-w-0 flex-1 max-w-[110px] rounded border border-line2 bg-panel px-1 text-[9px] text-fg focus:border-acc outline-none cursor-pointer"
                     title="Chọn skill quy chuẩn AI tạo prompt cho video"
                   >
                     <option value="">(Tự động)</option>
@@ -1860,7 +2721,7 @@ function CanvasNodeCard(props: {
                     type="button"
                     disabled={aiGeneratingId === n.id || wfBusy}
                     onClick={() => onGenerateAiPrompt(n.id)}
-                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] border border-acc/40 bg-acc/10 text-[9.5px] font-bold text-acc hover:bg-acc/20 hover:border-acc/70 transition-all cursor-pointer disabled:opacity-40"
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] border border-acc/40 bg-acc/10 text-[9.5px] font-bold text-acc hover:bg-acc/20 hover:border-acc/70 transition-all cursor-pointer disabled:opacity-40 shrink-0 whitespace-nowrap"
                     title="Local AI Agent sẽ nhìn vào ảnh First Frame hoặc Last Frame nguồn để viết prompt chuyển động nối tiếp chuẩn xác"
                   >
                     {aiGeneratingId === n.id ? (
@@ -1871,7 +2732,7 @@ function CanvasNodeCard(props: {
                     ) : (
                       <>
                         <Sparkle size={10} weight="fill" className="text-acc" />
-                        <span>✨ AI Prompt</span>
+                        <span>AI Prompt</span>
                       </>
                     )}
                   </button>
