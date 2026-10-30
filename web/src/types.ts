@@ -230,6 +230,8 @@ export interface GalleryRun {
   prompt?: string | null;
   title?: string | null;
   project_id?: string | null;
+  workspace_project_id?: string | null;
+  is_pinned?: boolean;
   seed?: number | null;
   seed_echo?: number | null;
   resolution?: number[] | null;
@@ -317,6 +319,7 @@ export interface NodeImageRequest {
   reference_image_path?: string | null;
   reference_image_paths?: string[];
   project_id?: string | null;
+  workspace_project_id?: string | null;
   dry_run?: boolean;
   remove_watermark?: boolean;
   confirm?: boolean;
@@ -333,6 +336,7 @@ export interface NodeVideoRequest {
   resolution?: string;
   duration_s?: number;
   project_id?: string | null;
+  workspace_project_id?: string | null;
   dry_run?: boolean;
   remove_watermark?: boolean;
   confirm?: boolean;
@@ -341,6 +345,7 @@ export interface NodeVideoRequest {
 export interface NodeLastFrameRequest {
   video_path: string;
   remove_watermark?: boolean;
+  workspace_project_id?: string | null;
 }
 
 export interface NodeImageResult {
@@ -442,3 +447,114 @@ export interface TestAgentResponse {
   sample_response?: string;
 }
 
+
+
+export interface AssetUploadedItem {
+  id: string;
+  key?: string;
+  name: string;
+  url: string;
+  category: "image" | "video";
+  created_ts: number | string;
+  size_bytes?: number;
+  projectId?: string | null;
+  projectName?: string | null;
+  isPinned?: boolean;
+}
+
+export interface AssetOutputItem {
+  id: string;
+  key?: string;
+  name: string;
+  category: "image" | "video";
+  url: string;
+  thumbnail_url?: string | null;
+  prompt?: string;
+  created_ts: number | string;
+  seed?: number | null;
+  resolution?: string | [number, number] | null;
+  aspect_ratio?: string | null;
+  duration_s?: number | null;
+  size_bytes?: number;
+  source?: string;
+  run_id?: string | null;
+  projectId?: string | null;
+  projectName?: string | null;
+  isPinned?: boolean;
+}
+
+// --------------------------------------------------------------------------- //
+// Workspace projects (local canvas groups) — /api/workspace/*
+// --------------------------------------------------------------------------- //
+
+export interface WorkspaceViewport {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+export interface WorkspaceEdgeState {
+  id: string;
+  source: string;
+  target: string;
+}
+
+export interface CanvasNodeState {
+  id: string;
+  type: "ref" | "image" | "video" | "last_frame";
+  x: number;
+  y: number;
+  label?: string | null;
+  prompt: string;
+  fileName?: string | null;
+  aspectRatio: string;
+  seed: number | null;
+  sourceImageId: string | null;
+  sourceImageIds?: string[];
+  videoRatio: string;
+  resolution: string;
+  imageAspectRatio: string;
+  autoImagePrompt: string;
+  removeWatermark?: boolean;
+  jobId: string | null;
+  status: "idle" | "queued" | "running" | "succeeded" | "failed" | "rejected" | "skipped";
+  fileUrl?: string | null;
+  videoUrl?: string | null;
+  frameUrl?: string | null;
+  reason?: string | null;
+  elapsedS?: number | null;
+  agentSkillId?: string | null;
+  agentCustomHint?: string | null;
+}
+
+export interface CanvasGroupState {
+  id: string;
+  name: string;
+  nodeIds: string[];
+  color?: string | null;
+  x?: number | null;
+  y?: number | null;
+  w?: number | null;
+  h?: number | null;
+}
+
+export interface WorkspaceCanvasState {
+  viewport: WorkspaceViewport;
+  nodes: CanvasNodeState[];
+  edges: WorkspaceEdgeState[];
+  groups: CanvasGroupState[];
+}
+
+export interface WorkspaceProject {
+  id: string;
+  name: string;
+  description: string;
+  thumbnailUrl?: string | null;
+  /** True once the user picked the preview manually (auto thumbnail disabled). */
+  thumbnailManual?: boolean;
+  createdAt: number;
+  updatedAt: number;
+  canvasState: WorkspaceCanvasState;
+  nodeCount?: number;
+  assetCount?: number;
+}

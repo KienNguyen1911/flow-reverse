@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { BookOpen, Code, Cpu, Gear, Images, Users, X } from "@phosphor-icons/react";
-import type { PoolInfo, RunItem } from "../types";
+import type { GalleryRun, PoolInfo, WorkspaceProject } from "../types";
 import { AccountPanel } from "./AccountPanel";
 import { AgentSettingsPanel } from "./AgentSettingsPanel";
 import { ApiDocsPanel } from "./ApiDocsPanel";
@@ -13,12 +13,13 @@ interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
   initialTab?: SettingsTab;
-  runs: RunItem[];
+  runs: GalleryRun[];
   galleryLoading?: boolean;
   galleryError?: string | null;
   onRefreshGallery: () => void;
   pool: PoolInfo | null;
   onRefreshPool: () => void;
+  workspaceProjects?: WorkspaceProject[];
 }
 
 export function SettingsModal({
@@ -31,6 +32,7 @@ export function SettingsModal({
   onRefreshGallery,
   pool,
   onRefreshPool,
+  workspaceProjects = [],
 }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
 
@@ -203,9 +205,10 @@ export function SettingsModal({
             {activeTab === "gallery" && (
               <Gallery
                 runs={runs}
-                loading={galleryLoading}
-                error={galleryError}
+                loading={!!galleryLoading}
+                error={galleryError ?? null}
                 onRefresh={() => void onRefreshGallery()}
+                projects={workspaceProjects}
               />
             )}
 

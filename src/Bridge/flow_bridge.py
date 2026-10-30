@@ -733,18 +733,60 @@ class FlowBridge:
         "return {disabled: !!b.disabled, x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)}; })()"
     )
 
-    def click_generate(self, timeout_s: float = 8.0, target_aspect: Optional[str] = None) -> int:
-        # Pre-check guard: Ensure composer is NOT in Video mode before clicking generate
-        if self.page:
-            try:
-                s_btn = self.page.query_selector("button.settings-trigger-button")
-                if s_btn:
-                    txt = (s_btn.inner_text() or "").strip()
-                    if "Video" in txt:
-                        self._log(f"Phát hiện UI vẫn ở chế độ Video ({txt!r}) trước khi Generate -> Tự động chuyển về Hình ảnh")
-                        self.ensure_ui_image_mode(target_aspect)
-            except Exception as e:
-                self._log(f"Lỗi kiểm tra pre-generate mode: {e}")
+    def composer_mode(self) -> Optional[str]:
+        """Return the composer's current generation mode: "video", "image" or None (unknown).
+
+        Detection is based on `button.settings-trigger-button`:
+          - Video mode: 'Video · 720p · 8s ...' / `videocam` icon.
+          - Image mode: '<model name> crop_9_16 x1' (e.g. 'Nano Banana 2.1').
+        """
+        if self.page is None:
+            return None
+        try:
+            s_btn = self.page.query_selector("button.settings-trigger-button")
+            if not s_btn:
+                return None
+            txt = (s_btn.inner_text() or "").strip()
+            html = s_btn.inner_html() or ""
+            if "Video" in txt or "videocam" in html:
+                return "video"
+            return "image"
+        except Exception as e:  # noqa: BLE001
+            self._log(f"composer_mode probe error: {e}")
+            return None
+
+    def click_generate(
+        self,
+        timeout_s: float = 8.0,
+        target_aspect: Optional[str] = None,
+        expected_mode: str = "image",
+    ) -> int:
+        """Click the composer's Generate button, guarded by the expected generation mode.
+
+        expected_mode="image": if the composer is left in Video mode, auto-switch to Image mode
+            (and refuse to click if the switch did not take effect).
+        expected_mode="video": NEVER switch modes; refuse to click unless the composer is
+            verifiably in Video mode. (A decoy click in Image mode mints a reCAPTCHA token for the
+            image action -> eb1hJf rejected with PUBLIC_ERROR_UNUSUAL_ACTIVITY, and may start an
+            unwanted image generation.)
+        """
+        if expected_mode not in ("image", "video"):
+            raise ValueError(f"expected_mode phải là 'image' hoặc 'video', nhận: {expected_mode!r}")
+
+        mode = self.composer_mode()
+        if expected_mode == "video":
+            if mode != "video":
+                raise PageInteractionError(
+                    f"Composer đang ở chế độ {mode or 'không xác định'} thay vì Video — "
+                    "từ chối click Generate (tránh tạo nhầm ảnh)."
+                )
+        elif mode == "video":
+            self._log("Phát hiện UI vẫn ở chế độ Video trước khi Generate ảnh -> Tự động chuyển về Hình ảnh")
+            self.ensure_ui_image_mode(target_aspect)
+            if self.composer_mode() == "video":
+                raise PageInteractionError(
+                    "Không chuyển được composer sang chế độ Hình ảnh — từ chối click Generate (tránh tạo nhầm video)."
+                )
 
         deadline = time.time() + timeout_s
         btn = None
@@ -755,9 +797,15 @@ class FlowBridge:
             time.sleep(0.5)
         if not (btn and not btn.get("disabled")):
             raise PageInteractionError("Nút Generate không tìm thấy hoặc bị disabled.")
+        # Last-moment re-check: the mode must not have drifted while waiting for the button.
+        final_mode = self.composer_mode()
+        if final_mode is not None and final_mode != expected_mode:
+            raise PageInteractionError(
+                f"Composer đổi sang chế độ {final_mode} ngay trước khi Generate (mong đợi {expected_mode}) — hủy click."
+            )
         self.page.mouse.click(btn["x"], btn["y"])
         ts = int(time.time() * 1000)
-        self._log(f"generate clicked @ {ts}")
+        self._log(f"generate clicked @ {ts} (mode={final_mode or expected_mode})")
         return ts
 
     # -- reference image attach (i2i template capture) --------------------------- #

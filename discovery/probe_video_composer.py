@@ -169,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
             br._eval("window.__blockVideoGen = true; window.__videoHook.cap = null;")
             br.type_prompt(args.prompt)
             try:
-                br.click_generate(timeout_s=20.0)
+                br.click_generate(timeout_s=20.0, expected_mode=" video\)
                 no_frame["clicked"] = True
                 cap = video.wait_video_capture(br, timeout_s=20.0)
                 _, _at, cap_args, rpcid = parse_video_app_capture(cap["body"])
@@ -211,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
                     video._attach_starting_frame_ui_fallback(page, frame)
                 br._eval("window.__blockVideoGen = true; window.__videoHook.cap = null;")
                 br.type_prompt(args.prompt)
-                br.click_generate(timeout_s=20.0)
+                br.click_generate(timeout_s=20.0, expected_mode=" video\)
                 cap = video.wait_video_capture(br, timeout_s=25.0)
                 _, _at, cap_args, rpcid = parse_video_app_capture(cap["body"])
                 sf_id, crop_box = extract_starting_frame_from_eb1hjf_args(cap_args)

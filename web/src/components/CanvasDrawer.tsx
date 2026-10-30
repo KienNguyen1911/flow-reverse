@@ -712,7 +712,7 @@ export function CanvasDrawer({
                           }}
                           className="h-7 rounded-ctl border border-line2 bg-panel px-2 text-[11px] text-fg outline-none focus:border-acc"
                         >
-                          <option value="">Tự động chọn theo loại node</option>
+                          <option value="">Tự động chọn theo loại node (V1 Push / V2 Showcase)</option>
                           {skillsList.map((s) => (
                             <option key={s.id} value={s.id}>
                               {s.name}

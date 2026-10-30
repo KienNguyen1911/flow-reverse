@@ -758,6 +758,7 @@ class JobManager:
         self.store = store
         self.out_root = Path(out_root)
         self.node_out = self.out_root.parent / "nodes"
+        self.asset_meta = None  # injected by create_app (AssetMetaStore)
         self._jobs: dict[str, Job] = {}
         self._order: list[str] = []
         self._lock = threading.RLock()
@@ -766,6 +767,19 @@ class JobManager:
         self._worker.start()
         self._current_id: Optional[str] = None
         self._account_projects: dict[str, str] = {}
+
+    # -- workspace asset ownership ------------------------------------------- #
+
+    def _bind_workspace_asset(self, job: Job, key: str, kind: str = "output") -> None:
+        """Remember which workspace project produced *key* (best effort)."""
+        workspace_id = job.params.get("workspace_project_id")
+        store = getattr(self, "asset_meta", None)
+        if not workspace_id or not key or store is None:
+            return
+        try:
+            store.bind(key, str(workspace_id), kind)
+        except Exception:  # noqa: BLE001 - metadata must never fail a job
+            pass
 
     # -- API ---------------------------------------------------------------- #
 
@@ -960,6 +974,8 @@ class JobManager:
         job.result = res_dict
         if res.status in ("ok", "ok_no_download", "dry_run"):
             job.set_state("succeeded")
+            if res.run_dir:
+                self._bind_workspace_asset(job, f"gallery:{Path(res.run_dir).name}", kind="gallery")
             if not dry_run:
                 self.store.touch(params["project_id"])
         elif res.status == "rejected":
@@ -1022,6 +1038,8 @@ class JobManager:
         job.result = d
         if res.status in ("ok", "ok_no_download", "dry_run"):
             job.set_state("succeeded")
+            if res.run_id:
+                self._bind_workspace_asset(job, f"output:{res.run_id}")
         elif res.status == "rejected":
             job.set_state("rejected")
         else:
@@ -1070,6 +1088,8 @@ class JobManager:
             d["frame_url"] = f"/api/node/files/{res.run_id}/{Path(res.frame_path).name}"
         job.result = d
         job.set_state("succeeded")
+        if res.run_id and res.status == "ok":
+            self._bind_workspace_asset(job, f"output:{res.run_id}")
 
     def _run_node_last_frame(self, job: Job) -> None:
         params = job.params
@@ -1114,6 +1134,7 @@ class JobManager:
         }
         job.result = res
         job.set_state("succeeded")
+        self._bind_workspace_asset(job, f"output:{run_name}")
 
     def _run_project_op(self, job: Job) -> None:
         params = job.params

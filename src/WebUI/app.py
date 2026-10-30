@@ -28,6 +28,7 @@ never launches all profiles at startup (plan docs/upgrade_plan_n_account_pool.md
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import re
 import webbrowser
@@ -36,11 +37,11 @@ from pathlib import Path
 from typing import Optional
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..Workflows.account_pool import AccountPoolManager, proxy_label
 from ..Workflows.flow_client import DEFAULT_CDP_URL
@@ -64,6 +65,13 @@ from ..Workflows.media_service import (
 from ..Workflows.prompt_agent import NodePromptTask, get_prompt_agent
 from ..Workflows.skill_manager import get_skill_manager
 from .jobs import JobManager, ProjectsStore
+from .workspace import (
+    DEFAULT_PROJECT_NAME,
+    AssetMetaStore,
+    WorkspaceStore,
+    empty_canvas_state,
+    normalize_canvas_state,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUT = ROOT / "out" / "playground"
@@ -83,6 +91,7 @@ class GenerateBody(BaseModel):
     dry_run: bool = False
     remove_watermark: bool = True
     confirm: bool = False
+    workspace_project_id: Optional[str] = None
 
 
 class NodeImageBody(BaseModel):
@@ -95,6 +104,7 @@ class NodeImageBody(BaseModel):
     reference_image_path: Optional[str] = None   # path or /api/uploads|references|assets URL
     reference_image_paths: Optional[list[str]] = None
     project_id: Optional[str] = None
+    workspace_project_id: Optional[str] = None
     dry_run: bool = False
     remove_watermark: bool = True
     confirm: bool = False
@@ -113,6 +123,7 @@ class NodeVideoBody(BaseModel):
     resolution: str = "1080p"
     duration_s: int = 8
     project_id: Optional[str] = None
+    workspace_project_id: Optional[str] = None
     dry_run: bool = False
     remove_watermark: bool = True
     confirm: bool = False
@@ -123,6 +134,60 @@ class NodeLastFrameBody(BaseModel):
 
     video_path: str
     remove_watermark: bool = True
+    workspace_project_id: Optional[str] = None
+
+
+class WorkspaceCanvasBody(BaseModel):
+    """Serialized canvas graph as stored on a workspace project."""
+
+    viewport: dict = Field(default_factory=dict)
+    nodes: list[dict] = Field(default_factory=list)
+    edges: list[dict] = Field(default_factory=list)
+    groups: list[dict] = Field(default_factory=list)
+
+
+class CreateWorkspaceProjectBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str = Field(min_length=1, max_length=120)
+    description: str = ""
+    canvas_state: Optional[WorkspaceCanvasBody] = Field(default=None, alias="canvasState")
+
+
+class UpdateWorkspaceProjectBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    description: Optional[str] = None
+    thumbnail_url: Optional[str] = Field(default=None, alias="thumbnailUrl")
+    canvas_state: Optional[WorkspaceCanvasBody] = Field(default=None, alias="canvasState")
+
+
+class DuplicateWorkspaceProjectBody(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=120)
+
+
+class SetThumbnailBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    thumbnail_url: Optional[str] = Field(default=None, alias="thumbnailUrl")
+
+
+class MigrateWorkspaceBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str = DEFAULT_PROJECT_NAME
+    canvas_state: Optional[WorkspaceCanvasBody] = Field(default=None, alias="canvasState")
+    pinned_ids: list[str] = Field(default_factory=list, alias="pinnedIds")
+
+
+class PinAssetBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: Optional[str] = None
+    key: Optional[str] = None
+    kind: str = "upload"
+    is_pinned: bool = Field(default=True, alias="isPinned")
 
 
 class CreateProjectBody(BaseModel):
@@ -154,6 +219,7 @@ class BatchBody(BaseModel):
     remove_watermark: bool = True
     confirm: bool = False
     dest_dir: Optional[str] = None
+    workspace_project_id: Optional[str] = None
 
 
 class PoolConfigBody(BaseModel):
@@ -230,7 +296,7 @@ class AutoTryOnBody(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
-def scan_gallery(out_root: Path) -> list[dict]:
+def scan_gallery(out_root: Path, asset_meta: Optional[AssetMetaStore] = None) -> list[dict]:
     runs: list[dict] = []
     if not out_root.exists():
         return runs
@@ -250,6 +316,8 @@ def scan_gallery(out_root: Path) -> list[dict]:
         fp = Path(f)
         if not fp.exists() or fp.parent != d:
             continue
+        asset_key = f"gallery:{d.name}"
+        am = asset_meta.get(asset_key) if asset_meta else {}
         runs.append({
             "run": d.name,
             "file": fp.name,
@@ -257,6 +325,8 @@ def scan_gallery(out_root: Path) -> list[dict]:
             "prompt": meta.get("prompt"),
             "title": meta.get("title"),
             "project_id": meta.get("project_id"),
+            "workspace_project_id": am.get("projectId"),
+            "is_pinned": bool(am.get("isPinned")),
             "seed": meta.get("seed"),
             "seed_echo": meta.get("seed_echo"),
             "resolution": meta.get("resolution"),
@@ -269,16 +339,326 @@ def scan_gallery(out_root: Path) -> list[dict]:
     return runs
 
 
+
+
+def scan_uploaded_assets(
+    out_dir: Optional[Path] = None,
+    asset_meta: Optional[AssetMetaStore] = None,
+) -> list[dict]:
+    items: list[dict] = []
+    root_out = (out_dir.parent if out_dir else (ROOT / "out"))
+    for folder_name, api_prefix in [("uploads", "/api/uploads"), ("references", "/api/references")]:
+        d = root_out / folder_name
+        if not d.exists():
+            continue
+        for f in d.iterdir():
+            if not f.is_file():
+                continue
+            ext = f.suffix.lower()
+            if ext not in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp4", ".mov", ".webm"}:
+                continue
+            cat = "video" if ext in {".mp4", ".mov", ".webm"} else "image"
+            stat = f.stat()
+            ts = stat.st_mtime
+            m = re.match(r"^(\d{12,14})_", f.name)
+            if m:
+                try:
+                    ts = int(m.group(1)) / 1000.0
+                except Exception:
+                    pass
+            asset_key = f"upload:{f.name}"
+            am = asset_meta.get(asset_key) if asset_meta else {}
+            items.append({
+                "id": f.name,
+                "key": asset_key,
+                "name": f.name,
+                "url": f"{api_prefix}/{f.name}",
+                "category": cat,
+                "created_ts": ts,
+                "size_bytes": stat.st_size,
+                "projectId": am.get("projectId"),
+                "isPinned": bool(am.get("isPinned")),
+            })
+    items.sort(key=lambda x: x["created_ts"], reverse=True)
+    return items
+
+
+def scan_output_assets(
+    out_root: Path,
+    node_out: Optional[Path] = None,
+    asset_meta: Optional[AssetMetaStore] = None,
+) -> list[dict]:
+    items: list[dict] = []
+    seen_urls: set[str] = set()
+
+    def meta_for(key: str) -> dict:
+        return asset_meta.get(key) if asset_meta else {}
+
+    def add_project_fields(item: dict, key: str) -> dict:
+        am = meta_for(key)
+        item["key"] = key
+        item["projectId"] = am.get("projectId")
+        item["isPinned"] = bool(am.get("isPinned"))
+        return item
+
+    # 1. Canvas nodes outputs (out/nodes)
+    n_dir = node_out if node_out and node_out.exists() else (out_root.parent / "nodes" if out_root.name == "playground" else out_root / "nodes")
+    if n_dir.exists():
+        for d in n_dir.iterdir():
+            if not d.is_dir() or d.name.startswith("_"):
+                continue
+            # Videos in node
+            for v in d.glob("*.mp4"):
+                manifest_file = d / "manifest.json"
+                meta = {}
+                if manifest_file.exists():
+                    try:
+                        meta = json.loads(manifest_file.read_text(encoding="utf-8"))
+                    except Exception:
+                        pass
+                thumb = d / "starting_frame.jpg"
+                thumb_url = f"/api/node/files/{d.name}/{thumb.name}" if thumb.exists() else None
+                url = f"/api/node/files/{d.name}/{v.name}"
+                seen_urls.add(url)
+                items.append(add_project_fields({
+                    "id": f"node_{d.name}_{v.name}",
+                    "run_id": d.name,
+                    "name": v.name,
+                    "category": "video",
+                    "url": url,
+                    "thumbnail_url": thumb_url,
+                    "prompt": meta.get("prompt") or "",
+                    "created_ts": meta.get("created_ts") or v.stat().st_mtime,
+                    "duration_s": meta.get("duration_s") or 8,
+                    "resolution": meta.get("resolution") or "1080p",
+                    "aspect_ratio": meta.get("aspect_ratio") or "9:16",
+                    "size_bytes": v.stat().st_size,
+                    "source": "canvas_video_node",
+                }, f"output:{d.name}"))
+            # Images in node
+            for img in d.glob("*.*"):
+                if img.suffix.lower() in {".jpg", ".png", ".jpeg", ".webp"} and img.name != "starting_frame.jpg":
+                    meta_file = d / "meta.json"
+                    meta = {}
+                    if meta_file.exists():
+                        try:
+                            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                        except Exception:
+                            pass
+                    url = f"/api/node/files/{d.name}/{img.name}"
+                    seen_urls.add(url)
+                    items.append(add_project_fields({
+                        "id": f"node_{d.name}_{img.name}",
+                        "run_id": d.name,
+                        "name": img.name,
+                        "category": "image",
+                        "url": url,
+                        "thumbnail_url": url,
+                        "prompt": meta.get("prompt") or "",
+                        "created_ts": meta.get("created_ts") or img.stat().st_mtime,
+                        "seed": meta.get("seed") or meta.get("seed_echo"),
+                        "resolution": meta.get("resolution"),
+                        "aspect_ratio": str(meta.get("aspect", "")),
+                        "size_bytes": img.stat().st_size,
+                        "source": "canvas_image_node",
+                    }, f"output:{d.name}"))
+
+    # 2. Affiliate / Try-on runs (out/affiliate_runs)
+    aff_dir = (out_root.parent / "affiliate_runs" if out_root.name == "playground" else out_root / "affiliate_runs")
+    if aff_dir.exists():
+        for d in aff_dir.iterdir():
+            if not d.is_dir() or d.name.startswith("_"):
+                continue
+            manifest_file = d / "manifest.json"
+            meta = {}
+            if manifest_file.exists():
+                try:
+                    meta = json.loads(manifest_file.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+            for v in d.glob("*.mp4"):
+                if v.stat().st_size < 10000:
+                    continue
+                thumb = d / "first_frame.jpg"
+                if not thumb.exists():
+                    thumb = d / "model.jpg"
+                thumb_url = f"/api/tryon/files/{d.name}/{thumb.name}" if thumb.exists() else None
+                url = f"/api/tryon/files/{d.name}/{v.name}"
+                if url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                items.append(add_project_fields({
+                    "id": f"tryon_{d.name}_{v.name}",
+                    "run_id": d.name,
+                    "name": f"{d.name} - {v.name}",
+                    "category": "video",
+                    "url": url,
+                    "thumbnail_url": thumb_url,
+                    "prompt": meta.get("image_prompt") or meta.get("video_prompt_1") or "",
+                    "created_ts": meta.get("created_ts") or v.stat().st_mtime,
+                    "duration_s": 16 if "16s" in v.name else 8,
+                    "resolution": "1080p",
+                    "size_bytes": v.stat().st_size,
+                    "source": "tryon",
+                }, f"output:{d.name}"))
+
+    # 3. Top-level runs (Playground / scan_gallery)
+    gallery_runs = scan_gallery(out_root, asset_meta)
+    for run in gallery_runs:
+        url = run.get("url")
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        items.append(add_project_fields({
+            "id": f"gallery_{run.get('run')}_{run.get('file')}",
+            "run_id": run.get("run"),
+            "name": run.get("file") or run.get("run"),
+            "category": "image",
+            "url": url,
+            "thumbnail_url": url,
+            "prompt": run.get("prompt") or run.get("title") or "",
+            "created_ts": run.get("created_ts") or 0,
+            "seed": run.get("seed_echo") or run.get("seed"),
+            "resolution": run.get("resolution"),
+            "size_bytes": run.get("file_bytes"),
+            "source": "playground",
+        }, f"gallery:{run.get('run')}"))
+
+    def get_sort_key(it):
+        t = it.get("created_ts")
+        if isinstance(t, (int, float)):
+            return float(t)
+        if isinstance(t, str):
+            try:
+                return datetime.datetime.fromisoformat(t).timestamp()
+            except Exception:
+                pass
+        return 0.0
+
+    items.sort(key=get_sort_key, reverse=True)
+    return items
+
+
 # --------------------------------------------------------------------------- #
-# App factory
+# Workspace asset helpers
 # --------------------------------------------------------------------------- #
+
+
+def _asset_sort_ts(value) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return datetime.datetime.fromisoformat(value).timestamp()
+        except Exception:
+            pass
+    return 0.0
+
+
+def _enrich_assets(items: list[dict], workspace: WorkspaceStore) -> list[dict]:
+    """Attach the human project name so the drawer can badge cross-project assets."""
+    for item in items:
+        project_id = item.get("projectId")
+        item["projectName"] = workspace.name_of(project_id) if project_id else None
+    return items
+
+
+def _filter_assets(items: list[dict], project_id: Optional[str], scope: str) -> list[dict]:
+    """Filter assets by project scope. Pinned assets are always kept."""
+    if scope != "project" or not project_id:
+        return items
+    return [
+        item
+        for item in items
+        if item.get("projectId") == project_id or item.get("isPinned")
+    ]
+
+
+def _workspace_projects_payload(
+    workspace: WorkspaceStore,
+    uploads: list[dict],
+    outputs: list[dict],
+) -> list[dict]:
+    """Serialize projects plus derived node/asset counts and auto thumbnails."""
+
+    counts: dict[str, int] = {}
+    latest_output: dict[str, tuple[float, str]] = {}
+    latest_upload: dict[str, tuple[float, str]] = {}
+
+    for item in outputs:
+        pid = item.get("projectId")
+        if not pid:
+            continue
+        counts[pid] = counts.get(pid, 0) + 1
+        url = item.get("thumbnail_url") or item.get("url")
+        if not url:
+            continue
+        ts = _asset_sort_ts(item.get("created_ts"))
+        if pid not in latest_output or ts >= latest_output[pid][0]:
+            latest_output[pid] = (ts, url)
+
+    for item in uploads:
+        pid = item.get("projectId")
+        if not pid:
+            continue
+        counts[pid] = counts.get(pid, 0) + 1
+        url = item.get("thumbnail_url") or item.get("url")
+        if not url:
+            continue
+        ts = _asset_sort_ts(item.get("created_ts"))
+        if pid not in latest_upload or ts >= latest_upload[pid][0]:
+            latest_upload[pid] = (ts, url)
+
+    payload: list[dict] = []
+    for project in workspace.list():
+        data = project.model_dump(by_alias=True)
+        data["nodeCount"] = len(data.get("canvasState", {}).get("nodes", []))
+        data["assetCount"] = counts.get(project.id, 0)
+        # A user-chosen preview always wins over the auto "latest media" pick.
+        if not project.thumbnail_manual:
+            generated = latest_output.get(project.id)
+            uploaded = latest_upload.get(project.id)
+            data["thumbnailUrl"] = (generated or uploaded or (0.0, None))[1]
+        payload.append(data)
+    return payload
+
+
+def _migration_asset_entries(
+    out_dir: Optional[Path],
+    out_root: Path,
+    node_out: Path,
+    asset_meta: AssetMetaStore,
+) -> list[tuple[str, str]]:
+    """Every asset key discovered on disk (deduplicated) for one-time claiming."""
+    entries: dict[str, str] = {}
+    for item in scan_uploaded_assets(out_dir, asset_meta):
+        key = item.get("key")
+        if key:
+            entries[key] = "upload"
+    for item in scan_output_assets(out_root, node_out=node_out, asset_meta=asset_meta):
+        key = item.get("key")
+        if key:
+            entries[key] = "output"
+    for run in scan_gallery(out_root, asset_meta):
+        entries[f"gallery:{run['run']}"] = "gallery"
+    return list(entries.items())
+
 
 
 def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
                projects_file: Optional[Path] = None, web_dist: Optional[Path] = None,
-               pool_config: Optional[Path] = None, pool_state: Optional[Path] = None) -> FastAPI:
+               pool_config: Optional[Path] = None, pool_state: Optional[Path] = None,
+               workspace_file: Optional[Path] = None,
+               asset_meta_file: Optional[Path] = None) -> FastAPI:
     out_root = Path(out_dir) if out_dir else DEFAULT_OUT
+    asset_root = out_root.parent if out_dir else (ROOT / "out")
     store = ProjectsStore(Path(projects_file) if projects_file else DEFAULT_PROJECTS_FILE)
+    workspace = WorkspaceStore(
+        Path(workspace_file) if workspace_file else (out_root.parent / "flowbench_workspace.json")
+    )
+    asset_meta = AssetMetaStore(
+        Path(asset_meta_file) if asset_meta_file else (out_root.parent / "flowbench_asset_meta.json")
+    )
     pool = AccountPoolManager(
         config_path=Path(pool_config) if pool_config else None,
         state_path=Path(pool_state) if pool_state else None,
@@ -286,12 +666,28 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
         default_cdp_url=cdp_url,
     )
     manager = JobManager(pool=pool, store=store, out_root=out_root)
+    manager.asset_meta = asset_meta
+
+    # One-time migration: with no workspace project, create the default one and
+    # claim every pre-existing asset so no upload/output is lost.
+    if workspace.count() == 0:
+        default_project = workspace.create(DEFAULT_PROJECT_NAME)
+        asset_meta.claim_unassigned(
+            _migration_asset_entries(out_dir, out_root, manager.node_out, asset_meta),
+            default_project.id,
+        )
+    else:
+        # An existing store means the one-time browser import already happened;
+        # never re-import stale client canvas data over server-side truth.
+        workspace.mark_legacy_migrated()
 
     app = FastAPI(title="Flow Bench", version="0.2.0")
     app.state.pool = pool
     app.state.manager = manager
     app.state.store = store
     app.state.out_root = out_root
+    app.state.workspace = workspace
+    app.state.asset_meta = asset_meta
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request, exc: RequestValidationError):
@@ -432,6 +828,130 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
         except KeyError as e:
             raise HTTPException(status_code=404, detail=str(e))
 
+    # -- workspace projects (local canvas groups, not Flow UUIDs) -------------- #
+
+    @app.get("/api/workspace/projects")
+    def api_workspace_projects():
+        uploads = scan_uploaded_assets(out_dir, asset_meta)
+        outputs = scan_output_assets(out_root, node_out=manager.node_out, asset_meta=asset_meta)
+        return {
+            "projects": _workspace_projects_payload(workspace, uploads, outputs),
+            "legacyMigrated": workspace.legacy_migrated,
+        }
+
+    @app.get("/api/workspace/projects/{pid}")
+    def api_workspace_project(pid: str):
+        project = workspace.get(pid)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Không tìm thấy project")
+        return {"project": project.model_dump(by_alias=True)}
+
+    @app.post("/api/workspace/projects")
+    def api_workspace_create(body: CreateWorkspaceProjectBody):
+        canvas = normalize_canvas_state(
+            body.canvas_state.model_dump() if body.canvas_state is not None else None
+        )
+        project = workspace.create(body.name, body.description, canvas)
+        return {"ok": True, "project": project.model_dump(by_alias=True)}
+
+    @app.patch("/api/workspace/projects/{pid}")
+    def api_workspace_update(pid: str, body: UpdateWorkspaceProjectBody):
+        if workspace.get(pid) is None:
+            raise HTTPException(status_code=404, detail="Không tìm thấy project")
+        patch = body.model_dump(exclude_unset=True)
+        canvas = patch.pop("canvas_state", None)
+        if canvas is not None:
+            canvas = normalize_canvas_state(canvas)
+        project = workspace.update(
+            pid,
+            name=patch.get("name"),
+            description=patch.get("description"),
+            thumbnail_url=patch.get("thumbnail_url"),
+            canvas_state=canvas,
+        )
+        return {"ok": True, "project": project.model_dump(by_alias=True) if project else None}
+
+    @app.put("/api/workspace/projects/{pid}/canvas")
+    @app.post("/api/workspace/projects/{pid}/canvas")
+    def api_workspace_save_canvas(pid: str, body: WorkspaceCanvasBody):
+        if workspace.get(pid) is None:
+            raise HTTPException(status_code=404, detail="Không tìm thấy project")
+        project = workspace.save_canvas(pid, normalize_canvas_state(body.model_dump()))
+        return {
+            "ok": True,
+            "projectId": pid,
+            "updatedAt": project.updated_at if project else None,
+        }
+
+    @app.delete("/api/workspace/projects/{pid}")
+    def api_workspace_delete(pid: str):
+        if workspace.get(pid) is None:
+            raise HTTPException(status_code=404, detail="Không tìm thấy project")
+        if workspace.count() <= 1:
+            raise HTTPException(status_code=400, detail="Không thể xóa project cuối cùng.")
+        workspace.delete(pid)
+        asset_meta.clear_project(pid)
+        return {"ok": True, "removed": pid}
+
+    @app.post("/api/workspace/projects/{pid}/duplicate")
+    def api_workspace_duplicate(pid: str, body: Optional[DuplicateWorkspaceProjectBody] = None):
+        project = workspace.duplicate(pid, body.name if body else None)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Không tìm thấy project")
+        return {"ok": True, "project": project.model_dump(by_alias=True)}
+
+    @app.put("/api/workspace/projects/{pid}/thumbnail")
+    def api_workspace_set_thumbnail(pid: str, body: SetThumbnailBody):
+        """Pin a specific image as the project preview (empty url = automatic)."""
+        if workspace.get(pid) is None:
+            raise HTTPException(status_code=404, detail="Không tìm thấy project")
+        url = (body.thumbnail_url or "").strip() or None
+        project = workspace.set_thumbnail(pid, url, manual=bool(url))
+        if project is None:
+            raise HTTPException(status_code=404, detail="Không tìm thấy project")
+        return {
+            "ok": True,
+            "project": project.model_dump(by_alias=True),
+            "thumbnailUrl": project.thumbnail_url,
+            "thumbnailManual": project.thumbnail_manual,
+        }
+
+    @app.post("/api/workspace/migrate")
+    def api_workspace_migrate(body: MigrateWorkspaceBody):
+        raw_canvas = body.canvas_state.model_dump() if body.canvas_state is not None else None
+        canvas = normalize_canvas_state(raw_canvas) if raw_canvas is not None else None
+        # Only the very first import may seed a canvas from browser state.
+        allow_canvas = canvas is not None and not workspace.legacy_migrated
+        created = False
+        projects = workspace.list()
+        target = next((p for p in projects if p.name == DEFAULT_PROJECT_NAME), None)
+        if target is None:
+            target = projects[0] if projects else None
+        if target is None:
+            target = workspace.create(body.name or DEFAULT_PROJECT_NAME, canvas_state=canvas if allow_canvas else None)
+            created = True
+        elif allow_canvas and not target.canvas_state.get("nodes"):
+            target = workspace.save_canvas(target.id, canvas) or target
+
+        for asset_id in body.pinned_ids:
+            if not asset_id:
+                continue
+            key = asset_id if ":" in asset_id else f"upload:{asset_id}"
+            asset_meta.set_pin(key, True)
+
+        workspace.mark_legacy_migrated()
+        claimed = asset_meta.claim_unassigned(
+            _migration_asset_entries(out_dir, out_root, manager.node_out, asset_meta),
+            target.id,
+        )
+        return {
+            "ok": True,
+            "created": created,
+            "canvasImported": allow_canvas,
+            "claimed": claimed,
+            "project": target.model_dump(by_alias=True),
+        }
+
     # -- projects ------------------------------------------------------------ #
 
     @app.get("/api/projects")
@@ -487,6 +1007,7 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
             "project_id": pid, "prompt": body.prompt.strip(),
             "aspect": body.aspect, "seed": body.seed,
             "remove_watermark": body.remove_watermark,
+            "workspace_project_id": body.workspace_project_id,
         })
         return {"job_id": job.id}
 
@@ -522,6 +1043,7 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
             "dry_run": body.dry_run,
             "remove_watermark": body.remove_watermark,
             "dest_dir": body.dest_dir,
+            "workspace_project_id": body.workspace_project_id,
         })
         return {"job_id": job.id}
 
@@ -568,6 +1090,7 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
             "reference_image_path": all_refs[0] if all_refs else None,
             "reference_image_paths": all_refs if all_refs else None,
             "project_id": body.project_id,
+            "workspace_project_id": body.workspace_project_id,
             "dry_run": body.dry_run,
             "remove_watermark": body.remove_watermark,
         })
@@ -608,6 +1131,7 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
             "resolution": resolution,
             "duration_s": duration,
             "project_id": body.project_id,
+            "workspace_project_id": body.workspace_project_id,
             "dry_run": body.dry_run,
             "remove_watermark": body.remove_watermark,
         })
@@ -624,6 +1148,7 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
         job = manager.submit("node_last_frame", {
             "video_path": str(resolved),
             "remove_watermark": body.remove_watermark,
+            "workspace_project_id": body.workspace_project_id,
         })
         return {"job_id": job.id, "kind": "last_frame"}
 
@@ -663,7 +1188,7 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
 
     @app.get("/api/gallery")
     def api_gallery():
-        return {"runs": scan_gallery(out_root)}
+        return {"runs": scan_gallery(out_root, asset_meta)}
 
     @app.get("/api/files/{run}/{name}")
     def api_file(run: str, name: str):
@@ -678,33 +1203,45 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
         return FileResponse(rp)
 
     @app.post("/api/upload_reference")
-    async def api_upload_reference(file: UploadFile = File(...)):
+    async def api_upload_reference(
+        file: UploadFile = File(...),
+        project_id: Optional[str] = Form(None),
+    ):
         if not file.filename:
             raise HTTPException(status_code=400, detail="Không có file")
-        ref_dir = ROOT / "out" / "references"
+        ref_dir = asset_root / "references"
         ref_dir.mkdir(parents=True, exist_ok=True)
         safe_name = f"{int(time.time()*1000)}_{Path(file.filename).name}"
         dest_path = ref_dir / safe_name
         content = await file.read()
         dest_path.write_bytes(content)
-        rel_path = str(dest_path.relative_to(ROOT)).replace("\\", "/")
+        if project_id:
+            asset_meta.bind(f"upload:{safe_name}", project_id, "upload")
+        try:
+            rel_path = str(dest_path.relative_to(ROOT)).replace("\\", "/")
+        except ValueError:
+            rel_path = str(dest_path).replace("\\", "/")
         return {
             "ok": True,
             "path": rel_path,
             "filename": safe_name,
             "url": f"/api/references/{safe_name}",
             "size": len(content),
+            "projectId": project_id,
         }
 
     @app.get("/api/references/{name}")
     def api_get_reference(name: str):
-        ref_file = ROOT / "out" / "references" / name
+        ref_file = asset_root / "references" / name
         if not ref_file.is_file():
             raise HTTPException(status_code=404, detail="Không tìm thấy ảnh")
         return FileResponse(ref_file)
 
     @app.post("/api/upload")
-    async def api_upload(file: UploadFile = File(...)):
+    async def api_upload(
+        file: UploadFile = File(...),
+        project_id: Optional[str] = Form(None),
+    ):
         if not file.filename:
             raise HTTPException(status_code=400, detail="Không có file")
         raw_name = Path(file.filename).name
@@ -725,10 +1262,12 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
             clean_stem = "upload"
         safe_name = f"{int(time.time()*1000)}_{clean_stem}{ext}"
 
-        upload_dir = (out_dir.parent if out_dir else (ROOT / "out")) / "uploads"
+        upload_dir = asset_root / "uploads"
         upload_dir.mkdir(parents=True, exist_ok=True)
         dest_path = upload_dir / safe_name
         dest_path.write_bytes(content)
+        if project_id:
+            asset_meta.bind(f"upload:{safe_name}", project_id, "upload")
 
         try:
             rel_path = str(dest_path.relative_to(ROOT)).replace("\\", "/")
@@ -741,16 +1280,81 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
             "filename": safe_name,
             "url": f"/api/uploads/{safe_name}",
             "size": len(content),
+            "projectId": project_id,
         }
 
     @app.get("/api/uploads/{name:path}")
     def api_get_upload(name: str):
-        upload_dir = (out_dir.parent if out_dir else (ROOT / "out")) / "uploads"
+        upload_dir = asset_root / "uploads"
         base = upload_dir.resolve()
         p = (base / name).resolve()
         if not p.is_relative_to(base) or not p.is_file():
             raise HTTPException(status_code=404, detail="Không tìm thấy file upload")
         return FileResponse(p)
+
+    # -- asset drawer ------------------------------------------------------------- #
+
+    @app.get("/api/assets/uploaded")
+    def api_get_uploaded_assets(
+        project_id: Optional[str] = None,
+        scope: str = "all",
+    ):
+        items = scan_uploaded_assets(out_dir, asset_meta)
+        items = _filter_assets(_enrich_assets(items, workspace), project_id, scope)
+        return {"items": items}
+
+    @app.delete("/api/assets/uploaded/{name:path}")
+    def api_delete_uploaded_asset(name: str):
+        upload_dir = asset_root / "uploads"
+        base = upload_dir.resolve()
+        p = (base / name).resolve()
+        if p.is_relative_to(base) and p.is_file():
+            try:
+                p.unlink()
+                asset_meta.remove(f"upload:{name}")
+                return {"ok": True, "removed": name}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+        ref_dir = asset_root / "references"
+        base_ref = ref_dir.resolve()
+        p_ref = (base_ref / name).resolve()
+        if p_ref.is_relative_to(base_ref) and p_ref.is_file():
+            try:
+                p_ref.unlink()
+                asset_meta.remove(f"upload:{name}")
+                return {"ok": True, "removed": name}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=404, detail="Không tìm thấy file upload")
+
+    @app.post("/api/assets/pin")
+    def api_pin_asset(body: PinAssetBody):
+        key = (body.key or "").strip()
+        if not key and body.id:
+            key = f"{body.kind}:{body.id}"
+        if not key:
+            raise HTTPException(status_code=400, detail="Cần 'key' hoặc 'id'.")
+        pinned = asset_meta.set_pin(key, body.is_pinned, kind=body.kind or "upload")
+        return {"ok": True, "key": key, "isPinned": pinned}
+
+    @app.get("/api/assets/output")
+    def api_get_output_assets(
+        project_id: Optional[str] = None,
+        scope: str = "all",
+    ):
+        items = scan_output_assets(out_root, node_out=manager.node_out, asset_meta=asset_meta)
+        items = _filter_assets(_enrich_assets(items, workspace), project_id, scope)
+        return {"items": items}
+
+    @app.get("/api/assets/outputs")
+    def api_get_outputs_assets_alias(
+        project_id: Optional[str] = None,
+        scope: str = "all",
+    ):
+        items = scan_output_assets(out_root, node_out=manager.node_out, asset_meta=asset_meta)
+        items = _filter_assets(_enrich_assets(items, workspace), project_id, scope)
+        return {"items": items}
+
 
     @app.get("/api/assets/{name:path}")
     def api_get_asset(name: str):

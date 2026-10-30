@@ -19,6 +19,10 @@ import type {
   GenerateNodePromptRequest,
   GenerateNodePromptResponse,
   TestAgentResponse,
+  AssetUploadedItem,
+  AssetOutputItem,
+  WorkspaceCanvasState,
+  WorkspaceProject,
 } from "./types";
 
 async function j<T>(r: Response): Promise<T> {
@@ -56,6 +60,21 @@ const post = (url: string, body?: unknown) =>
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
+const patch = (url: string, body: unknown) =>
+  fetch(url, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+function assetScopeQuery(projectId?: string | null, scope?: "project" | "all") {
+  const params = new URLSearchParams();
+  if (projectId) params.set("project_id", projectId);
+  if (scope) params.set("scope", scope);
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
+
 export const api = {
   status: () => fetch("/api/status").then(j<Status>),
 
@@ -80,6 +99,7 @@ export const api = {
     dry_run?: boolean;
     remove_watermark?: boolean;
     confirm?: boolean;
+    workspace_project_id?: string | null;
   }) => post("/api/generate", p).then(j<{ job_id: string }>),
 
   job: (id: string) => fetch(`/api/jobs/${id}`).then(j<Job>),
@@ -131,20 +151,37 @@ export const api = {
     remove_watermark?: boolean;
     confirm?: boolean;
     dest_dir?: string;
+    workspace_project_id?: string | null;
   }) => post("/api/batch", p).then(j<{ job_id: string }>),
 
-  uploadReference: async (file: File) => {
+  uploadReference: async (file: File, projectId?: string | null) => {
     const fd = new FormData();
     fd.append("file", file);
+    if (projectId) fd.append("project_id", projectId);
     const r = await fetch("/api/upload_reference", { method: "POST", body: fd });
-    return j<{ ok: boolean; path: string; filename: string; url: string; size: number }>(r);
+    return j<{
+      ok: boolean;
+      path: string;
+      filename: string;
+      url: string;
+      size: number;
+      projectId?: string | null;
+    }>(r);
   },
 
-  upload: async (file: File) => {
+  upload: async (file: File, projectId?: string | null) => {
     const fd = new FormData();
     fd.append("file", file);
+    if (projectId) fd.append("project_id", projectId);
     const r = await fetch("/api/upload", { method: "POST", body: fd });
-    return j<{ ok: boolean; path: string; filename: string; url: string; size: number }>(r);
+    return j<{
+      ok: boolean;
+      path: string;
+      filename: string;
+      url: string;
+      size: number;
+      projectId?: string | null;
+    }>(r);
   },
 
   tryonStart: (p: {
@@ -210,4 +247,115 @@ export const api = {
 
   generateNodePrompt: (p: GenerateNodePromptRequest) =>
     post("/api/agent/generate-node-prompt", p).then(j<GenerateNodePromptResponse>),
+
+  // -- Assets Drawer --------------------------------------------------------
+  assetsUploaded: (projectId?: string | null, scope: "project" | "all" = "all") =>
+    fetch(`/api/assets/uploaded${assetScopeQuery(projectId, scope)}`).then(
+      j<{ items: AssetUploadedItem[] }>,
+    ),
+
+  deleteUploadedAsset: (name: string) =>
+    fetch(`/api/assets/uploaded/${encodeURIComponent(name)}`, { method: "DELETE" }).then(j<{ ok: boolean }>),
+
+  assetsOutputs: (projectId?: string | null, scope: "project" | "all" = "all") =>
+    fetch(`/api/assets/output${assetScopeQuery(projectId, scope)}`).then(
+      j<{ items: AssetOutputItem[] }>,
+    ),
+
+  pinAsset: (p: { key: string; kind?: string; isPinned: boolean }) =>
+    post("/api/assets/pin", p).then(j<{ ok: boolean; key: string; isPinned: boolean }>),
+
+  // -- Workspace projects (local canvas groups) ------------------------------
+  workspaceProjects: () =>
+    fetch("/api/workspace/projects").then(
+      j<{ projects: WorkspaceProject[]; legacyMigrated?: boolean }>,
+    ),
+
+  workspaceProject: (id: string) =>
+    fetch(`/api/workspace/projects/${encodeURIComponent(id)}`).then(
+      j<{ project: WorkspaceProject }>,
+    ),
+
+  createWorkspaceProject: (p: {
+    name: string;
+    description?: string;
+    canvasState?: WorkspaceCanvasState;
+  }) =>
+    post("/api/workspace/projects", p).then(
+      j<{ ok: boolean; project: WorkspaceProject }>,
+    ),
+
+  updateWorkspaceProject: (
+    id: string,
+    p: {
+      name?: string;
+      description?: string;
+      thumbnailUrl?: string | null;
+      canvasState?: WorkspaceCanvasState;
+    },
+  ) =>
+    patch(`/api/workspace/projects/${encodeURIComponent(id)}`, p).then(
+      j<{ ok: boolean; project: WorkspaceProject | null }>,
+    ),
+
+  deleteWorkspaceProject: (id: string) =>
+    fetch(`/api/workspace/projects/${encodeURIComponent(id)}`, { method: "DELETE" }).then(
+      j<{ ok: boolean; removed: string }>,
+    ),
+
+  duplicateWorkspaceProject: (id: string, name?: string) =>
+    post(`/api/workspace/projects/${encodeURIComponent(id)}/duplicate`, { name }).then(
+      j<{ ok: boolean; project: WorkspaceProject }>,
+    ),
+
+  setWorkspaceThumbnail: (id: string, thumbnailUrl: string | null) =>
+    fetch(`/api/workspace/projects/${encodeURIComponent(id)}/thumbnail`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ thumbnailUrl }),
+    }).then(
+      j<{ ok: boolean; project: WorkspaceProject; thumbnailUrl: string | null; thumbnailManual: boolean }>,
+    ),
+
+  saveWorkspaceCanvas: (id: string, canvasState: WorkspaceCanvasState) =>
+    fetch(`/api/workspace/projects/${encodeURIComponent(id)}/canvas`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(canvasState),
+    }).then(j<{ ok: boolean; projectId: string; updatedAt: number | null }>),
+
+  /** Fire-and-forget save used on pagehide/unload so no edits are lost. */
+  saveWorkspaceCanvasBeacon: (id: string, canvasState: WorkspaceCanvasState) => {
+    try {
+      const body = JSON.stringify(canvasState);
+      if (navigator.sendBeacon) {
+        const blob = new Blob([body], { type: "application/json" });
+        navigator.sendBeacon(`/api/workspace/projects/${encodeURIComponent(id)}/canvas`, blob);
+        return;
+      }
+      void fetch(`/api/workspace/projects/${encodeURIComponent(id)}/canvas`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body,
+        keepalive: true,
+      });
+    } catch {
+      /* best effort */
+    }
+  },
+
+  migrateWorkspace: (p: {
+    name?: string;
+    canvasState?: WorkspaceCanvasState | null;
+    pinnedIds?: string[];
+  }) =>
+    post("/api/workspace/migrate", p).then(
+      j<{
+        ok: boolean;
+        created: boolean;
+        canvasImported?: boolean;
+        claimed: number;
+        project: WorkspaceProject;
+      }>,
+    ),
 };

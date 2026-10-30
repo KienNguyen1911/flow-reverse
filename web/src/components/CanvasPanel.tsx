@@ -1,6 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import {
   ArrowsCounterClockwise,
+  ArrowsOut,
   CheckCircle,
   DownloadSimple,
   FilmSlate,
@@ -10,6 +11,7 @@ import {
   ListDashes,
   MagnifyingGlassMinus,
   MagnifyingGlassPlus,
+  FolderSimple,
   Play,
   Plus,
   Sparkle,
@@ -20,9 +22,14 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { api } from "../api";
-import type { Job, NodeMediaOptions, Project } from "../types";
+import type {
+  Job,
+  NodeMediaOptions,
+  WorkspaceCanvasState,
+} from "../types";
 import { CanvasDrawer, type CanvasDrawerNode } from "./CanvasDrawer";
 import { Chip, Spinner } from "./ui";
+import { MediaPreviewModal, type PreviewMediaItem } from "./MediaPreviewModal";
 
 // --------------------------------------------------------------------------- //
 // Canvas node graph — image nodes feed video nodes (image-to-video chains).
@@ -39,6 +46,15 @@ const GROUP_HEADER_H = 40;
 const FALLBACK_NODE_H = 220;
 const GROUP_COLORS = ["#7c9cff", "#4ade80", "#f59e0b", "#c084fc", "#f472b6", "#22d3ee"];
 const STORAGE_KEY = "fb_canvas_graph_v1";
+const TEMPLATES_KEY = "fb_custom_templates_v1";
+
+export interface CustomTemplate {
+  id: string;
+  name: string;
+  createdAt: number;
+  nodes: CanvasNode[];
+  groups?: CanvasGroup[];
+}
 const TERMINAL = new Set(["succeeded", "failed", "rejected"]);
 const ACTIVE = new Set(["queued", "running"]);
 
@@ -106,6 +122,172 @@ function loadGraph(): Graph {
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v));
+}
+
+// -- workspace serialization ------------------------------------------------ //
+
+export const BUILTIN_TEMPLATES = [
+  { id: "lookbook_8s", name: "Lookbook Video 8s (Đẩy UI + Nối tiếp)" },
+  { id: "tryon", name: "Video Thử Đồ (Try-On 16s)" },
+] as const;
+
+const NODE_TYPES: ReadonlySet<string> = new Set(["ref", "image", "video", "last_frame"]);
+const NODE_STATUSES: ReadonlySet<string> = new Set([
+  "idle",
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "rejected",
+  "skipped",
+]);
+
+function str(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function optionalStr(value: unknown): string | null {
+  return typeof value === "string" && value ? value : null;
+}
+
+function finite(value: unknown, fallback = 0): number {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/** Derive the persisted edge list from the nodes' input links. */
+export function graphToCanvasState(
+  nodes: CanvasNode[],
+  groups: CanvasGroup[],
+  view: View,
+): WorkspaceCanvasState {
+  const edges: WorkspaceCanvasState["edges"] = [];
+  const seen = new Set<string>();
+  for (const node of nodes) {
+    for (const source of getNodeSourceIds(node)) {
+      if (!source || !nodes.some((n) => n.id === source)) continue;
+      const id = `e_${source}__${node.id}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      edges.push({ id, source, target: node.id });
+    }
+  }
+  return {
+    viewport: { x: view.x, y: view.y, zoom: view.z },
+    nodes: nodes.map((n) => ({ ...n })),
+    edges,
+    groups: groups.map((g) => ({ ...g, nodeIds: [...g.nodeIds] })),
+  };
+}
+
+/** Rebuild the live graph from persisted canvas state (defensive against old data). */
+export function canvasStateToGraph(state?: WorkspaceCanvasState | null): {
+  graph: Graph;
+  view: View;
+} {
+  const rawNodes: unknown[] = Array.isArray(state?.nodes) ? state!.nodes : [];
+  const nodes: CanvasNode[] = [];
+  for (const raw of rawNodes) {
+    if (!raw || typeof raw !== "object") continue;
+    const r = raw as Record<string, unknown>;
+    if (typeof r.id !== "string" || !NODE_TYPES.has(String(r.type))) continue;
+    const rawStatus = String(r.status ?? "idle");
+    // A workflow interrupted by a reload must not stay "running" forever.
+    const status: NodeStatus =
+      rawStatus === "queued" || rawStatus === "running"
+        ? "idle"
+        : NODE_STATUSES.has(rawStatus)
+          ? (rawStatus as NodeStatus)
+          : "idle";
+    const sourceIds = Array.isArray(r.sourceImageIds)
+      ? r.sourceImageIds.filter((x): x is string => typeof x === "string")
+      : [];
+    nodes.push({
+      id: r.id,
+      type: r.type as NodeType,
+      x: finite(r.x),
+      y: finite(r.y),
+      label: optionalStr(r.label),
+      prompt: str(r.prompt),
+      fileName: optionalStr(r.fileName),
+      aspectRatio: str(r.aspectRatio, "3:4"),
+      seed: typeof r.seed === "number" ? r.seed : null,
+      sourceImageId: optionalStr(r.sourceImageId),
+      ...(sourceIds.length ? { sourceImageIds: sourceIds } : {}),
+      videoRatio: str(r.videoRatio, "9:16"),
+      resolution: str(r.resolution, "1080p"),
+      imageAspectRatio: str(r.imageAspectRatio, "9:16"),
+      autoImagePrompt: str(r.autoImagePrompt),
+      removeWatermark: typeof r.removeWatermark === "boolean" ? r.removeWatermark : true,
+      jobId: optionalStr(r.jobId),
+      status,
+      fileUrl: optionalStr(r.fileUrl),
+      videoUrl: optionalStr(r.videoUrl),
+      frameUrl: optionalStr(r.frameUrl),
+      reason: optionalStr(r.reason),
+      elapsedS: typeof r.elapsedS === "number" ? r.elapsedS : null,
+      agentSkillId: optionalStr(r.agentSkillId),
+      agentCustomHint: optionalStr(r.agentCustomHint),
+    });
+  }
+
+  // Restore links from explicit edges only where node-level links are missing.
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const incoming = new Map<string, string[]>();
+  const rawEdges: unknown[] = Array.isArray(state?.edges) ? state!.edges : [];
+  for (const raw of rawEdges) {
+    if (!raw || typeof raw !== "object") continue;
+    const e = raw as Record<string, unknown>;
+    const source = typeof e.source === "string" ? e.source : null;
+    const target = typeof e.target === "string" ? e.target : null;
+    if (!source || !target || !byId.has(source) || !byId.has(target)) continue;
+    const list = incoming.get(target) ?? [];
+    if (!list.includes(source)) list.push(source);
+    incoming.set(target, list);
+  }
+  for (const [target, sources] of incoming) {
+    const node = byId.get(target);
+    if (!node) continue;
+    if (node.type === "image") {
+      const existing = getNodeSourceIds(node);
+      if (existing.length === 0) {
+        node.sourceImageIds = [...sources];
+        node.sourceImageId = sources[0] ?? null;
+      }
+    } else if (!node.sourceImageId) {
+      node.sourceImageId = sources[0] ?? null;
+    }
+  }
+
+  const existingIds = new Set(nodes.map((n) => n.id));
+  const rawGroups: unknown[] = Array.isArray(state?.groups) ? state!.groups : [];
+  const groups: CanvasGroup[] = [];
+  for (const raw of rawGroups) {
+    if (!raw || typeof raw !== "object") continue;
+    const g = raw as Record<string, unknown>;
+    if (typeof g.id !== "string") continue;
+    groups.push({
+      id: g.id,
+      name: str(g.name, "Nhóm"),
+      nodeIds: Array.isArray(g.nodeIds)
+        ? g.nodeIds.filter((id): id is string => typeof id === "string" && existingIds.has(id))
+        : [],
+      color: optionalStr(g.color),
+      x: typeof g.x === "number" ? g.x : null,
+      y: typeof g.y === "number" ? g.y : null,
+      w: typeof g.w === "number" ? g.w : null,
+      h: typeof g.h === "number" ? g.h : null,
+    });
+  }
+
+  const vp = state?.viewport;
+  const view: View = {
+    x: finite(vp?.x, 40),
+    y: finite(vp?.y, 20),
+    z: clamp(finite(vp?.zoom, 1), 0.2, 2.5),
+  };
+
+  return { graph: { nodes, groups }, view };
 }
 
 type SourceResult = { ok: true; url: string | null; urls: string[] } | { ok: false; reason: string };
@@ -410,6 +592,193 @@ function statusStyle(s: NodeStatus): { border: string; label: string; cls: strin
   }
 }
 
+function createLookbook8sTemplate(): { nodes: CanvasNode[]; groups: CanvasGroup[] } {
+  const nodes: CanvasNode[] = [
+    // --- Nhóm 1: Lookbook Video 8s (Đẩy UI + Nối tiếp) ---
+    {
+      id: "lb_ref_model",
+      type: "ref",
+      label: "Ảnh tham chiếu (Lookbook)",
+      x: 60,
+      y: 80,
+      prompt: "",
+      aspectRatio: "9:16",
+      seed: null,
+      sourceImageId: null,
+      sourceImageIds: [],
+      videoRatio: "9:16",
+      resolution: "1080p",
+      imageAspectRatio: "9:16",
+      autoImagePrompt: "",
+      removeWatermark: true,
+      jobId: null,
+      status: "idle",
+      fileUrl: "/api/assets/lookbook_split.jpg",
+      fileName: "lookbook_nabi_split.jpg",
+    },
+    {
+      id: "lb_video_1",
+      type: "video",
+      label: "Node Video 1 (8s: Push UI)",
+      x: 420,
+      y: 80,
+      prompt: "Prompt chuyển động cho video 8s...",
+      aspectRatio: "9:16",
+      seed: null,
+      sourceImageId: "lb_ref_model",
+      sourceImageIds: ["lb_ref_model"],
+      agentSkillId: "lookbook-video-1-push",
+      videoRatio: "9:16",
+      resolution: "1080p",
+      imageAspectRatio: "9:16",
+      autoImagePrompt: "",
+      removeWatermark: true,
+      jobId: null,
+      status: "idle",
+    },
+    {
+      id: "lb_last_frame",
+      type: "last_frame",
+      label: "Frame Cuối Video 1",
+      x: 780,
+      y: 80,
+      prompt: "",
+      aspectRatio: "9:16",
+      seed: null,
+      sourceImageId: "lb_video_1",
+      sourceImageIds: ["lb_video_1"],
+      videoRatio: "9:16",
+      resolution: "1080p",
+      imageAspectRatio: "9:16",
+      autoImagePrompt: "",
+      removeWatermark: true,
+      jobId: null,
+      status: "idle",
+    },
+    {
+      id: "lb_video_2",
+      type: "video",
+      label: "Node Video 2 (8s: Showcase)",
+      x: 1140,
+      y: 80,
+      prompt: "Prompt chuyển động cho video 8s...",
+      aspectRatio: "9:16",
+      seed: null,
+      sourceImageId: "lb_last_frame",
+      sourceImageIds: ["lb_last_frame"],
+      agentSkillId: "lookbook-video-2-showcase",
+      videoRatio: "9:16",
+      resolution: "1080p",
+      imageAspectRatio: "9:16",
+      autoImagePrompt: "",
+      removeWatermark: true,
+      jobId: null,
+      status: "idle",
+    },
+
+    // --- Nhóm 2: Sinh Ảnh Thử Đồ & Lookbook 9:16 (Đặt cách hàng trên để không đè) ---
+    {
+      id: "lb_ref_model_face",
+      type: "ref",
+      label: "Ảnh Người Mẫu Tham Chiếu",
+      x: 60,
+      y: 690,
+      prompt: "",
+      aspectRatio: "9:16",
+      seed: null,
+      sourceImageId: null,
+      sourceImageIds: [],
+      videoRatio: "9:16",
+      resolution: "1080p",
+      imageAspectRatio: "9:16",
+      autoImagePrompt: "",
+      removeWatermark: true,
+      jobId: null,
+      status: "idle",
+      fileUrl: "/api/assets/sample_model.png",
+      fileName: "sample_model.png",
+    },
+    {
+      id: "lb_ref_garment_upload",
+      type: "ref",
+      label: "Ảnh Trang Phục (Kéo thả)",
+      x: 420,
+      y: 690,
+      prompt: "",
+      aspectRatio: "9:16",
+      seed: null,
+      sourceImageId: null,
+      sourceImageIds: [],
+      videoRatio: "9:16",
+      resolution: "1080p",
+      imageAspectRatio: "9:16",
+      autoImagePrompt: "",
+      removeWatermark: true,
+      jobId: null,
+      status: "idle",
+      fileUrl: null,
+      fileName: null,
+    },
+    {
+      id: "lb_node_tryon_image",
+      type: "image",
+      label: "Node Ảnh (Thử Đồ)",
+      x: 780,
+      y: 690,
+      prompt: "",
+      aspectRatio: "9:16",
+      seed: null,
+      sourceImageId: "lb_ref_model_face",
+      sourceImageIds: ["lb_ref_model_face", "lb_ref_garment_upload"],
+      agentSkillId: "try-on-image-prompter",
+      videoRatio: "9:16",
+      resolution: "1080p",
+      imageAspectRatio: "9:16",
+      autoImagePrompt: "",
+      removeWatermark: true,
+      jobId: null,
+      status: "idle",
+    },
+    {
+      id: "lb_node_lookbook_image",
+      type: "image",
+      label: "Node Ảnh (Lookbook 9:16)",
+      x: 1140,
+      y: 690,
+      prompt: "",
+      aspectRatio: "9:16",
+      seed: null,
+      sourceImageId: "lb_node_tryon_image",
+      sourceImageIds: ["lb_node_tryon_image"],
+      agentSkillId: "lookbook-image-prompter",
+      videoRatio: "9:16",
+      resolution: "1080p",
+      imageAspectRatio: "9:16",
+      autoImagePrompt: "",
+      removeWatermark: true,
+      jobId: null,
+      status: "idle",
+    },
+  ];
+
+  const groups: CanvasGroup[] = [
+    {
+      id: "lb_group_video_8s",
+      name: "Nhóm 1: Lookbook Video 8s (Đẩy UI + Nối tiếp)",
+      nodeIds: ["lb_ref_model", "lb_video_1", "lb_last_frame", "lb_video_2"],
+      color: GROUP_COLORS[0],
+    },
+    {
+      id: "lb_group_image_tryon",
+      name: "Nhóm 2: Sinh Ảnh Thử Đồ & Lookbook 9:16",
+      nodeIds: ["lb_ref_model_face", "lb_ref_garment_upload", "lb_node_tryon_image", "lb_node_lookbook_image"],
+      color: GROUP_COLORS[1],
+    },
+  ];
+
+  return { nodes, groups };
+}
+
 function createTryOnTemplate(): CanvasNode[] {
   return [
     {
@@ -548,15 +917,35 @@ export interface CanvasStats {
 
 export interface CanvasPanelHandle {
   addNode: (type: NodeType) => void;
-  loadTemplate: (name: "tryon") => void;
+  addReferenceNode: (url: string, fileName?: string) => void;
+  loadTemplate: (name: string) => void;
+  saveCurrentTemplate: (name: string) => void;
+  deleteCustomTemplate: (id: string) => void;
+  getCustomTemplates: () => CustomTemplate[];
   runWorkflow: (dry: boolean) => Promise<void>;
   openConfirmWorkflow: () => void;
+  /** Current serialized canvas, including viewport and derived edges. */
+  getCanvasState: () => WorkspaceCanvasState;
+  /** Built-in/custom template as a standalone canvas state (for new projects). */
+  getTemplateCanvasState: (name: string) => WorkspaceCanvasState | null;
+  /** Persist any pending debounced edit immediately. */
+  flushSave: () => Promise<void>;
 }
 
+export type WorkspaceSaveState = "idle" | "saving" | "saved" | "error";
+
 export interface CanvasPanelProps {
-  projects?: Project[];
-  selectedProjectId?: string | null;
+  /** Active workspace project (local canvas group). */
+  workspaceProjectId?: string | null;
+  /** Persisted canvas of the active project; hydrated once per project id. */
+  workspaceCanvasState?: WorkspaceCanvasState | null;
+  onWorkspaceSaveState?: (state: WorkspaceSaveState) => void;
+  onWorkspaceSaved?: (projectId: string) => void;
   onStatsChange?: (stats: CanvasStats) => void;
+  onToggleAssetDrawer?: () => void;
+  assetDrawerOpen?: boolean;
+  onTemplatesChange?: (templates: { id: string; name: string }[]) => void;
+  onAssetGenerated?: () => void;
 }
 
 export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(function CanvasPanel(
@@ -567,6 +956,7 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
   const [view, setView] = useState<View>({ x: 40, y: 20, z: 1 });
   const [opts, setOpts] = useState<NodeMediaOptions | null>(null);
   const [linking, setLinking] = useState<{ id: string; kind: NodeType; side: "in" | "out" } | null>(null);
+  const [previewMedia, setPreviewMedia] = useState<PreviewMediaItem | null>(null);
 
   const [toast, setToast] = useState<ToastInfo | null>(null);
   const [wfBusy, setWfBusy] = useState(false);
@@ -629,14 +1019,151 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
     [],
   );
 
-  // -- persistence ---------------------------------------------------------- //
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(graph));
-    } catch {
-      /* quota */
+  // -- workspace persistence (debounced autosave + hydration) ---------------- //
+  const workspaceProjectId = props.workspaceProjectId ?? null;
+  const projectIdRef = useRef<string | null>(workspaceProjectId);
+  projectIdRef.current = workspaceProjectId;
+  const onSaveStateRef = useRef(props.onWorkspaceSaveState);
+  onSaveStateRef.current = props.onWorkspaceSaveState;
+  const onSavedRef = useRef(props.onWorkspaceSaved);
+  onSavedRef.current = props.onWorkspaceSaved;
+
+  const saveStateRef = useRef<WorkspaceSaveState>("idle");
+  const saveTimerRef = useRef<number | null>(null);
+  const dirtyRef = useRef(false);
+  const lastSavedJsonRef = useRef<string>("");
+  const hydratedProjectRef = useRef<string | null>(null);
+
+  const emitSaveState = useCallback((state: WorkspaceSaveState) => {
+    if (saveStateRef.current === state) return;
+    saveStateRef.current = state;
+    onSaveStateRef.current?.(state);
+  }, []);
+
+  const buildState = useCallback(
+    () => graphToCanvasState(nodesRef.current, groupsRef.current, viewRef.current),
+    [],
+  );
+
+  const persistNow = useCallback(
+    async (pid: string, state: WorkspaceCanvasState) => {
+      const json = JSON.stringify(state);
+      emitSaveState("saving");
+      try {
+        await api.saveWorkspaceCanvas(pid, state);
+        lastSavedJsonRef.current = json;
+        dirtyRef.current = false;
+        emitSaveState("saved");
+        onSavedRef.current?.(pid);
+      } catch {
+        emitSaveState("error");
+      }
+    },
+    [emitSaveState],
+  );
+
+  const flushSave = useCallback(async () => {
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
     }
-  }, [graph]);
+    const pid = projectIdRef.current;
+    if (!pid) return;
+    if (hydratedProjectRef.current !== pid) return;
+    const state = buildState();
+    if (JSON.stringify(state) === lastSavedJsonRef.current) return;
+    await persistNow(pid, state);
+  }, [buildState, persistNow]);
+
+  // Hydrate during render so the committed graph always belongs to the active
+  // project; an effect would leave one frame where a stale graph could be
+  // autosaved into the newly selected project.
+  const [hydratedPid, setHydratedPid] = useState<string | null>(null);
+  if (
+    workspaceProjectId &&
+    props.workspaceCanvasState &&
+    hydratedPid !== workspaceProjectId
+  ) {
+    const { graph: nextGraph, view: nextView } = canvasStateToGraph(props.workspaceCanvasState);
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    setGraph(nextGraph);
+    setView(nextView);
+    setHydratedPid(workspaceProjectId);
+    hydratedProjectRef.current = workspaceProjectId;
+    lastSavedJsonRef.current = JSON.stringify(
+      graphToCanvasState(nextGraph.nodes, nextGraph.groups, nextView),
+    );
+    dirtyRef.current = false;
+  }
+
+  // Reset transient UI state once the new canvas is in place.
+  useEffect(() => {
+    if (!hydratedPid) return;
+    setSelectedIds([]);
+    setLinking(null);
+    setContextMenu(null);
+    setMarquee(null);
+    setNodeHeights({});
+    saveStateRef.current = "saved";
+    onSaveStateRef.current?.("saved");
+  }, [hydratedPid]);
+
+  // Debounced autosave on any graph or viewport change.
+  useEffect(() => {
+    const pid = workspaceProjectId;
+    if (!pid || !props.workspaceCanvasState) return;
+    if (hydratedProjectRef.current !== pid) return;
+    const state = buildState();
+    const json = JSON.stringify(state);
+    if (json === lastSavedJsonRef.current) {
+      // Hydration or a no-op re-render: nothing to persist.
+      dirtyRef.current = false;
+      emitSaveState("saved");
+      return;
+    }
+    dirtyRef.current = true;
+    emitSaveState("saving");
+    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = null;
+      const pidNow = projectIdRef.current;
+      if (!pidNow || hydratedProjectRef.current !== pidNow) return;
+      const latest = buildState();
+      if (JSON.stringify(latest) === lastSavedJsonRef.current) {
+        dirtyRef.current = false;
+        emitSaveState("saved");
+        return;
+      }
+      void persistNow(pidNow, latest);
+    }, 800);
+  }, [graph, view, workspaceProjectId, buildState, emitSaveState, persistNow]);
+
+  // Last-chance save when the tab is hidden/closed or the panel unmounts.
+  useEffect(() => {
+    const flushBeacon = () => {
+      const pid = projectIdRef.current;
+      if (!pid || !dirtyRef.current) return;
+      const state = buildState();
+      const json = JSON.stringify(state);
+      if (json === lastSavedJsonRef.current) return;
+      lastSavedJsonRef.current = json;
+      dirtyRef.current = false;
+      api.saveWorkspaceCanvasBeacon(pid, state);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flushBeacon();
+    };
+    window.addEventListener("pagehide", flushBeacon);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pagehide", flushBeacon);
+      document.removeEventListener("visibilitychange", onVisibility);
+      flushBeacon();
+    };
+  }, [buildState]);
 
   // -- node options & agent skills ------------------------------------------ //
   useEffect(() => {
@@ -885,6 +1412,7 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
             reference_image_path: srcRes.url,
             reference_image_paths: srcRes.urls,
             project_id: undefined,
+            workspace_project_id: props.workspaceProjectId ?? null,
             dry_run: dry,
             confirm: !dry,
           });
@@ -901,6 +1429,7 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
             seed: n.seed,
             resolution: n.resolution,
             project_id: undefined,
+            workspace_project_id: props.workspaceProjectId ?? null,
             dry_run: dry,
             confirm: !dry,
           });
@@ -917,6 +1446,7 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
           promise = api.nodeLastFrame({
             video_path: srcRes.url,
             remove_watermark: n.removeWatermark ?? true,
+            workspace_project_id: props.workspaceProjectId ?? null,
           });
         }
 
@@ -941,7 +1471,9 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
           nodesRef.current = nodesRef.current.map((x) => (x.id === nodeId ? { ...x, ...patch } : x));
         }
         const ok = final.state === "succeeded";
-        if (!ok && !dry) {
+        if (ok && !dry) {
+          props.onAssetGenerated?.();
+        } else if (!ok && !dry) {
           const typeName =
             n.type === "image" ? "ảnh" : n.type === "video" ? "video" : "frame cuối";
           showToast(
@@ -982,7 +1514,7 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
         const res = await api.generateNodePrompt({
           node_id: target.id,
           node_type: target.type,
-          upstream_media_urls: sRes.urls,
+          upstream_media_urls: sRes.ok ? sRes.urls : [],
           skill_id: target.agentSkillId || undefined,
           custom_hint: target.agentCustomHint || undefined,
           is_video_continuation: isCont,
@@ -1072,7 +1604,7 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
                   const aiRes = await api.generateNodePrompt({
                     node_id: n.id,
                     node_type: n.type,
-                    upstream_media_urls: sRes.urls,
+                    upstream_media_urls: sRes.ok ? sRes.urls : [],
                     skill_id: n.agentSkillId || undefined,
                     custom_hint: n.agentCustomHint || undefined,
                     is_video_continuation: isVideoContinuation(nodesRef.current, n),
@@ -1311,8 +1843,9 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
       }
       patchNode(id, { reason: null, status: "queued" });
       try {
-        const r = await api.upload(file);
+        const r = await api.upload(file, props.workspaceProjectId ?? null);
         patchNode(id, { fileUrl: r.url, fileName: file.name, status: "succeeded", reason: null });
+        props.onAssetGenerated?.();
       } catch (e) {
         patchNode(id, {
           status: "failed",
@@ -1321,12 +1854,50 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
         showToast("Upload ảnh tham chiếu thất bại.", "err", id);
       }
     },
-    [patchNode, showToast],
+    [patchNode, showToast, props.workspaceProjectId],
+  );
+
+  const addReferenceNode = useCallback(
+    (url: string, fileName?: string) => {
+      const rect = viewportRef.current?.getBoundingClientRect();
+      const v = viewRef.current;
+      const w = rect?.width ?? 800;
+      const h = rect?.height ?? 600;
+      const gx = (w / 2 - v.x) / v.z;
+      const gy = (h / 2 - v.y) / v.z;
+      const offset = (Math.random() - 0.5) * 60;
+      const node = newNode("ref", opts, gx - NODE_W / 2 + offset, gy - 60 + offset);
+      node.fileName = fileName || url.split("/").pop() || "Ảnh tham chiếu";
+      node.fileUrl = url;
+      node.status = "succeeded";
+      setGraph((g) => ({ ...g, nodes: [...g.nodes, node] }));
+      showToast(`Đã thêm "${node.fileName}" vào Canvas`, "ok");
+    },
+    [opts, showToast],
   );
 
   const dropFiles = (e: React.DragEvent) => {
     e.preventDefault();
     setCanvasDrag(false);
+    const customAsset = e.dataTransfer.getData("application/flow-asset");
+    if (customAsset) {
+      try {
+        const parsed = JSON.parse(customAsset);
+        const rect = viewportRef.current?.getBoundingClientRect();
+        const v = viewRef.current;
+        const gx = (e.clientX - (rect?.left ?? 0) - v.x) / v.z;
+        const gy = (e.clientY - (rect?.top ?? 0) - v.y) / v.z;
+        const node = newNode("ref", opts, gx - NODE_W / 2, gy - 40);
+        node.fileName = parsed.name || "Ảnh tham chiếu";
+        node.fileUrl = parsed.url;
+        node.status = "succeeded";
+        setGraph((g) => ({ ...g, nodes: [...g.nodes, node] }));
+        showToast(`Đã thêm "${node.fileName}" vào Canvas`, "ok");
+        return;
+      } catch {
+        /* fallback to files */
+      }
+    }
     const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith("image/"));
     if (files.length === 0) {
       showToast("Chỉ nhận file ảnh (PNG/JPG/WebP).", "err");
@@ -1432,12 +2003,58 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
     [nodes, groups, selectedIds],
   );
 
-  const loadTemplate = useCallback(
-    (name: "tryon") => {
-      if (name === "tryon") {
-        const tplNodes = createTryOnTemplate();
-        setGraph({
-          nodes: tplNodes,
+  const [customTemplates, setCustomTemplates] = useState<CustomTemplate[]>(() => {
+    try {
+      const raw = localStorage.getItem(TEMPLATES_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const onTemplatesChange = props.onTemplatesChange;
+  useEffect(() => {
+    onTemplatesChange?.(customTemplates.map((t) => ({ id: t.id, name: t.name })));
+  }, [customTemplates, onTemplatesChange]);
+
+  const saveCurrentTemplate = useCallback(
+    (name: string) => {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      try {
+        const newTpl: CustomTemplate = {
+          id: `custom_tpl_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          name: trimmed,
+          createdAt: Date.now(),
+          nodes: graph.nodes,
+          groups: graph.groups || [],
+        };
+        const updated = [newTpl, ...customTemplates.filter((x) => x.name.toLowerCase() !== trimmed.toLowerCase())];
+        setCustomTemplates(updated);
+        localStorage.setItem(TEMPLATES_KEY, JSON.stringify(updated));
+        showToast(`Đã lưu Mẫu Template: "${trimmed}"`, "ok");
+      } catch (err: any) {
+        showToast(`Lỗi lưu template: ${err?.message || err}`, "err");
+      }
+    },
+    [graph.nodes, graph.groups, customTemplates, showToast],
+  );
+
+  const deleteCustomTemplate = useCallback(
+    (id: string) => {
+      const updated = customTemplates.filter((x) => x.id !== id);
+      setCustomTemplates(updated);
+      localStorage.setItem(TEMPLATES_KEY, JSON.stringify(updated));
+      showToast("Đã xóa Mẫu Template.", "info");
+    },
+    [customTemplates, showToast],
+  );
+
+  const resolveTemplateGraph = useCallback(
+    (nameOrId: string): { nodes: CanvasNode[]; groups: CanvasGroup[]; label: string } | null => {
+      if (nameOrId === "tryon") {
+        return {
+          nodes: createTryOnTemplate(),
           groups: [
             {
               id: "tryon_group_image",
@@ -1452,28 +2069,74 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
               color: GROUP_COLORS[1],
             },
           ],
-        });
-        setSelectedIds([]);
-        setView({ x: 20, y: 30, z: 0.82 });
-        showToast("Đã khởi tạo Mẫu Workflow: Video Thử Đồ (2 nhóm, 6 nodes liên kết)", "ok");
+          label: "Video Thử Đồ (Try-On 16s)",
+        };
       }
+
+      if (nameOrId === "lookbook_8s") {
+        const tpl = createLookbook8sTemplate();
+        return { ...tpl, label: "Lookbook Video 8s (Đẩy UI + Nối tiếp)" };
+      }
+
+      const custom = customTemplates.find((x) => x.id === nameOrId || x.name === nameOrId);
+      if (custom && Array.isArray(custom.nodes)) {
+        return { nodes: custom.nodes, groups: custom.groups || [], label: custom.name };
+      }
+      return null;
     },
-    [showToast],
+    [customTemplates],
+  );
+
+  const loadTemplate = useCallback(
+    (nameOrId: string) => {
+      const tpl = resolveTemplateGraph(nameOrId);
+      if (!tpl) {
+        showToast("Không tìm thấy mẫu template.", "err");
+        return;
+      }
+      setGraph({ nodes: tpl.nodes, groups: tpl.groups });
+      setSelectedIds([]);
+      setView({ x: 30, y: 20, z: 0.72 });
+      showToast(`Đã khởi tạo Mẫu: ${tpl.label}`, "ok");
+    },
+    [resolveTemplateGraph, showToast],
   );
 
   useImperativeHandle(
     ref,
     () => {
-      const handle = {
+      const handle: CanvasPanelHandle = {
         addNode,
+        addReferenceNode,
         loadTemplate,
+        saveCurrentTemplate,
+        deleteCustomTemplate,
+        getCustomTemplates: () => customTemplates,
         runWorkflow,
         openConfirmWorkflow: () => setConfirmTarget({ mode: "workflow" }),
+        getCanvasState: () => buildState(),
+        getTemplateCanvasState: (name: string) => {
+          const tpl = resolveTemplateGraph(name);
+          if (!tpl) return null;
+          return graphToCanvasState(tpl.nodes, tpl.groups, { x: 30, y: 20, z: 0.72 });
+        },
+        flushSave,
       };
       if (typeof window !== "undefined") (window as any).__canvas = handle;
       return handle;
     },
-    [addNode, loadTemplate, runWorkflow],
+    [
+      addNode,
+      addReferenceNode,
+      loadTemplate,
+      saveCurrentTemplate,
+      deleteCustomTemplate,
+      customTemplates,
+      runWorkflow,
+      buildState,
+      resolveTemplateGraph,
+      flushSave,
+    ],
   );
 
   const onStatsChange = props.onStatsChange;
@@ -1694,6 +2357,20 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
             </div>
           )}
         </div>
+
+        {/* Floating Left Assets Drawer Toggle */}
+        {props.onToggleAssetDrawer && !props.assetDrawerOpen && (
+          <button
+            type="button"
+            onClick={props.onToggleAssetDrawer}
+            className="absolute left-3 top-3 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-ctl border border-line2 bg-panel/90 backdrop-blur-md text-[12px] font-semibold text-dim hover:text-fg hover:border-acc/60 hover:bg-panel2 shadow-lg transition-all cursor-pointer group"
+            title="Mở Kho Assets [Phím tắt: A]"
+          >
+            <FolderSimple size={15} weight="bold" className="text-acc group-hover:scale-110 transition-transform" />
+            <span>Kho Assets</span>
+            <span className="text-[10px] text-mut font-mono bg-panel2 px-1 rounded">A</span>
+          </button>
+        )}
 
         {/* Zoom Controls */}
         <div className="absolute left-3 bottom-3 z-20 flex items-center gap-1.5">
@@ -1980,6 +2657,7 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
               onDot={(side) => handleDotClick(n, side)}
               onUpload={(file) => void uploadRef(n.id, file)}
               onOpenDrawer={(id) => setDrawerNodeId(id)}
+              onPreviewMedia={setPreviewMedia}
               aiGeneratingId={aiGeneratingId}
               onGenerateAiPrompt={handleGenerateAiPrompt}
               skillsList={skillsList}
@@ -2234,6 +2912,12 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
           </div>
         </div>
       )}
+      {/* Media Preview Modal (Large Split View) */}
+      <MediaPreviewModal
+        item={previewMedia}
+        onClose={() => setPreviewMedia(null)}
+        onInsertToCanvas={(it) => addReferenceNode(it.url, it.name)}
+      />
     </div>
   );
 });
@@ -2260,6 +2944,7 @@ function CanvasNodeCard(props: {
   onDot: (side: "in" | "out") => void;
   onUpload: (file: File) => void;
   onOpenDrawer: (id: string) => void;
+  onPreviewMedia?: (item: PreviewMediaItem) => void;
   aiGeneratingId?: string | null;
   onGenerateAiPrompt?: (id: string) => void;
   skillsList?: { id: string; name: string }[];
@@ -2274,6 +2959,22 @@ function CanvasNodeCard(props: {
   const isImg = n.type === "image";
   const isVid = n.type === "video";
   const isLastFrame = n.type === "last_frame";
+
+  const nodeSkills = useMemo(() => {
+    if (!skillsList) return [];
+    return [...skillsList].sort((a, b) => {
+      const aIsVid = a.id.includes("video");
+      const bIsVid = b.id.includes("video");
+      if (isVid) {
+        if (aIsVid && !bIsVid) return -1;
+        if (!aIsVid && bIsVid) return 1;
+      } else {
+        if (!aIsVid && bIsVid) return -1;
+        if (aIsVid && !bIsVid) return 1;
+      }
+      return a.name.localeCompare(b.name);
+    });
+  }, [skillsList, isVid]);
 
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -2467,16 +3168,43 @@ function CanvasNodeCard(props: {
                 setDragOver(false);
                 pickFile(e.dataTransfer.files?.[0]);
               }}
-              onClick={() => fileInputRef.current?.click()}
-              className={`rounded-ctl border border-dashed bg-panel2 cursor-pointer overflow-hidden transition-colors ${
+              className={`rounded-ctl border border-dashed bg-panel2 overflow-hidden transition-colors relative group ${
                 dragOver ? "border-acc bg-acc/10" : "border-line2 hover:border-acc/60"
               }`}
-              title="Bấm hoặc kéo-thả ảnh vào đây"
             >
               {n.fileUrl ? (
-                <img src={n.fileUrl} alt="Ảnh tham chiếu" className="w-full max-h-44 object-contain" />
+                <>
+                  <img
+                    src={n.fileUrl}
+                    alt="Ảnh tham chiếu"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full max-h-44 object-contain cursor-pointer hover:opacity-95 transition-opacity"
+                    title="Bấm để thay đổi ảnh"
+                  />
+                  <div className="absolute top-1.5 right-1.5 flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        props.onPreviewMedia?.({
+                          url: n.fileUrl!,
+                          name: n.fileName || n.label || "Ảnh tham chiếu",
+                          category: "image",
+                        });
+                      }}
+                      className="grid place-items-center size-7 rounded-ctl bg-ink/80 border border-line2 text-dim hover:text-acc cursor-pointer shadow-sm transition-colors"
+                      title="Xem ảnh to"
+                    >
+                      <ArrowsOut size={13} weight="bold" />
+                    </button>
+                  </div>
+                </>
               ) : (
-                <div className="flex flex-col items-center gap-1.5 py-7 text-mut">
+                <div
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex flex-col items-center gap-1.5 py-7 text-mut cursor-pointer"
+                  title="Bấm hoặc kéo-thả ảnh vào đây"
+                >
                   {n.status === "queued" ? <Spinner size={18} /> : <UploadSimple size={22} />}
                   <span className="text-[11px] font-medium">
                     {n.status === "queued" ? "Đang upload…" : "Bấm hoặc kéo-thả ảnh"}
@@ -2593,15 +3321,15 @@ function CanvasNodeCard(props: {
             <div className="flex items-center justify-between mt-0.5 gap-1.5 min-w-0">
               <span className="text-[10px] font-semibold text-mut shrink-0">Prompt ảnh</span>
               <div className="flex items-center gap-1 min-w-0 flex-1 justify-end">
-                {skillsList && skillsList.length > 0 && (
+                {nodeSkills && nodeSkills.length > 0 && (
                   <select
                     value={n.agentSkillId ?? ""}
                     onChange={(e) => props.onFieldChange({ agentSkillId: e.target.value || null })}
-                    className="h-5 min-w-0 flex-1 max-w-[110px] rounded border border-line2 bg-panel px-1 text-[9px] text-fg focus:border-acc outline-none cursor-pointer"
+                    className="h-5 min-w-0 flex-1 max-w-[135px] rounded border border-line2 bg-panel px-1 text-[9px] text-fg focus:border-acc outline-none cursor-pointer"
                     title="Chọn skill quy chuẩn AI tạo prompt cho node này"
                   >
-                    <option value="">(Tự động)</option>
-                    {skillsList.map((s) => (
+                    <option value="">(Tự động: Ảnh Lookbook)</option>
+                    {nodeSkills.map((s) => (
                       <option key={s.id} value={s.id}>
                         {s.name}
                       </option>
@@ -2701,15 +3429,15 @@ function CanvasNodeCard(props: {
             <div className="flex items-center justify-between mt-0.5 gap-1.5 min-w-0">
               <span className="text-[10px] font-semibold text-mut shrink-0">Prompt video</span>
               <div className="flex items-center gap-1 min-w-0 flex-1 justify-end">
-                {skillsList && skillsList.length > 0 && (
+                {nodeSkills && nodeSkills.length > 0 && (
                   <select
                     value={n.agentSkillId ?? ""}
                     onChange={(e) => props.onFieldChange({ agentSkillId: e.target.value || null })}
-                    className="h-5 min-w-0 flex-1 max-w-[110px] rounded border border-line2 bg-panel px-1 text-[9px] text-fg focus:border-acc outline-none cursor-pointer"
+                    className="h-5 min-w-0 flex-1 max-w-[135px] rounded border border-line2 bg-panel px-1 text-[9px] text-fg focus:border-acc outline-none cursor-pointer"
                     title="Chọn skill quy chuẩn AI tạo prompt cho video"
                   >
-                    <option value="">(Tự động)</option>
-                    {skillsList.map((s) => (
+                    <option value="">(Tự động: V1 Push / V2 Showcase)</option>
+                    {nodeSkills.map((s) => (
                       <option key={s.id} value={s.id}>
                         {s.name}
                       </option>
@@ -2839,31 +3567,91 @@ function CanvasNodeCard(props: {
 
         {/* Result Preview */}
         {(isImg || isLastFrame ? n.fileUrl : n.videoUrl) && (
-          <div className="rounded-ctl overflow-hidden border border-line2 bg-panel2 relative">
+          <div className="rounded-ctl overflow-hidden border border-line2 bg-panel2 relative group">
             {isImg || isLastFrame ? (
-              <img src={n.fileUrl!} alt="Kết quả" className="w-full max-h-40 object-contain" />
+              <img
+                src={n.fileUrl!}
+                alt="Kết quả"
+                className="w-full max-h-40 object-contain cursor-pointer hover:opacity-95 transition-opacity"
+                onClick={() =>
+                  props.onPreviewMedia?.({
+                    url: n.fileUrl!,
+                    name: n.label || (isImg ? "Node Ảnh" : "Frame Cuối"),
+                    category: "image",
+                    prompt: n.prompt,
+                    resolution: n.aspectRatio,
+                    aspect_ratio: n.aspectRatio,
+                    seed: n.seed,
+                  })
+                }
+                title="Bấm để xem ảnh to với kích thước đầy đủ"
+              />
             ) : (
               <video src={n.videoUrl!} controls className="w-full max-h-40" />
             )}
-            <a
-              href={isImg || isLastFrame ? n.fileUrl! : n.videoUrl!}
-              download
-              className="absolute top-1.5 right-1.5 grid place-items-center size-7 rounded-ctl bg-ink/80 border border-line2 text-dim hover:text-acc cursor-pointer"
-              title="Tải xuống"
-            >
-              <DownloadSimple size={13} />
-            </a>
+            <div className="absolute top-1.5 right-1.5 flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() =>
+                  props.onPreviewMedia?.({
+                    url: isImg || isLastFrame ? n.fileUrl! : n.videoUrl!,
+                    name: n.label || (isImg ? "Node Ảnh" : isVid ? "Node Video" : "Frame Cuối"),
+                    category: isVid ? "video" : "image",
+                    prompt: n.prompt,
+                    resolution: isVid ? n.resolution : n.aspectRatio,
+                    aspect_ratio: isVid ? n.videoRatio : n.aspectRatio,
+                    seed: n.seed,
+                    duration_s: isVid ? 8 : undefined,
+                  })
+                }
+                className="grid place-items-center size-7 rounded-ctl bg-ink/80 border border-line2 text-dim hover:text-acc cursor-pointer shadow-sm transition-colors"
+                title="Xem ảnh to / phóng to chi tiết"
+              >
+                <ArrowsOut size={13} weight="bold" />
+              </button>
+              <a
+                href={isImg || isLastFrame ? n.fileUrl! : n.videoUrl!}
+                download
+                className="grid place-items-center size-7 rounded-ctl bg-ink/80 border border-line2 text-dim hover:text-acc cursor-pointer shadow-sm transition-colors"
+                title="Tải xuống"
+              >
+                <DownloadSimple size={13} />
+              </a>
+            </div>
           </div>
         )}
 
         {/* Video node auto frame preview */}
         {isVid && n.frameUrl && (
-          <img
-            src={n.frameUrl}
-            alt="Ảnh khung"
-            className="rounded-ctl border border-line2 w-full max-h-16 object-cover opacity-80"
-            title="Ảnh khung đã dùng / tự tạo"
-          />
+          <div className="relative group overflow-hidden rounded-ctl border border-line2">
+            <img
+              src={n.frameUrl}
+              alt="Ảnh khung"
+              className="w-full max-h-16 object-cover opacity-80 cursor-pointer hover:opacity-100 transition-opacity"
+              title="Ảnh khung đã dùng / tự tạo — Bấm để xem to"
+              onClick={() =>
+                props.onPreviewMedia?.({
+                  url: n.frameUrl!,
+                  name: `${n.label || "Video"} - Khung hình (First Frame)`,
+                  category: "image",
+                })
+              }
+            />
+            <button
+              type="button"
+              onClick={() =>
+                props.onPreviewMedia?.({
+                  url: n.frameUrl!,
+                  name: `${n.label || "Video"} - Khung hình (First Frame)`,
+                  category: "image",
+                })
+              }
+              className="absolute top-1 right-1 grid place-items-center size-5 rounded bg-ink/80 text-dim hover:text-acc cursor-pointer shadow-sm transition-colors"
+              title="Xem ảnh to"
+            >
+              <ArrowsOut size={11} weight="bold" />
+            </button>
+          </div>
         )}
 
         {/* Sleek Error Banner (opens Right Drawer) */}

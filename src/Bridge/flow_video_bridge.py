@@ -47,6 +47,7 @@ from .flow_bridge import (
     BridgeError,
     CaptureTimeoutError,
     FlowBridge,
+    PageInteractionError,
     TokenParseError,
     build_capture_fire_url,
     build_rpc_url_from_template,
@@ -826,6 +827,13 @@ def sanitize_video_prompt(prompt_text: str, aggressive: bool = False) -> str:
     """
     clean = " ".join([line.strip() for line in prompt_text.splitlines() if line.strip()])
 
+    # Strip POLICY COMPLIANCE boilerplate if present
+    clean = re.sub(r"\[POLICY COMPLIANCE\]:?[^\n]*?(?:living person|public figure)\.?", "", clean, flags=re.IGNORECASE).strip()
+    clean = re.sub(r"\[POLICY COMPLIANCE\]:?[^.!?]*?[.!?]", "", clean, flags=re.IGNORECASE).strip()
+    # Strip unnecessary prompt section headers
+    clean = re.sub(r"\[(?:Reference Image to Video|Image to Video)[^\]]*\]:?", "", clean, flags=re.IGNORECASE).strip()
+    clean = re.sub(r"\bTimeline:\s*", "", clean, flags=re.IGNORECASE).strip()
+
     replacements = [
         (r"\b(of\s+)?(the\s+)?exact\s+(young\s+)?(korean\s+|asian\s+)?(woman|girl|model|lady)(\s+from\s+the\s+reference\s+(image|photo))?\b", "of the fashion model"),
         (r"\b(young\s+)?(korean|asian|japanese|chinese)\s+(woman|girl|model|lady)\b", "fashion model"),
@@ -1169,12 +1177,17 @@ class FlowVideoBridge:
             if not cur_prompt.strip():
                 bridge.type_prompt("A fashion model smiling naturally, 8 seconds.")
                 time.sleep(0.3)
-            bridge.click_generate(timeout_s=12.0)
+            self._ensure_ui_video_frames_mode(bridge.page, aspect_ratio)
+            bridge.click_generate(timeout_s=12.0, expected_mode="video")
             cap = self.wait_video_capture(bridge, timeout_s=20.0)
             self.disarm_video_hook(bridge)
 
             app_reqid = extract_app_reqid(cap["url"])
-            tok, at_param, _, _ = parse_video_app_capture(cap["body"])
+            tok, at_param, _, up_cap_rpcid = parse_video_app_capture(cap["body"])
+            if up_cap_rpcid != VIDEO_SUBMIT_RPC:
+                raise BridgeError(
+                    f"Request mồi là {up_cap_rpcid} (không phải {VIDEO_SUBMIT_RPC}) — token reCAPTCHA sai action, hủy p0UkFb."
+                )
             up_args = build_video_upsample_1080p_args(
                 project_id=project_id,
                 video_media_id=vid_norm,
@@ -1315,6 +1328,15 @@ class FlowVideoBridge:
         else:
             page.keyboard.press("Escape")
         page.wait_for_timeout(350)
+
+        new_btn = page.query_selector("button.settings-trigger-button")
+        new_txt = ((new_btn.inner_text() if new_btn else "") or "").strip()
+        new_html = (new_btn.inner_html() if new_btn else "") or ""
+        if "Video" not in new_txt and "videocam" not in new_html:
+            raise PageInteractionError(
+                f"Không chuyển được composer sang chế độ Video (hiện tại: {new_txt!r})."
+            )
+        self._log("info", f"Composer ở chế độ Video: {new_txt!r}")
 
     def _attach_starting_frame_ui_fallback(self, page: Any, frame_p: Path) -> None:
         """Fallback UI attachment when synthetic paste does not mount flow-image-ingredient-chip (bilingual VI/EN)."""
@@ -1522,13 +1544,19 @@ class FlowVideoBridge:
                 br._eval("window.__videoHook.cap = null; window.__blockVideoGen = true;")
                 br.type_prompt(clean_prompt)
                 time.sleep(jitter(0.4, 0.1, 0.2))
-                br.click_generate(timeout_s=15.0)
+                br.click_generate(timeout_s=15.0, expected_mode="video")
 
                 try:
                     cap = self.wait_video_capture(br, timeout_s=25.0)
                     self.disarm_video_hook(br)
                     app_reqid = extract_app_reqid(cap["url"])
                     token, at_param, app_args, cap_rpcid = parse_video_app_capture(cap["body"])
+                    if cap_rpcid != VIDEO_SUBMIT_RPC:
+                        br.reload(settle_s=4.0)
+                        raise BridgeError(
+                            f"Request mồi là {cap_rpcid} thay vì {VIDEO_SUBMIT_RPC} (composer không ở chế độ Video) — "
+                            "hủy submit để tránh lỗi PUBLIC_ERROR_UNUSUAL_ACTIVITY / tạo nhầm ảnh."
+                        )
                 except (TokenParseError, CaptureTimeoutError) as cap_err:
                     self.disarm_video_hook(br)
                     if attempt + 1 < max_protocol_attempts:

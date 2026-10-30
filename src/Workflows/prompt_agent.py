@@ -67,9 +67,20 @@ class PromptAgent:
 
         # Auto-detect default based on node type
         if task.node_type == "video":
-            s = self.skill_mgr.get_skill("lookbook-video-prompter")
-            if s:
-                return s
+            if task.is_video_continuation:
+                s = (
+                    self.skill_mgr.get_skill("lookbook-video-2-showcase")
+                    or self.skill_mgr.get_skill("lookbook-video-prompter")
+                )
+                if s:
+                    return s
+            else:
+                s = (
+                    self.skill_mgr.get_skill("lookbook-video-1-push")
+                    or self.skill_mgr.get_skill("lookbook-video-prompter")
+                )
+                if s:
+                    return s
             s = self.skill_mgr.get_skill("try-on-image-prompter")
             if s:
                 return s
@@ -123,40 +134,76 @@ class PromptAgent:
         if is_video:
             if is_cont:
                 lines.append(
-                    "- Vai trò Video: VIDEO 2 (8s-16s Nối tiếp) — Bắt đầu từ Frame Cuối của Video 1. "
-                    "Yêu cầu: Người mẫu tiếp tục cử động tự nhiên từ tư thế kết thúc của Video 1, xoay 45-180 độ "
-                    "để khoe lưng/cạnh trang phục, chuyển động liền mạch 1x speed, 24fps cadence."
+                    "- Vai trò Video: VIDEO 2 (8s-16s Nối tiếp) — Bắt đầu từ Frame Cuối của Video 1.\n"
+                    "  YÊU CẦU QUY CHUẨN:\n"
+                    "  1. TUYỆT ĐỐI KHÔNG chèn [POLICY COMPLIANCE] (không có tác dụng trong prompt video).\n"
+                    "  2. KHÔNG mô tả chi tiết dài dòng về nhân vật/trang phục. Chỉ mở đầu bằng đúng 1 câu ngắn: 'Seamless continuation from the starting frame, maintaining exact model and outfit.'\n"
+                    "  3. BẮT BUỘC GIỮ NGUYÊN cấu trúc TIMELINE chi tiết từng giây (0-1s, 1-4s, 4-6s, 6-8s) và block Negative. TUYỆT ĐỐI KHÔNG cắt ngắn, tóm tắt hay gộp timeline!\n"
+                    "  4. Tập trung vào CHUYỂN ĐỘNG: Người mẫu tiếp tục cử động tự nhiên từ tư thế cuối, xoay người 180 độ nửa vòng khoe phom dáng trang phục, camera lướt cận cảnh beauty shot thanh lịch."
                 )
             else:
                 lines.append(
-                    "- Vai trò Video: VIDEO 1 (0s-8s The Hook & Outfit Showcase) — Bắt đầu từ ảnh First Frame. "
-                    "Yêu cầu: Camera chậm rãi tự nhiên (slow push-in), chuyển động vi mô chân thực, 1x speed, 24fps cadence."
+                    "- Vai trò Video: VIDEO 1 (0s-8s The Push UI & Hook) — Bắt đầu từ ảnh Lookbook 9:16 có cột item bên trái.\n"
+                    "  YÊU CẦU QUY CHUẨN:\n"
+                    "  1. TUYỆT ĐỐI KHÔNG chèn [POLICY COMPLIANCE] (không có tác dụng trong prompt video).\n"
+                    "  2. KHÔNG mô tả chi tiết dài dòng về nhân vật/trang phục. Chỉ mở đầu bằng đúng 1 câu ngắn: 'Maintain exact model and outfit from the reference image.'\n"
+                    "  3. BẮT BUỘC GIỮ NGUYÊN cấu trúc TIMELINE chi tiết từng giây (0-1s, 1-2s, 2-4s, 4-8s) và block Negative. TUYỆT ĐỐI KHÔNG cắt ngắn, tóm tắt hay gộp timeline!\n"
+                    "  4. Tập trung vào HÀNH ĐỘNG: 0-1s camera khóa cứng người mẫu nhìn ống kính, 1-2s người mẫu dùng tay đẩy mạnh cột item NABI văng sang trái ra khỏi khung hình với motion blur và quán tính woosh, 2-4s camera khóa cứng giữ khoảng trống negative space sạch sẽ, 4-8s camera push-in zoom mượt mà vào mẫu lookbook posing."
+                )
+        else:
+            if "lookbook" in skill.id:
+                lines.append(
+                    "- Vai trò Ảnh: ẢNH LOOKBOOK BỐ CỤC CHIA ĐÔI (Split-Screen 9:16 có CỘT ITEM NABI). "
+                    "Yêu cầu: 1/3 bên trái là cột nền tối than chì có header 'NABI' và các thẻ trắng hiển thị từng món đồ bóc tách "
+                    "(áo, váy, mũ, túi xách, giày). 2/3 bên phải là người mẫu toàn thân mặc trọn bộ trang phục trong studio tối giản. "
+                    "BẮT BUỘC có cột item NABI để node video tiếp theo thực hiện hành động đẩy văng cột ra khỏi khung hình."
                 )
 
         if rel_files:
             lines.append("- Các file ảnh kết quả từ node trước / ảnh tham chiếu đang kết nối vào node này:")
             for idx, rf in enumerate(rel_files, 1):
                 lines.append(f"  {idx}. {rf}")
-            lines.append(
-                "  => HÃY ĐỌC VÀ PHÂN TÍCH TRỰC TIẾP các file ảnh trên (nhận diện màu sắc, phom dáng, chất liệu vải, "
-                "chi tiết may mặc và tư thế thực tế của người mẫu) để viết prompt khớp 100% với ảnh thật vừa tạo."
-            )
+            if not is_video:
+                lines.append(
+                    "  => HÃY ĐỌC VÀ PHÂN TÍCH TRỰC TIẾP các file ảnh trên (nhận diện màu sắc, phom dáng, chất liệu vải, "
+                    "chi tiết may mặc và tư thế thực tế của người mẫu) để viết prompt khớp 100% với ảnh thật vừa tạo."
+                )
         else:
             lines.append("- Node chưa có file ảnh kết nối trực tiếp, hãy tạo prompt tổng quát dựa theo quy chuẩn của skill.")
 
         if task.custom_hint and task.custom_hint.strip():
             lines.append(f"- Ghi chú phong cách bổ sung từ người dùng: \"{task.custom_hint.strip()}\"")
 
-        lines.extend([
-            "",
-            "--- YÊU CẦU ĐẦU RA ---",
-            "1. BẮT BUỘC chèn mệnh đề khẳng định nhân vật hư cấu AI (Policy Compliance) để chống bộ lọc Prominent People.",
-            "2. Trả về CHỈ nội dung Prompt hoàn chỉnh bằng tiếng Anh (English) đặt gọn gàng trong 1 khối code markdown:",
-            "```markdown",
-            "<nội dung prompt tiếng Anh>",
-            "```",
-            "Không kèm lời chào hỏi hay giải thích rườm rà ngoài khối code.",
-        ])
+        if is_video:
+            lines.extend([
+                "",
+                "--- YÊU CẦU ĐẦU RA CHO PROMPT VIDEO ---",
+                "1. TUYỆT ĐỐI KHÔNG đưa [POLICY COMPLIANCE] vào prompt video.",
+                "2. KHÔNG mô tả chi tiết dài dòng về khuôn mặt, tóc, áo, váy, túi, giày (ảnh nguồn đã có sẵn 100%).",
+                "3. Bắt đầu bằng 1 câu ngắn duy nhất:",
+                "   - Cho Video 1: 'Maintain exact model and outfit from the reference image.'",
+                "   - Cho Video 2: 'Seamless continuation from the starting frame, maintaining exact model and outfit.'",
+                "4. BẮT BUỘC GIỮ NGUYÊN CẤU TRÚC TIMELINE CHI TIẾT ĐẦY ĐỦ TỪNG MỐC THỜI GIAN VÀ KHỐI NEGATIVE:",
+                "   - Phải có header 'Timeline:' và chia rõ từng mốc giây (0-1s:, 1-2s:, 2-4s:, 4-8s: cho Video 1; 0-1s:, 1-4s:, 4-6s:, 6-8s: cho Video 2).",
+                "   - TUYỆT ĐỐI KHÔNG cắt ngắn hay tóm tắt timeline thành một đoạn văn ngắn.",
+                "   - Phải có header 'Negative:' với đầy đủ các từ khóa chống lỗi.",
+                "5. Trả về CHỈ nội dung Prompt hoàn chỉnh bằng tiếng Anh (English) đặt gọn gàng trong 1 khối code markdown:",
+                "```markdown",
+                "<nội dung prompt video tiếng Anh>",
+                "```",
+                "Không kèm lời chào hỏi hay giải thích rườm rà ngoài khối code.",
+            ])
+        else:
+            lines.extend([
+                "",
+                "--- YÊU CẦU ĐẦU RA CHO PROMPT ẢNH ---",
+                "1. BẮT BUỘC chèn mệnh đề khẳng định nhân vật hư cấu AI ([POLICY COMPLIANCE]) ở dòng đầu tiên.",
+                "2. Trả về CHỈ nội dung Prompt hoàn chỉnh bằng tiếng Anh (English) đặt gọn gàng trong 1 khối code markdown:",
+                "```markdown",
+                "<nội dung prompt ảnh tiếng Anh>",
+                "```",
+                "Không kèm lời chào hỏi hay giải thích rườm rà ngoài khối code.",
+            ])
 
         return "\n".join(lines)
 

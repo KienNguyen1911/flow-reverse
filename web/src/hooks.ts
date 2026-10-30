@@ -1,6 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import type { GalleryRun, Job, PoolInfo, Project, Status, TryOnRunManifest } from "./types";
+import type {
+  GalleryRun,
+  Job,
+  PoolInfo,
+  Project,
+  Status,
+  TryOnRunManifest,
+  AssetUploadedItem,
+  AssetOutputItem,
+  WorkspaceProject,
+} from "./types";
 
 const TERMINAL: ReadonlySet<string> = new Set(["succeeded", "failed", "rejected"]);
 
@@ -171,6 +181,33 @@ export function useProjects() {
   return { projects, loading, error, refresh };
 }
 
+/** Workspace projects: local canvas groups with their persisted state. */
+export function useWorkspaceProjects() {
+  const [projects, setProjects] = useState<WorkspaceProject[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const r = await api.workspaceProjects();
+      setProjects(r.projects);
+      setError(null);
+      return r.projects;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return [];
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  return { projects, setProjects, loading, error, refresh };
+}
+
 /** Gallery of finished runs. */
 export function useGallery() {
   const [runs, setRuns] = useState<GalleryRun[]>([]);
@@ -224,3 +261,100 @@ export function useTryOnRuns() {
   return { runs, loading, error, refresh };
 }
 
+
+/** Assets hook: fetches uploaded and output assets scoped to a workspace project. */
+export function useAssets(
+  projectId: string | null = null,
+  scope: "project" | "all" = "project",
+) {
+  const [uploaded, setUploaded] = useState<AssetUploadedItem[]>([]);
+  const [outputs, setOutputs] = useState<AssetOutputItem[]>([]);
+  const [loadingUploaded, setLoadingUploaded] = useState(false);
+  const [loadingOutputs, setLoadingOutputs] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const scopeRef = useRef({ projectId, scope });
+  scopeRef.current = { projectId, scope };
+
+  const refreshUploaded = useCallback(async () => {
+    const { projectId: pid, scope: sc } = scopeRef.current;
+    setLoadingUploaded(true);
+    try {
+      const res = await api.assetsUploaded(pid, sc);
+      setUploaded(res.items || []);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingUploaded(false);
+    }
+  }, []);
+
+  const refreshOutputs = useCallback(async () => {
+    const { projectId: pid, scope: sc } = scopeRef.current;
+    setLoadingOutputs(true);
+    try {
+      const res = await api.assetsOutputs(pid, sc);
+      setOutputs(res.items || []);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingOutputs(false);
+    }
+  }, []);
+
+  const refreshAll = useCallback(() => {
+    void refreshUploaded();
+    void refreshOutputs();
+  }, [refreshUploaded, refreshOutputs]);
+
+  useEffect(() => {
+    refreshAll();
+  }, [projectId, scope, refreshAll]);
+
+  /** Optimistically toggle a pin and persist it server-side. */
+  const setPinned = useCallback(
+    async (item: AssetUploadedItem | AssetOutputItem, pinned: boolean, kind?: string) => {
+      const resolvedKind: string =
+        kind ||
+        (item.key?.startsWith("gallery:")
+          ? "gallery"
+          : item.key?.startsWith("output:") || (item as AssetOutputItem).run_id
+            ? "output"
+            : "upload");
+      const runId = (item as AssetOutputItem).run_id;
+      const key =
+        item.key ||
+        (resolvedKind === "output" && runId
+          ? `output:${runId}`
+          : resolvedKind === "gallery" && runId
+            ? `gallery:${runId}`
+            : `${resolvedKind}:${item.id}`);
+      const matches = (it: AssetUploadedItem | AssetOutputItem) =>
+        it.key === key || it.id === item.id;
+      setUploaded((list) => list.map((it) => (matches(it) ? { ...it, isPinned: pinned } : it)));
+      setOutputs((list) => list.map((it) => (matches(it) ? { ...it, isPinned: pinned } : it)));
+      try {
+        await api.pinAsset({ key, kind: resolvedKind, isPinned: pinned });
+        // Pinned items stay visible across projects; refresh so scope filters agree.
+        if (scopeRef.current.scope === "project") refreshAll();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        refreshAll();
+      }
+    },
+    [refreshAll],
+  );
+
+  return {
+    uploaded,
+    outputs,
+    loadingUploaded,
+    loadingOutputs,
+    error,
+    refreshUploaded,
+    refreshOutputs,
+    refreshAll,
+    setPinned,
+  };
+}
