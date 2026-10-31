@@ -137,6 +137,19 @@ class NodeLastFrameBody(BaseModel):
     workspace_project_id: Optional[str] = None
 
 
+class HfRenderBody(BaseModel):
+    """Render a HyperFrames composition through the hf-studio service.
+
+    A separate service from the Flow API: no account, no credits, no browser.
+    `hf_project_id` names a composition project on that service; `variables`
+    overrides its knobs for this render only and does not save them.
+    """
+
+    hf_project_id: str = Field(min_length=1)
+    variables: Optional[dict] = None
+    workspace_project_id: Optional[str] = None
+
+
 class WorkspaceCanvasBody(BaseModel):
     """Serialized canvas graph as stored on a workspace project."""
 
@@ -1151,6 +1164,45 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
             "workspace_project_id": body.workspace_project_id,
         })
         return {"job_id": job.id, "kind": "last_frame"}
+
+    @app.post("/api/hf/render")
+    def api_hf_render(body: HfRenderBody):
+        """Render a HyperFrames composition via the hf-studio service.
+
+        No account or credit is involved, so unlike /api/generate there is no
+        confirm gate.
+        """
+        job = manager.submit("hf_render", {
+            "hf_project_id": body.hf_project_id,
+            "variables": body.variables,
+            "workspace_project_id": body.workspace_project_id,
+        })
+        return {"job_id": job.id, "kind": "hf_render"}
+
+    @app.get("/api/hf/health")
+    def api_hf_health():
+        """Is the render service reachable? Cheap enough to use as a UI probe."""
+        from ..Workflows.hf_client import HfStudioClient, HfStudioError
+
+        try:
+            with HfStudioClient() as hf:
+                return {"ok": True, **hf.health()}
+        except HfStudioError as exc:
+            return JSONResponse(
+                status_code=503,
+                content={"ok": False, "error": exc.message, "hint": exc.hint},
+            )
+
+    @app.get("/api/hf/bases")
+    def api_hf_bases():
+        """Available compositions and their editable knobs."""
+        from ..Workflows.hf_client import HfStudioClient, HfStudioError
+
+        try:
+            with HfStudioClient() as hf:
+                return {"ok": True, "bases": hf.list_bases()}
+        except HfStudioError as exc:
+            raise HTTPException(status_code=503, detail=exc.message) from exc
 
     @app.get("/api/node/files/{file_path:path}")
     def api_node_file(file_path: str):

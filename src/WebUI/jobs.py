@@ -28,6 +28,7 @@ Batch item format (``params["items"]``, or a storyboard JSON via
 from __future__ import annotations
 
 import json
+import os
 import queue
 import re
 import shutil
@@ -50,6 +51,7 @@ from ..Workflows.account_pool import (
 )
 from ..Workflows.flow_client import CircuitOpenError, FlowClient
 from ..Workflows.flow_models import ProjectInfo, ReferenceTemplate, parse_project_ref
+from ..Workflows.hf_client import HfStudioClient, HfStudioError
 from ..Workflows.media_service import MediaService
 from ..Workflows.node_retry import (
     NodeExecutionError,
@@ -60,6 +62,11 @@ from ..Workflows.node_retry import (
 ROOT = Path(__file__).resolve().parents[2]
 TERMINAL_STATES = {"succeeded", "failed", "rejected"}
 MAX_BATCH_ITEMS = 300
+
+#: hf-studio is a separate service (services/hf-studio). It renders HyperFrames
+#: compositions and takes no Flow account, so it is reachable even with every
+#: pool account asleep.
+HF_STUDIO_URL = os.environ.get("HF_STUDIO_URL", "http://127.0.0.1:4600/api/v1")
 
 
 @dataclass
@@ -882,6 +889,9 @@ class JobManager:
         if kind == "node_last_frame":
             self._run_node_last_frame(job)
             return
+        if kind == "hf_render":
+            self._run_hf_render(job)
+            return
         raise ValueError(f"unknown job kind: {kind}")
 
     # -- single-account jobs ---------------------------------------------------- #
@@ -1135,6 +1145,79 @@ class JobManager:
         job.result = res
         job.set_state("succeeded")
         self._bind_workspace_asset(job, f"output:{run_name}")
+
+    # -- hf-studio (composition render) ---------------------------------------- #
+
+    def _run_hf_render(self, job: Job) -> None:
+        """Render a HyperFrames composition through the hf-studio service.
+
+        hf-studio is a separate process and takes no account: there is no credit,
+        no browser, no anti-abuse surface.
+
+        The service renders one job at a time and answers 429 while busy. In
+        practice that never fires from here — `JobManager` runs a single worker
+        thread, so this job cannot overlap another one — but the wait lives in the
+        client because the service is also reachable by anything else, and a 429
+        answered with a failure would be wrong for a caller that just wants a
+        video.
+        """
+        params = job.params
+        ev = job.add_event
+        project_id = params.get("hf_project_id")
+        if not project_id:
+            raise ValueError("hf_render cần hf_project_id")
+
+        base_url = params.get("hf_base_url") or HF_STUDIO_URL
+        # Same layout as the other node kinds (`out/nodes/<run>/<file>`), so the
+        # existing /api/node/files route serves it with no extra wiring.
+        run_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_hf_{str(project_id)[-8:]}"
+        run_dir = self.node_out / run_name
+        run_dir.mkdir(parents=True, exist_ok=True)
+        dest = run_dir / "render.mp4"
+
+        ev("step", f"Render composition {project_id} qua hf-studio…")
+
+        with HfStudioClient(base_url) as hf:
+            # Overrides are applied at render time only; the stored delta is not
+            # touched, so rendering a variant cannot quietly rewrite the project.
+            variables = params.get("variables") or None
+
+            try:
+                out_path = hf.render_and_wait(
+                    project_id,
+                    dest,
+                    variables=variables,
+                    on_event=lambda kind, msg, _data: ev(
+                        "progress" if kind in ("progress", "wait") else kind, msg
+                    ),
+                    abort=job.cancel_event,
+                )
+            except HfStudioError as exc:
+                if exc.code == "hf_unreachable":
+                    # Actionable: this is a deployment mistake, not a render bug.
+                    raise HfStudioError(
+                        exc.status,
+                        exc.code,
+                        exc.message,
+                        hint="khởi động service: cd services/hf-studio && npm start",
+                    ) from exc
+                raise
+
+        if not out_path.is_file() or out_path.stat().st_size < 1000:
+            raise RuntimeError(f"hf-studio báo thành công nhưng file không hợp lệ: {out_path}")
+
+        job.result = {
+            "status": "ok",
+            "run_id": run_name,
+            "run_dir": str(run_dir),
+            "file_path": str(out_path),
+            "file_url": f"/api/node/files/{run_name}/{out_path.name}",
+            "file_bytes": out_path.stat().st_size,
+            "hf_project_id": project_id,
+        }
+        job.set_state("succeeded")
+        self._bind_workspace_asset(job, f"output:{run_name}")
+        ev("done", f"Render xong → {out_path.name} ({out_path.stat().st_size // 1024} KB)")
 
     def _run_project_op(self, job: Job) -> None:
         params = job.params

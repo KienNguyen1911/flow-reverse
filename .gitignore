@@ -24,6 +24,10 @@ web/node_modules/
 web/dist/
 *.tsbuildinfo
 
+# ==== Repo con độc lập (services/hf-studio) =================================
+# HyperFrames edit service — git repo riêng, không track từ repo cha.
+services/hf-studio/
+
 # ==== Khác ==================================================================
 scratch/
 *.log
