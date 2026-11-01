@@ -1,0 +1,697 @@
+{
+  "version": 2,
+  "source": "16 anh lookbook trong prompt-skills/poses/, trich xuat pose-only",
+  "consistency_lock": {
+    "note": "Cac khoa duoi day la nguon su that duy nhat. height_anchor (macro) da gom ca tiêu cu, goc may va occupancy - khong tach lai thanh cac khoa rieng vi hai nguon su that se troi lech.",
+    "height_anchor": "[HEIGHT & PROPORTION OPTIMIZATION]\nBody Proportion: the same 168 cm tall adult woman, slim build, seven-and-a-half head-to-body ratio,\nsmall head, long neck, long unbroken leg line, natural anatomical proportions. Preserve her original\nanatomical identity and body structure from the reference image. Do not lengthen the legs, shorten\nthe torso, narrow the waist or widen the shoulders.\nCamera Perspective: full-body fashion photography with the camera positioned at waist level and a\nthree-degree upward tilt. Keep the horizon level. Avoid steep low-angle perspectives, high-angle\nshots, downward tilting and strong foreshortening.\nLens: 50mm equivalent fashion-editorial perspective, realistic depth, natural perspective\ncompression. Avoid wide-angle distortion and oversized foreground elements.\nComposition: full body head to toe, the figure fills 76 percent of the frame height, crown of the\nhead 12 percent below the top edge, soles of the shoes 12 percent above the bottom edge. Both feet\nremain completely visible and grounded. Identical camera distance and subject scale across the whole\nset.\nPosture: the pose described below is the only variable between images. Spine, shoulder and pelvis\nalignment change with the pose, never with the camera.\nVisual Silhouette: one clean continuous line from the shoulders through the waist, hips, knees and\nankles, with the thighs, knees, calves and ankles clearly distinguishable and the two legs never\nmerging into a single mass.\nAnatomical Integrity: realistic human anatomy, natural joint positions, consistent limb lengths and\nthe original body structure. No artificial body stretching, disproportionate limbs, distorted feet,\ndistorted joints or exaggerated anatomical modifications.\n[END HEIGHT & PROPORTION OPTIMIZATION]",
+    "setting_lock": "seamless mid-gray studio backdrop with a soft vertical gradient, clean floor plane, soft directional key light from the front left with gentle fill, natural skin texture",
+    "negative": "no square-on symmetric stance, no arms hanging straight down symmetrically, no parallel feet, no varying subject scale, no cropped feet, no zoomed-in torso, no exaggerated limb elongation, no text, no graphics, no props, no other people",
+    "why_50mm": "35mm o ngang hong keo dai chan qua muc va lam nguoi mau doc thanh ~175cm; 85mm nen phang va lam mat do sau. 50mm o ngang hong + tilt 3 do giu duoc chan dai ma khong pha ti le 168cm.",
+    "macro_note": "height_anchor la ban dieu chinh cua [HEIGHT & PROPORTION OPTIMIZATION] trong try-on-image-prompter.md: 50mm thay 70mm, 76% thay 82-85%. Chen NGUYEN VAN vao moi prompt trong mot bo. prompt_lint.py nhan header nay.",
+    "measured_on": "batch_01_athleisure_8pose",
+    "height_anchor_short": "the same 168 cm tall adult woman, slim build, seven-and-a-half head-to-body ratio, small head, long neck, long unbroken leg line, natural anatomical proportions"
+  },
+  "validated_batches": [
+    {
+      "id": "batch_01_athleisure_8pose",
+      "poses": [
+        "pose_03_headphones_hands_in_pockets",
+        "pose_06_boho_waistband_walk",
+        "pose_13_sunglasses_thumbs_in_pockets",
+        "pose_09_hand_on_hip_casual_frame",
+        "pose_16_crossed_leg_piping_pullover",
+        "pose_10_hands_behind_head_sporty",
+        "pose_11_pointed_toe_plaid_overshirt",
+        "pose_15_arms_crossed_bob"
+      ],
+      "height_cm": 168,
+      "focal_length": "50mm",
+      "camera_height": "waist",
+      "tilt_degrees": 3,
+      "frame_occupancy_pct": 76,
+      "result": "ok",
+      "lesson": "Batch dau dung 35/50/85mm lan lon va co pose_12 chinh dien: model to nho khac nhau va anh so 2 bi cung. Batch nay khoa 50mm + occupancy 76% va thay pose_12 bang pose_13."
+    }
+  ],
+  "poses": [
+    {
+      "id": "pose_01_slouchy_wall_lean",
+      "source_file": "05ca5862760a1b50e4d96bedaba14666.jpg",
+      "vibe": "dreamy off-duty slouch, bedroom editorial, arched-back wall lean",
+      "camera": {
+        "angle": "eye-level to subtle low angle, camera at chest height, slight upward read on the jaw",
+        "framing": "medium-long shot, head to just below the ankle, frame edge cuts the feet, loose headroom, no floor plane",
+        "focal_length": null,
+        "lens_effect": "mild perspective stretch through the legs due to the back-arch lean",
+        "applies_to": "single-shot only; in a multi-image set the lock overrides this",
+        "source_focal_length": "35mm",
+        "resolved_by": "consistency_lock.height_anchor"
+      },
+      "weight_and_torso": {
+        "weight": "hips pushed back against the wardrobe, weight settled on the rear leg, front leg lightly placed",
+        "shoulders": "rolled back and relaxed, not squared, one shoulder carried slightly lower by the lean",
+        "torso": "arched backward, ribcage lifted and opened, full back-bend lean",
+        "hip_chest_rotation": "hips angled a few degrees off the camera axis, chest opened toward camera"
+      },
+      "limbs": {
+        "right_hand": "slid inside the front jeans pocket, only the thumb hooked over the pocket edge",
+        "left_hand": "hanging straight down, loosely gripping a tote strap at hip level, elbow close to the ribs",
+        "legs": "long and near-straight, front foot turned outward about thirty degrees, rear foot planted flat as support",
+        "stance_width": "narrow, heels close"
+      },
+      "head_and_gaze": {
+        "head": "chin lifted, face rotated to three-quarter profile toward her left, head tilted up and back",
+        "gaze": "drifting up and away off-camera toward the upper-left corner, eyes half-lidded, lips slightly parted",
+        "expression": "dreamy, absent, unposed"
+      },
+      "prompt_core": "She leans back against a wardrobe with the hips pushed back and the spine arched backward, ribcage lifted and opened, shoulders rolled back and relaxed rather than squared, one shoulder carried slightly lower by the lean. Her weight settles on the rear leg with the front leg lightly placed and turned outward about thirty degrees. One thumb is hooked over the edge of the front jeans pocket with the hand slid inside, the other arm hangs straight down and loosely grips a tote strap at hip level with the elbow close to the ribs. Chin lifted, face rotated to a three-quarter profile, head tilted up and back, gaze drifting up and away off-camera, eyes half-lidded, lips slightly parted.",
+      "tags": [
+        "wall_lean",
+        "back_arch",
+        "hands_in_pockets",
+        "off_camera_gaze",
+        "indoor"
+      ],
+      "batch_safe": true,
+      "calibrated": false
+    },
+    {
+      "id": "pose_02_hands_behind_back_schoolgirl",
+      "source_file": "304d5a508c0bc389f8a4bfb67a13e65f.jpg",
+      "vibe": "polite, shy, catalogue-friendly, hands-hidden innocence",
+      "camera": {
+        "angle": "dead-on eye-level, straight-on frontal",
+        "framing": "full-body head to toe, ten percent headroom, clean floor space beneath the shoes, subject centered and symmetrical",
+        "focal_length": null,
+        "lens_effect": "flattening compression, no perspective distortion",
+        "applies_to": "single-shot only; in a multi-image set the lock overrides this",
+        "source_focal_length": "85mm",
+        "resolved_by": "consistency_lock.height_anchor"
+      },
+      "weight_and_torso": {
+        "weight": "loaded on her right leg, hip hiked slightly on that side",
+        "shoulders": "level and slightly drawn back",
+        "torso": "upright, chest neutral",
+        "hip_chest_rotation": "pelvis angled a few degrees off-axis, chest countering back toward camera"
+      },
+      "limbs": {
+        "right_hand": "tucked behind her back, wrist hidden",
+        "left_hand": "tucked behind her back, wrist hidden, both upper arms rounded softly outward",
+        "legs": "right foot planted flat and forward, left foot placed behind and rotated inward so the toe points at the standing foot",
+        "stance_width": "narrow, closed, slightly pigeon-toed"
+      },
+      "head_and_gaze": {
+        "head": "nearly frontal with the chin lowered and tilted a touch to her right",
+        "gaze": "straight into the lens",
+        "expression": "soft, guarded, small closed-mouth look"
+      },
+      "prompt_core": "She stands with her body rotated about fifteen degrees off the camera axis rather than dead square, weight loaded on her right leg with the hip hiked slightly on that side, shoulders level and drawn back, chest neutral, pelvis angled a few degrees off-axis. Both hands are tucked behind her back with the wrists hidden, only the upper arms visible so the silhouette rounds softly outward. The right foot is planted flat and slightly forward, the left foot placed behind with the toe turned inward toward the standing heel. Chin lowered and tilted a touch, gaze straight into the lens, soft and slightly guarded, small closed-mouth expression.",
+      "tags": [
+        "hands_behind_back",
+        "frontal",
+        "closed_stance",
+        "eye_contact",
+        "studio"
+      ],
+      "batch_safe": true,
+      "calibrated": false
+    },
+    {
+      "id": "pose_03_headphones_hands_in_pockets",
+      "source_file": "3e6666b31c6ac1148a25ab6401864de8.jpg",
+      "vibe": "aloof streetwear cool, headphones-on attitude, hunched and unbothered",
+      "camera": {
+        "angle": "low angle at hip level with a subtle upward tilt",
+        "framing": "full-body head to toe, shoes fully visible with a strip of floor, generous headroom above the hair",
+        "focal_length": null,
+        "lens_effect": "elongating leg perspective, editorial high-fashion proportions",
+        "applies_to": "single-shot only; in a multi-image set the lock overrides this",
+        "source_focal_length": "35mm",
+        "resolved_by": "consistency_lock.height_anchor"
+      },
+      "weight_and_torso": {
+        "weight": "hips shifted onto her right leg, left leg stepping forward and bearing almost no weight",
+        "shoulders": "hunched forward and rounded, upper back softly curved",
+        "torso": "chest slightly sunken, deliberate slouch",
+        "hip_chest_rotation": "pelvis and shoulders both rotated a few degrees toward camera left"
+      },
+      "limbs": {
+        "right_hand": "buried in the jacket side pocket, elbow flared out away from the ribs",
+        "left_hand": "buried in the opposite jacket side pocket, elbow flared, forearm angling down-forward",
+        "legs": "left toe turned out and stepped slightly forward, right leg planted behind",
+        "stance_width": "shoulder-width, both heels down"
+      },
+      "head_and_gaze": {
+        "head": "tipped toward her right shoulder, chin dropped, headphones resting on the ears",
+        "gaze": "sliding down and off-camera to the lower left",
+        "expression": "heavy-lidded, mouth neutral, disengaged"
+      },
+      "prompt_core": "Her body is turned about thirty degrees away from the camera, weight shifted onto her right leg with the left leg stepping slightly forward and bearing almost no weight, pelvis rotated a few degrees so the silhouette stays asymmetric. Both hands are buried in the jacket side pockets with the elbows flared out away from the ribs, shoulders hunched forward and rounded, upper back softly curved, chest slightly sunken. Head tipped toward her right shoulder with the chin dropped, gaze sliding down and off-camera to the lower left, eyes heavy-lidded, mouth neutral. Feet set slightly wider than hip distance with one toe turned out.",
+      "tags": [
+        "hands_in_pockets",
+        "hunch",
+        "low_angle",
+        "headphones",
+        "off_camera_gaze"
+      ],
+      "batch_safe": true,
+      "calibrated": true
+    },
+    {
+      "id": "pose_04_glasses_slumped_nerd",
+      "source_file": "45fafeee34e48651e770148da8f8753a.jpg",
+      "vibe": "gloomy introverted grunge-nineties mood, collapsed posture",
+      "camera": {
+        "angle": "eye-level, straight-on",
+        "framing": "full-body but tightly framed, soles nearly touching the bottom edge, head close to the top, minimal floor space",
+        "focal_length": null,
+        "lens_effect": "gentle compression, natural proportions",
+        "applies_to": "single-shot only; in a multi-image set the lock overrides this",
+        "source_focal_length": "50mm",
+        "resolved_by": "consistency_lock.height_anchor"
+      },
+      "weight_and_torso": {
+        "weight": "shared evenly across both legs with soft knees",
+        "shoulders": "collapsed forward",
+        "torso": "chest caved in, spine curved into a soft C, pronounced hunch that shortens the neck",
+        "hip_chest_rotation": "hips square to camera, no contrapposto"
+      },
+      "limbs": {
+        "right_hand": "pulled behind the body, fully concealed",
+        "left_hand": "pulled behind the body, fully concealed, elbows only mildly flared",
+        "legs": "nearly straight with a slight gap, right foot angled outward, left foot turned out too, toes splayed",
+        "stance_width": "narrow, flat-footed, unbothered"
+      },
+      "head_and_gaze": {
+        "head": "frontal but chin tucked down hard so the brow and glasses dominate",
+        "gaze": "dropped, looking down through the frames, eyes effectively hidden",
+        "expression": "deadpan, mouth relaxed and closed"
+      },
+      "prompt_core": "She stands with her weight shared evenly across both legs with soft knees, shoulders collapsed forward, chest caved in, the spine curved into a soft C that shortens the neck, hips staying square to the camera with no contrapposto. Both arms are pulled behind the body with the hands fully concealed and the elbows only mildly flared. Legs nearly straight with a small gap, the right foot angled outward and the left foot turned out too with the toes splayed, flat-footed and unbothered. Head frontal but chin tucked down hard so the brow and glasses dominate, gaze dropped and looking down through the frames, mouth relaxed and closed.",
+      "tags": [
+        "hunch",
+        "hands_behind_back",
+        "chin_tuck",
+        "glasses",
+        "grunge"
+      ],
+      "batch_safe": true,
+      "calibrated": false
+    },
+    {
+      "id": "pose_05_hoodie_kangaroo_pocket",
+      "source_file": "48c5c2a1fc042dadc34f73911bede001.jpg",
+      "vibe": "sulky laid-back loungewear, wind-in-hair drama, deadpan stare",
+      "camera": {
+        "angle": "eye-level, straight-on",
+        "framing": "full-body head to toe, shoes fully visible, readable floor plane beneath, comfortable headroom, wide side margins",
+        "focal_length": null,
+        "lens_effect": "flat compression, honest proportions",
+        "applies_to": "single-shot only; in a multi-image set the lock overrides this",
+        "source_focal_length": "85mm",
+        "resolved_by": "consistency_lock.height_anchor"
+      },
+      "weight_and_torso": {
+        "weight": "balanced, roughly fifty-five forty-five toward her left",
+        "shoulders": "squared but dropped low",
+        "torso": "upright, chest relaxed, no lean and no arch",
+        "hip_chest_rotation": "hips and chest both nearly square to camera"
+      },
+      "limbs": {
+        "right_hand": "shoved into the hoodie kangaroo pocket, wrist swallowed by fabric",
+        "left_hand": "shoved into the same front pocket, forearms disappearing so the arms read as one closed block",
+        "legs": "long and straight, wide relaxed stance, both heels firmly planted, toes turned outward",
+        "stance_width": "slightly wider than shoulder width"
+      },
+      "head_and_gaze": {
+        "head": "dead-level, chin dipped just slightly",
+        "gaze": "flat unwavering stare directly into the lens",
+        "expression": "lips together, zero smile, detached"
+      },
+      "prompt_core": "She stands with her body rotated slightly off the camera axis, weight balanced roughly fifty-five forty-five toward her left, shoulders squared but dropped low, chest relaxed, torso upright with no lean and no arch. Both hands are shoved into the hoodie front pocket with the wrists swallowed by fabric and the forearms disappearing so the arms read as one closed block. Legs long and straight in a wide relaxed stance, both heels firmly planted with the toes turned outward. Head dead-level with the chin dipped just slightly, a flat unwavering stare into the lens, lips together with no smile, hair lifted and blown sideways as the only motion cue.",
+      "tags": [
+        "hands_in_pocket",
+        "frontal",
+        "wide_stance",
+        "eye_contact",
+        "wind_hair"
+      ],
+      "batch_safe": true,
+      "calibrated": false
+    },
+    {
+      "id": "pose_06_boho_waistband_walk",
+      "source_file": "4f12ff332f7a4fd2644182850feac4ac.jpg",
+      "vibe": "seventies boho runway, mid-stride swagger, hands on waistband",
+      "camera": {
+        "angle": "slight low angle from hip height with a mild upward tilt",
+        "framing": "full-body head to toe, front foot close to the bottom edge with a hint of floor, straight-on frontal viewpoint",
+        "focal_length": null,
+        "lens_effect": "gentle leg stretch from the low hip-level position",
+        "applies_to": "single-shot only; in a multi-image set the lock overrides this",
+        "source_focal_length": "35mm",
+        "resolved_by": "consistency_lock.height_anchor"
+      },
+      "weight_and_torso": {
+        "weight": "rolling onto the front leg mid-walk, rear leg trailing, hip on the front side hiked",
+        "shoulders": "right shoulder rolled forward and dipped below the left",
+        "torso": "chest open, leaning a couple of degrees forward into the step",
+        "hip_chest_rotation": "hips rotating with the stride, chest counter-rotating slightly"
+      },
+      "limbs": {
+        "right_hand": "hooked into the front waistband at the hip bone, thumb inside, fingers splayed down over the fabric",
+        "left_hand": "hooked into the front waistband on the other hip, elbow pushed out to frame the waist",
+        "legs": "front foot placed flat and turned out, rear foot crossing behind with the toe barely touching",
+        "stance_width": "mid-stride, feet offset front to back"
+      },
+      "head_and_gaze": {
+        "head": "chin lowered, tilted slightly to her right",
+        "gaze": "cast down and away to the side",
+        "expression": "eyes half-closed, lips relaxed, no eye contact with the lens"
+      },
+      "prompt_core": "She is captured mid-stride walking toward the camera but three-quarters on, weight rolling onto the front leg with the rear leg trailing and the hip on the front side hiked up, one shoulder rolled forward and dipped lower than the other. Both hands are hooked into the front waistband of her track pants at the hip bones, thumbs inside the waistband with the fingers splayed down over the fabric, elbows pushed out to frame the waist. Chin lowered and tilted slightly, gaze cast down and away to the side, eyes half-closed, lips relaxed, no eye contact with the lens. Front foot flat and turned out, rear foot trailing behind with the toe barely touching the floor.",
+      "tags": [
+        "mid_stride",
+        "hands_on_waistband",
+        "low_angle",
+        "off_camera_gaze",
+        "boho"
+      ],
+      "batch_safe": true,
+      "calibrated": true
+    },
+    {
+      "id": "pose_07_flatcap_hands_in_pockets",
+      "source_file": "52a13a46a0a1a7000cfa5e7fcb2aaba3.jpg",
+      "vibe": "quiet understated indie, small figure floating in white negative space",
+      "camera": {
+        "angle": "slight high angle, camera just above eye level and tilted down a few degrees onto the cap",
+        "framing": "wide full-body, model occupies the middle fifty-five percent of the canvas width, large white margins on all sides, feet included with a thin strip of floor",
+        "focal_length": null,
+        "lens_effect": "neutral, slight downward compression from the high angle",
+        "applies_to": "single-shot only; in a multi-image set the lock overrides this",
+        "source_focal_length": "50mm",
+        "resolved_by": "consistency_lock.height_anchor"
+      },
+      "weight_and_torso": {
+        "weight": "settled on her left leg with the hip dropped on that side, right leg angled forward and out taking partial weight",
+        "shoulders": "uneven, left shoulder lower and further forward",
+        "torso": "leaning forward from the waist, chest hollowed in slightly, soft downward spiral through the spine",
+        "hip_chest_rotation": "hips offset with the right forward, chest rotated toward camera left"
+      },
+      "limbs": {
+        "right_hand": "slid into the front trouser pocket, wrist hidden, thumb outside over the pocket mouth",
+        "left_hand": "slid into the opposite front pocket, elbow slightly flared and pushed back",
+        "legs": "right foot forward and turned out about thirty-five degrees, left foot planted behind and turned out, both heels flat",
+        "stance_width": "wide-ish, offset front to back"
+      },
+      "head_and_gaze": {
+        "head": "rolled forward with the chin tucked toward the chest, face rotated three-quarter toward camera left",
+        "gaze": "dropped down and off-camera to the lower left",
+        "expression": "blank, internal, eyes lowered"
+      },
+      "prompt_core": "She stands small in the frame with the weight settled on her left leg and the hip dropped on that side, the right leg angled forward and out taking partial weight. The torso leans forward from the waist with the chest hollowed in slightly and the shoulders uneven, the left shoulder lower and further forward so a soft downward spiral runs through the spine. Both hands are slid into the front trouser pockets with the wrists hidden and the thumbs outside over the pocket mouths, elbows slightly flared and pushed back. The right foot is forward and turned out about thirty-five degrees, the left foot planted behind and turned out too, both heels flat. Head rolled forward with the chin tucked toward the chest, face rotated to a three-quarter view, gaze dropped down and off-camera, eyes lowered, expression blank and internal.",
+      "tags": [
+        "hands_in_pockets",
+        "forward_lean",
+        "chin_tuck",
+        "high_angle",
+        "negative_space",
+        "flat_cap"
+      ],
+      "batch_safe": true,
+      "calibrated": false
+    },
+    {
+      "id": "pose_08_open_cardigan_mid_step",
+      "source_file": "8708e102eea307a5dd7206f865e0c532.jpg",
+      "vibe": "effortless everyday street, caught mid-walk toward the viewer",
+      "camera": {
+        "angle": "eye-level, straight-on, centered",
+        "framing": "full-body head to toe, small headroom, clear floor visible around the shoes",
+        "focal_length": null,
+        "lens_effect": "compression keeps the pose flat and honest, no perspective stretch",
+        "applies_to": "single-shot only; in a multi-image set the lock overrides this",
+        "source_focal_length": "85mm",
+        "resolved_by": "consistency_lock.height_anchor"
+      },
+      "weight_and_torso": {
+        "weight": "transferring onto the front right leg mid-step, rear leg still pushing off, hip hiked on the trailing side",
+        "shoulders": "square to camera and relaxed low",
+        "torso": "upright with a barely perceptible forward lean into the step, chest neutral",
+        "hip_chest_rotation": "pelvis rotated with the step, chest staying close to frontal"
+      },
+      "limbs": {
+        "right_hand": "hanging straight down beside the thigh, relaxed and open with fingers slightly curled",
+        "left_hand": "tucked into the front jeans pocket, thumb hooked outside, elbow flared out slightly",
+        "legs": "legs crossing mid-stride, front foot flat and turned out toward camera, rear foot behind with the heel lifting, legs overlapping just above the ankles",
+        "stance_width": "narrow, crossed at the ankles"
+      },
+      "head_and_gaze": {
+        "head": "level with a subtle tilt to her left",
+        "gaze": "straight into the lens",
+        "expression": "calm and unbothered, mouth closed in a neutral line"
+      },
+      "prompt_core": "She is caught mid-stride, weight transferring onto the front right leg with the rear leg still pushing off and the hip hiked on the trailing side, shoulders square and relaxed low, torso upright with a barely perceptible forward lean into the step. Her right arm hangs straight down beside the thigh with the hand relaxed and open, fingers slightly curled, while the left hand is tucked into the front jeans pocket with the thumb hooked outside and the elbow flared out slightly. The legs cross in a walking stride with the front foot flat and turned out and the rear foot behind with the heel lifting, the front ankle rolled so the toe touches just ahead of the back foot without merging the two legs. Head level with a subtle tilt, calm direct gaze into the lens, mouth closed in a neutral line.",
+      "tags": [
+        "mid_stride",
+        "hands_in_pockets",
+        "eye_contact",
+        "frontal_walk",
+        "studio"
+      ],
+      "batch_safe": true,
+      "calibrated": false
+    },
+    {
+      "id": "pose_09_hand_on_hip_casual_frame",
+      "source_file": "990ef977bccd5d879140f49b34de9129.jpg",
+      "vibe": "bubbly commercial catalogue energy, girl-next-door confidence",
+      "camera": {
+        "angle": "eye-level, dead straight-on, subject perfectly centered",
+        "framing": "full-body head to toe in a tall frame, generous floor space under the sneakers, sizeable headroom, floating catalogue composition",
+        "focal_length": null,
+        "lens_effect": "flat compression, symmetrical and clean",
+        "applies_to": "single-shot only; in a multi-image set the lock overrides this",
+        "source_focal_length": "85mm",
+        "resolved_by": "consistency_lock.height_anchor"
+      },
+      "weight_and_torso": {
+        "weight": "firmly on her left leg, that hip pushed out and hiked, right leg extended to the side with a soft knee",
+        "shoulders": "opposite shoulder dropped, level-to-uneven",
+        "torso": "counter-tilted into a clean S-curve through the spine, ribcage lifted, chest open",
+        "hip_chest_rotation": "hip out to one side, chest counter-tilted the other way"
+      },
+      "limbs": {
+        "right_hand": "bent with the hand resting flat on the hip, elbow flared wide and pushed back",
+        "left_hand": "hanging down and slightly behind the body line, relaxed near the thigh",
+        "legs": "right leg extended out to the side with the toe turned out, left leg straight and weight-bearing",
+        "stance_width": "wide, about hip and a half, both toes turned outward, heels flat"
+      },
+      "head_and_gaze": {
+        "head": "upright with a small tilt toward her left shoulder, face nearly frontal",
+        "gaze": "direct eye contact with the lens",
+        "expression": "soft neutral pout, faint smile in the eyes, chin level"
+      },
+      "prompt_core": "Her body is angled about twenty degrees off the camera axis rather than square-on. Weight is firmly on her left leg with that hip pushed out and hiked, the right leg extended to the side with a soft knee and the toe turned out, so the standing hip rises and the free hip drops into a clear S-curve through the spine. Ribcage lifted, chest open, the opposite shoulder lower than the weighted one. Her right hand rests flat on her hip with the elbow flared wide and pushed back, the left arm hangs down and slightly behind the body line with a relaxed hand near the thigh. Head upright with a small tilt toward her left shoulder, face nearly frontal, soft neutral pout, faint smile in the eyes, chin level, direct eye contact with the lens. Feet apart at about hip and a half with both toes turned outward and heels flat.",
+      "tags": [
+        "hand_on_hip",
+        "s_curve",
+        "wide_stance",
+        "eye_contact",
+        "symmetrical"
+      ],
+      "batch_safe": true,
+      "calibrated": true
+    },
+    {
+      "id": "pose_10_hands_behind_head_sporty",
+      "source_file": "b0fbecb819cfa707d0c68a0a51b4c8cd.jpg",
+      "vibe": "playful sporty Y2K, mid-stretch posing, athletic attitude",
+      "camera": {
+        "angle": "eye-level, straight-on",
+        "framing": "head to just below the shoe soles with a sliver of floor, tight side margins, open space above the raised elbows",
+        "focal_length": null,
+        "lens_effect": "natural perspective, barely any distortion",
+        "applies_to": "single-shot only; in a multi-image set the lock overrides this",
+        "source_focal_length": "50mm",
+        "resolved_by": "consistency_lock.height_anchor"
+      },
+      "weight_and_torso": {
+        "weight": "hips swayed toward her left, weight on the left leg, right leg relaxed and slightly turned in",
+        "shoulders": "elevated by the arm position, not by tension",
+        "torso": "chest lifted and opened by the raised arms, ribcage flared, lower back slightly arched, midriff exposed",
+        "hip_chest_rotation": "pelvis tilted and rotated a few degrees"
+      },
+      "limbs": {
+        "right_hand": "placed behind the head at the nape, fingers resting on the hair",
+        "left_hand": "placed behind the head with the fingers meeting the right hand, elbows lifted high and flared wide into a diamond",
+        "legs": "left leg straight and weight-bearing, right leg slightly forward with a soft knee, both feet flat and toes out",
+        "stance_width": "apart, moderately wide"
+      },
+      "head_and_gaze": {
+        "head": "tilted a touch to her right and pushed slightly forward between the elbows, chin just barely lifted",
+        "gaze": "direct cool gaze into the lens",
+        "expression": "lips closed and relaxed, confident"
+      },
+      "prompt_core": "Her body is angled about twenty degrees off the camera axis with the hips swayed toward her left, weight on the left leg, the right leg slightly forward with a soft knee turning inward, the pelvis tilted and rotated a few degrees. Both hands are placed behind her head at the nape with the fingers resting on the hair and the elbows lifted high and flared wide to the sides forming a diamond, which lifts the chest, flares the ribcage, slightly arches the lower back and exposes the midriff, with one shoulder higher than the other rather than level. Head tilted a touch to her right and pushed slightly forward between the elbows, chin just barely lifted, lips closed and relaxed, cool direct gaze into the lens. Both feet flat with the toes turned out.",
+      "tags": [
+        "hands_behind_head",
+        "elbows_flared",
+        "midriff",
+        "eye_contact",
+        "sporty"
+      ],
+      "batch_safe": true,
+      "calibrated": true
+    },
+    {
+      "id": "pose_11_pointed_toe_plaid_overshirt",
+      "source_file": "ba0425bd2beea812286bc42c9a7f7e61.jpg",
+      "vibe": "grunge-nineties swagger with a dancer's pointed toe",
+      "camera": {
+        "angle": "eye-level to a very slight low angle, straight-on frontal",
+        "framing": "full-body head to toe with the knee-high boots completely visible and a small floor margin",
+        "focal_length": null,
+        "lens_effect": "minimal distortion with slight compression on the oversized shirt",
+        "applies_to": "single-shot only; in a multi-image set the lock overrides this",
+        "source_focal_length": "50mm",
+        "resolved_by": "consistency_lock.height_anchor"
+      },
+      "weight_and_torso": {
+        "weight": "nearly all on her left leg, that hip thrust out and up, right leg extended to the side bearing almost nothing",
+        "shoulders": "left shoulder dropped and rolled forward",
+        "torso": "leaning subtly toward the weighted side, chest angled a few degrees off the camera axis, relaxed neck",
+        "hip_chest_rotation": "hip out to the standing side, chest opening back toward camera"
+      },
+      "limbs": {
+        "right_hand": "resting at the hip with fingertips grazing the shirt hem near the thigh",
+        "left_hand": "slid into the shorts pocket beneath the oversized shirt, thumb hooked outside, elbow bent close to the body",
+        "legs": "standing leg straight with a locked knee, extended right leg out to the side with a straight knee, ankle rolled over, toe pointed hard against the floor and heel lifted high",
+        "stance_width": "very wide lateral split"
+      },
+      "head_and_gaze": {
+        "head": "frontal with a slight tilt to her right, chin dipped just slightly",
+        "gaze": "direct level stare into the lens",
+        "expression": "heavy-lidded eyes, mouth closed with a small knowing half-smile"
+      },
+      "prompt_core": "Her body faces about thirty-five degrees off the camera axis. Nearly all her weight is on her left leg with that hip thrust out and up, while the right leg is extended out to the side and slightly forward with a straight knee, the ankle rolled over, the toe pointed hard against the floor and the heel lifted high, forming one long unbroken diagonal line from the standing hip to the pointed toe. The left shoulder is dropped and rolled forward, the torso leans subtly toward the weighted side with the chest angled further off the camera axis, the neck relaxed rather than tense. Her right hand rests at the hip with the fingertips grazing the jacket hem near the thigh, the left hand slid into the side pocket of her track pants with the thumb hooked outside and the elbow bent close to the body. Head frontal with a slight tilt, chin dipped just slightly, heavy-lidded eyes, small knowing half-smile, direct level stare into the lens.",
+      "tags": [
+        "pointed_toe",
+        "lateral_split",
+        "hand_on_hip",
+        "eye_contact",
+        "grunge"
+      ],
+      "batch_safe": true,
+      "calibrated": true
+    },
+    {
+      "id": "pose_12_halter_cargo_power_stance",
+      "source_file": "c0f11a51943f1cfb9b229e207ef5eb10.jpg",
+      "vibe": "Y2K street-goth power stance, confrontational and self-possessed",
+      "camera": {
+        "angle": "slight low angle from waist height with a mild upward tilt",
+        "framing": "full-body head to toe, sneakers fully visible with a thin strip of floor, subject filling the vertical frame edge to edge with narrow side margins",
+        "focal_length": null,
+        "lens_effect": "gentle leg elongation from the low waist-level position",
+        "applies_to": "single-shot only; in a multi-image set the lock overrides this",
+        "source_focal_length": "35mm",
+        "resolved_by": "consistency_lock.height_anchor"
+      },
+      "weight_and_torso": {
+        "weight": "split evenly across both legs, pelvis dead square to the lens, no hip hike",
+        "shoulders": "squared and held wide and level, deliberate stand-your-ground posture",
+        "torso": "upright, slightly puffed forward at the chest, ribcage lifted",
+        "hip_chest_rotation": "no rotation, fully frontal and symmetrical"
+      },
+      "limbs": {
+        "right_hand": "hanging straight and slightly away from the body, relaxed open hand, fingers loose, palm toward the thigh",
+        "left_hand": "hanging straight and slightly away from the body, relaxed open hand, fingers curling naturally",
+        "legs": "wide apart, feet well outside shoulder width, both feet parallel and pointed straight ahead, heels flat and planted",
+        "stance_width": "exaggerated, wider than shoulder width"
+      },
+      "head_and_gaze": {
+        "head": "dead-level, face completely frontal, no tilt",
+        "gaze": "flat unwavering stare straight down the lens",
+        "expression": "eyes narrowed slightly, lips together in a cool unimpressed line"
+      },
+      "prompt_core": "She stands square and frontal in a wide parading stance with the weight split evenly across both legs and the pelvis dead square to the lens, no hip hike. Torso upright with the chest slightly puffed forward and the ribcage lifted, shoulders squared and held wide and level. Both arms hang straight and slightly away from the body with relaxed open hands and loose curling fingers, palms toward the thighs. Both feet are planted wide, well outside hip distance, parallel and pointed straight ahead with the heels flat. Head dead-level, face completely frontal with no tilt, a flat unwavering stare straight down the lens, eyes narrowed slightly, lips together in a cool unimpressed line.",
+      "tags": [
+        "power_stance",
+        "wide_stance",
+        "arms_at_sides",
+        "frontal",
+        "eye_contact"
+      ],
+      "batch_safe": false,
+      "batch_note": "Chinh dien, hai tay buong song song, ban chan song song - doc la 'cung' khi dat canh cac pose ba phan tu. Chi dung don le, khong dung trong bo 8 anh.",
+      "calibrated": false
+    },
+    {
+      "id": "pose_13_sunglasses_thumbs_in_pockets",
+      "source_file": "c09fede70dc820fea3b3e150070d372a.jpg",
+      "vibe": "off-duty model, just-left-the-studio insouciance, hip drop",
+      "camera": {
+        "angle": "slight high angle from just above chin level, tilted down a few degrees",
+        "framing": "full-body but tightly cropped at the ankle with almost no floor space, intentionally reading as a hip-drop silhouette rather than an elongation",
+        "focal_length": null,
+        "lens_effect": "downward compression that shortens the leg read slightly",
+        "applies_to": "single-shot only; in a multi-image set the lock overrides this",
+        "source_focal_length": "50mm",
+        "resolved_by": "consistency_lock.height_anchor"
+      },
+      "weight_and_torso": {
+        "weight": "on her right leg, hip thrust out and hiked high, left leg relaxed with the knee slightly bent and turned in",
+        "shoulders": "slack and uneven, camera-left shoulder dropped lower and rolled forward",
+        "torso": "leaning away from the weighted hip in a slight counter-curve, upper back rounded forward",
+        "hip_chest_rotation": "hip hiked to one side, chest rotated a few degrees away"
+      },
+      "limbs": {
+        "right_hand": "tucked into the front jeans pocket, thumb hooked over the pocket brim out front, wrist swallowed by worn denim",
+        "left_hand": "tucked into the opposite front pocket, thumb hooked over the brim, elbow pushed back but held close",
+        "legs": "close together near the ankles with the feet crossing slightly, front foot turned inward, rear foot angled out",
+        "stance_width": "narrow, closed, slightly crossed"
+      },
+      "head_and_gaze": {
+        "head": "tilted down and to her left, chin tucked",
+        "gaze": "sliding up from under the sunglasses toward the lens, a glance rather than a connection",
+        "expression": "eyes hidden behind tinted lenses, mouth closed and unsmiling"
+      },
+      "prompt_core": "Her weight rests on her right leg with that hip thrust out and hiked high, the left leg relaxed with the knee slightly bent and turned inward, so the hip line drops away from the lens and the torso counter-curves the other way. The upper back is rounded forward, shoulders slack and uneven with one shoulder dropped lower and rolled toward the camera. Both thumbs are hooked over the front pocket brims of her track pants with the wrists swallowed by the fabric and the elbows pushed back but held close to the hips. The front foot is turned inward just ahead of the back foot. Head tilted down and to one side with the chin tucked, gaze sliding up from under the sunglasses toward the lens as a glance rather than a connection, mouth closed and unsmiling.",
+      "tags": [
+        "thumbs_in_pockets",
+        "hip_drop",
+        "high_angle",
+        "sunglasses",
+        "glance"
+      ],
+      "batch_safe": true,
+      "calibrated": true
+    },
+    {
+      "id": "pose_14_leg_raised_on_boxes",
+      "source_file": "c7ebd8d999650a14246df2942d485f3d.jpg",
+      "vibe": "playful editorial, one-legged balancing act with a dancer's lifted knee",
+      "camera": {
+        "angle": "eye-level, straight-on, vertical portrait",
+        "framing": "full-body with the standing foot at the bottom edge and the raised knee well inside the frame",
+        "focal_length": null,
+        "lens_effect": "natural perspective, no stretch",
+        "applies_to": "single-shot only; in a multi-image set the lock overrides this",
+        "source_focal_length": "50mm",
+        "resolved_by": "consistency_lock.height_anchor"
+      },
+      "weight_and_torso": {
+        "weight": "all on her left leg, standing straight and locked, raised right leg takes zero",
+        "shoulders": "relaxed and slightly rolled back",
+        "torso": "pushed slightly back to counterbalance the raised leg, chest open and lifted",
+        "hip_chest_rotation": "pelvis tilted with the free side lifted, ribcage rotated a few degrees toward camera right"
+      },
+      "limbs": {
+        "right_hand": "hanging down along the body, hand near the hip, fingers relaxed and open",
+        "left_hand": "extended straight out to the side at shoulder height, slightly behind the body plane, loosely holding a tassel bag strap so the bag dangles at hip length",
+        "legs": "right leg lifted high in front with the knee bent about ninety degrees, thigh parallel to the floor, lower leg hanging, foot relaxed with the toe dropped, standing left foot flat and pointing toward the bottom-left of the frame",
+        "stance_width": "single-leg balance"
+      },
+      "head_and_gaze": {
+        "head": "tilted to her right and tipped slightly forward, face in a soft three-quarter",
+        "gaze": "directed down and toward camera left, a passing glance toward the viewer without full contact",
+        "expression": "eyes open and calm, soft closed-mouth expression"
+      },
+      "prompt_core": "She balances on her straight left leg with all her weight on it while the right leg is lifted high in front, knee bent about ninety degrees with the thigh roughly parallel to the floor and the lower leg hanging down, the foot relaxed with the toe dropped. The pelvis tilts with the free side lifted and the torso pushes slightly back to counterbalance, chest open and lifted, ribcage rotated a few degrees. One arm extends straight out to the side at shoulder height and slightly behind the body plane, loosely holding a tassel bag strap so the bag dangles at hip length, while the other arm hangs along the body with the hand near the hip and the fingers relaxed. Head tilted and tipped slightly forward in a soft three-quarter, gaze directed down and toward the side, a passing glance toward the viewer without full contact, soft closed-mouth expression.",
+      "tags": [
+        "single_leg_balance",
+        "knee_lifted",
+        "arm_extended",
+        "playful",
+        "editorial"
+      ],
+      "batch_safe": true,
+      "calibrated": false
+    },
+    {
+      "id": "pose_15_arms_crossed_bob",
+      "source_file": "d0c85efb16d07c58896623acadfecc2a.jpg",
+      "vibe": "clean-girl bob, arms-crossed editorial confidence, small figure in white space",
+      "camera": {
+        "angle": "eye-level, straight-on",
+        "framing": "full-body head to toe but very small in the frame with massive white margins, the pose reads through silhouette rather than detail",
+        "focal_length": null,
+        "lens_effect": "no distortion, generous negative space",
+        "applies_to": "single-shot only; in a multi-image set the lock overrides this",
+        "source_focal_length": "50mm",
+        "resolved_by": "consistency_lock.height_anchor"
+      },
+      "weight_and_torso": {
+        "weight": "on her right leg with the hip pushed out to that side, left leg loosely crossed over and forward with only the toe touching",
+        "shoulders": "kept level and relaxed against the crossed arms",
+        "torso": "leaning slightly back and to her left, chest closed by the crossed arms rather than hollowed",
+        "hip_chest_rotation": "hip out to the standing side, chest squared but tilted"
+      },
+      "limbs": {
+        "right_hand": "tucked under the opposite biceps inside the crossed arm stack, fingers out of sight",
+        "left_hand": "tucked under the opposite biceps, right forearm stacked over the left",
+        "legs": "standing right leg straight and weight-bearing, left leg crossed in front with the knee bent, ankle rolled, foot resting on the ball with the heel lifted",
+        "stance_width": "narrow, cross-step"
+      },
+      "head_and_gaze": {
+        "head": "tilted strongly to her right, chin pushed slightly forward and down, face three-quarter toward camera",
+        "gaze": "up and into the lens from under the tilt",
+        "expression": "eyes soft and direct, mouth closed with a faint smirk"
+      },
+      "prompt_core": "Her body is turned about twenty degrees off the camera axis. Both arms are folded high across her chest with the right forearm stacked over the left and both hands tucked under the opposite biceps so the fingers stay out of sight. Weight is on her right leg with the hip pushed out to that side, the left leg loosely crossing forward with the knee bent, the ankle rolled, the foot resting on the ball with the heel lifted off the floor. The torso leans slightly back and to her left with the chest closed by the crossed arms, shoulders kept level and relaxed against the arms. Head tilted strongly to her right, chin pushed slightly forward and down, face three-quarter toward the camera, eyes soft and looking up into the lens from under the tilt, mouth closed with a faint smirk.",
+      "tags": [
+        "arms_crossed",
+        "cross_step",
+        "head_tilt",
+        "negative_space",
+        "bob_hair"
+      ],
+      "batch_safe": true,
+      "calibrated": true
+    },
+    {
+      "id": "pose_16_crossed_leg_piping_pullover",
+      "source_file": "e8cfe6b2f2b1c25100f464c148bfe888.jpg",
+      "vibe": "soft preppy-clean, one-leg-crossed catalogue staple",
+      "camera": {
+        "angle": "eye-level, straight-on frontal, model centered",
+        "framing": "full-body head to toe with the shoes visible and a clean floor band beneath, modest headroom",
+        "focal_length": null,
+        "lens_effect": "compression so the pose reads flat and the proportions stay true",
+        "applies_to": "single-shot only; in a multi-image set the lock overrides this",
+        "source_focal_length": "85mm",
+        "resolved_by": "consistency_lock.height_anchor"
+      },
+      "weight_and_torso": {
+        "weight": "loaded on her left leg, hips level to slightly hiked on that side, right leg crossing over in front",
+        "shoulders": "relaxed and even with a tiny drop on the camera-left side",
+        "torso": "upright with a slight lean toward the weighted hip, chest open",
+        "hip_chest_rotation": "hips rotated slightly toward camera left, gentle twist between shoulders and pelvis"
+      },
+      "limbs": {
+        "right_hand": "hanging down beside the thigh, fingers relaxed and slightly curled",
+        "left_hand": "slid into the front jeans pocket, thumb hooked outside, elbow bent softly against the body",
+        "legs": "right leg crossed over the left in front with the knee bent, foot placed on the ball with the heel lifted, left leg straight and weight-bearing with the toe pointing slightly out",
+        "stance_width": "narrow, the front foot resting on the ball just ahead of the standing shin"
+      },
+      "head_and_gaze": {
+        "head": "level with a subtle tilt to her right",
+        "gaze": "direct calm eye contact with the lens",
+        "expression": "chin neutral, lips closed in a soft neutral expression"
+      },
+      "prompt_core": "Her body is rotated about twenty-five degrees so the shoulders and hips sit at a three-quarter angle, weight loaded on her left leg with the hips level to slightly hiked on that side, and the right leg crosses over in front with the knee bent, the foot placed on the ball with the heel lifted off the floor, the left toe pointing slightly out. Torso upright with a slight lean toward the weighted hip, chest open, hips rotated toward the camera to create a gentle twist between shoulders and pelvis, shoulders relaxed and even with a small drop on the far side. Her right hand hangs down beside the thigh with the fingers relaxed and slightly curled, the left hand slid into the front pocket with the thumb hooked outside and the elbow bent softly against the body. Head level with a subtle tilt, calm direct eye contact with the lens, chin neutral, lips closed in a soft neutral expression.",
+      "tags": [
+        "crossed_legs",
+        "hand_in_pocket",
+        "eye_contact",
+        "catalogue",
+        "studio"
+      ],
+      "batch_safe": true,
+      "calibrated": true
+    }
+  ],
+  "schema_version": 2
+}
