@@ -15,6 +15,15 @@ from typing import Optional
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_FILE = ROOT / "configs" / "agent_config.json"
 
+#: Thư mục chứa instruction dài, để CLI đọc từ file thay vì nhét vào command line.
+TASK_DIR = ROOT / "out" / "_agent_tasks"
+
+#: Trần an toàn cho command line Windows. Giới hạn thật của CreateProcess là 32.767
+#: ký tự cho **toàn bộ** dòng lệnh (gồm cả đường dẫn exe, flag, model), vượt là
+#: `WinError 206: The filename or extension is too long`. Skill `try-on-image-prompter`
+#: một mình đã 33.404 ký tự, nên nhét nguyên văn vào `-p` luôn chết.
+MAX_INLINE_INSTRUCTION = 30000
+
 
 @dataclass
 class LocalAgentConfig:
@@ -124,6 +133,33 @@ def extract_clean_prompt_from_agent_output(raw_output: str) -> str:
     return res or text
 
 
+def _write_task_file(instruction: str, agent: str) -> Path:
+    """Ghi instruction dài ra file để CLI tự đọc, tránh trần 32.767 ký tự của Windows."""
+    TASK_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = f"{int(time.time() * 1000):x}"
+    p = TASK_DIR / f"task_{stamp}_{agent}.md"
+    p.write_text(instruction, encoding="utf-8")
+    return p
+
+
+def _build_print_arg(instruction: str, agent: str) -> str:
+    """`-p` ngắn thì truyền thẳng; dài thì trỏ agent tới file task.
+
+    Không cắt bớt instruction: skill + ngữ cảnh node đã hơn 33K ký tự, cắt là mất
+    đúng phần quy tắc quyết định prompt. Ghi ra file rồi để agent đọc là cách duy
+    nhất giữ nguyên nội dung mà vẫn qua được giới hạn command line.
+    """
+    if len(instruction) <= MAX_INLINE_INSTRUCTION:
+        return instruction
+    path = _write_task_file(instruction, agent)
+    rel = path.relative_to(ROOT).as_posix()
+    return (
+        f"Đọc toàn bộ file {rel} rồi thực hiện đúng yêu cầu trong đó. "
+        "File chứa cả quy chuẩn skill và bối cảnh node; làm đúng theo đó, "
+        "không hỏi lại, không tóm tắt quy chuẩn."
+    )
+
+
 class LocalAgentRunner:
     """Executes prompt generation requests using local agy or pi CLI."""
 
@@ -150,7 +186,8 @@ class LocalAgentRunner:
 
         if target_agent == "agy":
             chosen_model = model or self.config.agy_model or "gemini-3.8-flash-low"
-            cmd = [bin_path, "--dangerously-skip-permissions", "--model", chosen_model, "-p", instruction]
+            cmd = [bin_path, "--dangerously-skip-permissions", "--model", chosen_model,
+                   "-p", _build_print_arg(instruction, target_agent)]
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
@@ -163,7 +200,7 @@ class LocalAgentRunner:
             chosen_model = model or self.config.pi_model or "agnes-3.0-flash"
             cmd = [
                 "cmd.exe", "/c", bin_path, "--no-session", "--no-tools",
-                "--model", chosen_model, "-p", instruction,
+                "--model", chosen_model, "-p", _build_print_arg(instruction, target_agent),
             ]
             proc = await asyncio.create_subprocess_exec(
                 *cmd,

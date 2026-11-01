@@ -242,8 +242,13 @@ class PromptAgent:
 
         # Ngữ cảnh script: shot nào rơi vào clip này, đang nhấn món nào. Đây là thứ
         # trước kia agent không hề biết, nên prompt sinh ra không khớp timeline.
+        #
+        # Với node ẢNH thường (không phải item, không phải plate) thì KHÔNG nạp: script mô
+        # tả một bộ phim khác (`slug`/`title` như "HAVANA DONNA"), agent đọc thấy tên đó rồi
+        # viết prompt đúng bộ Donna trong khi ảnh garment là áo lệch vai. Ngữ cảnh duy nhất
+        # đáng tin ở đây là pixel của chính các ảnh upstream.
         script = self._load_script_context(task)
-        if script is not None:
+        if script is not None and (is_video or task.is_item or task.item_id):
             lines.extend(self._script_context_lines(script, task))
         if is_video and task.is_video_continuation:
             lines.append(
@@ -251,10 +256,11 @@ class PromptAgent:
             )
 
         if rel_files:
-            lines.append("- File ảnh upstream đang kết nối vào node này:")
+            lines.append("- File ảnh upstream đang kết nối vào node này, THEO ĐÚNG THỨ TỰ:")
             for idx, rf in enumerate(rel_files, 1):
                 lines.append(f"  {idx}. {rf}")
             if not is_video:
+                lines.extend(self._image_role_lines(task, len(rel_files)))
                 lines.append(
                     "  => ĐỌC TRỰC TIẾP các file trên (màu sắc, phom dáng, chất liệu vải, chi tiết may mặc) "
                     "để prompt khớp 100% với sản phẩm thật."
@@ -277,6 +283,37 @@ class PromptAgent:
         ])
 
         return "\n".join(lines)
+
+    def _image_role_lines(self, task: NodePromptTask, count: int) -> list[str]:
+        """Nói rõ ảnh nào là gì, để agent khỏi đoán theo thứ tự.
+
+        Lỗi thật đã xảy ra: node nối 3 ảnh (model / garment / background) nhưng prompt
+        sinh ra lại tả bộ DONNA - tức agent lấy chữ từ ngữ cảnh script thay vì pixel.
+        Khi đã bỏ chữ khỏi ngữ cảnh thì phải nói rõ vai trò từng vị trí, nếu không agent
+        vẫn có thể hoán đổi model và garment.
+        """
+        if task.plate_mode:
+            return [
+                "  → Vai trò ảnh (chế độ PLATE — chỉ MỘT ảnh): Ảnh 1 đóng cả hai vai",
+                "     identity (khuôn mặt, dáng) VÀ trang phục. Không có ảnh nào khác.",
+            ]
+        if count >= 3:
+            return [
+                "  → Vai trò ảnh: Ảnh 1 = MODEL (identity: mặt, tóc, dáng — giữ nguyên).",
+                "     Ảnh 2 = GARMENT (trang phục cần mặc — chép đúng phom, màu, chất liệu).",
+                "     Ảnh 3 = BACKGROUND (bối cảnh + ánh sáng — kế thừa).",
+                "     Thứ tự này cố định; đừng suy ra vai trò từ tên file hay thứ tự khác.",
+            ]
+        if count == 2:
+            return [
+                "  → Vai trò ảnh: Ảnh 1 = MODEL (identity: mặt, tóc, dáng — giữ nguyên).",
+                "     Ảnh 2 = GARMENT (trang phục cần mặc — chép đúng phom, màu, chất liệu).",
+                "     Không có ảnh bối cảnh riêng: lấy bối cảnh từ Ảnh 2.",
+            ]
+        return [
+            "  → Chỉ có MỘT ảnh: nó đóng cả vai model và trang phục.",
+            "     Không được nhắc tới `Image 2` / `Image 3`.",
+        ]
 
     def _load_script_context(self, task: NodePromptTask) -> Optional[LookbookScript]:
         """Script để bổ sung ngữ cảnh; không có cũng chạy bình thường."""
@@ -341,8 +378,18 @@ class PromptAgent:
             # Ảnh không phải sản phẩm: hoặc plate (first frame cho video), hoặc try-on trả
             # cho khách. Chỉ nhánh plate mới được nói "không chữ/không UI" — nếu gán nhãn
             # đó cho ảnh try-on thường thì agent viết prompt lệch mục tiêu.
-            names = ", ".join(f"{i.id}({i.name})" for i in script.items) or "chưa khai báo"
-            lines.append(f"- Món đồ trong bộ: {names}")
+            #
+            # KHÔNG liệt kê `script.items` ở đây. Danh sách đó là món của *một bộ phim cụ
+            # thể*, không phải món đang nằm trong ảnh tham chiếu. Node ảnh của người dùng
+            # thường nối ảnh khác hoàn toàn; nhét tên món của script vào thì agent tin chữ
+            # hơn pixel và viết ra đúng bộ DONNA dù ảnh garment là áo lệch vai + váy bong
+            # bóng. Chỉ nêu món khi chính node đó được gắn `item_id`.
+            if task.item_id:
+                try:
+                    item = script.item(task.item_id)
+                    lines.append(f"- Món đồ của script cho node này: {item.id} — {item.name}")
+                except ScriptError:
+                    lines.append(f"- Món đồ của script cho node này: {task.item_id}")
             if task.plate_mode:
                 lines.append(
                     "- Ảnh này là **plate nền** cho video: người mẫu toàn thân, không chữ, không cột UI."
