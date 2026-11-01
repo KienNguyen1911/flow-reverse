@@ -217,10 +217,10 @@ export function TopBar({
                   <Sparkle size={14} weight="fill" className="text-acc shrink-0 mt-0.5" />
                   <div className="min-w-0 flex-1">
                     <div className="font-bold text-fg group-hover:text-acc transition-colors text-[11.5px]">
-                      Lookbook Video 8s (Đẩy UI + Nối tiếp)
+                      Lookbook 16s (Plate → Video 1 → Video 2)
                     </div>
                     <div className="text-[10px] text-mut leading-tight">
-                      2 nhóm: Video 1 đẩy cột NABI (8s) → Frame Cuối → Video 2 Showcase (8s) & Sinh ảnh 9:16
+                      Plate → Video 1 hook (8s) → Frame cuối → Video 2 showcase (8s) + cutout sản phẩm cho lớp card
                     </div>
                   </div>
                 </button>

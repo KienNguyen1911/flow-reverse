@@ -28,7 +28,6 @@ Batch item format (``params["items"]``, or a storyboard JSON via
 from __future__ import annotations
 
 import json
-import os
 import queue
 import re
 import shutil
@@ -51,7 +50,6 @@ from ..Workflows.account_pool import (
 )
 from ..Workflows.flow_client import CircuitOpenError, FlowClient
 from ..Workflows.flow_models import ProjectInfo, ReferenceTemplate, parse_project_ref
-from ..Workflows.hf_client import HfStudioClient, HfStudioError
 from ..Workflows.media_service import MediaService
 from ..Workflows.node_retry import (
     NodeExecutionError,
@@ -62,11 +60,6 @@ from ..Workflows.node_retry import (
 ROOT = Path(__file__).resolve().parents[2]
 TERMINAL_STATES = {"succeeded", "failed", "rejected"}
 MAX_BATCH_ITEMS = 300
-
-#: hf-studio is a separate service (services/hf-studio). It renders HyperFrames
-#: compositions and takes no Flow account, so it is reachable even with every
-#: pool account asleep.
-HF_STUDIO_URL = os.environ.get("HF_STUDIO_URL", "http://127.0.0.1:4600/api/v1")
 
 
 @dataclass
@@ -788,6 +781,26 @@ class JobManager:
         except Exception:  # noqa: BLE001 - metadata must never fail a job
             pass
 
+    def _save_project_item(self, job: Job, file_path: str, result: dict) -> None:
+        """Chép ảnh vừa sinh vào `out/items/<project_id>/` theo tên người dùng đặt.
+
+        Best-effort: thư viện hỏng không được biến một job đã thành công thành thất bại.
+        Đường dẫn file thư viện được ghi thêm vào `result["item_file"]` để UI hiện ra.
+        """
+        from ..Workflows.item_library import save_item
+
+        try:
+            saved = save_item(
+                file_path,
+                project_id=job.params.get("workspace_project_id"),
+                name=job.params.get("item_name") or job.params.get("node_id"),
+            )
+        except Exception:  # noqa: BLE001 - never fail a succeeded job
+            saved = None
+        if saved is not None:
+            result["item_file"] = str(saved)
+            result["item_name"] = saved.stem
+
     # -- API ---------------------------------------------------------------- #
 
     def submit(self, kind: str, params: dict) -> Job:
@@ -889,10 +902,95 @@ class JobManager:
         if kind == "node_last_frame":
             self._run_node_last_frame(job)
             return
-        if kind == "hf_render":
-            self._run_hf_render(job)
+        if kind == "delivery_build":
+            self._run_delivery_build(job)
             return
         raise ValueError(f"unknown job kind: {kind}")
+
+    # -- delivery (export nguyên liệu cho HyperFrames desktop) --------------------- #
+
+    def _run_delivery_build(self, job: Job) -> None:
+        """Gom file đã sinh vào một thư mục tự chứa + manifest.
+
+        Không gọi Flow, không tốn credit: chỉ đọc run đã có, đo bằng ffprobe và copy.
+        """
+        from ..Workflows.delivery import ItemRef, RunRef, build_delivery
+        from ..Workflows.script_contract import ScriptError, load_script
+
+        params = job.params
+        ev = job.add_event
+
+        try:
+            script = load_script(params.get("script") or params.get("script_path") or "")
+        except ScriptError as exc:
+            raise RuntimeError(f"script không hợp lệ: {exc}") from exc
+
+        ev("info", f"script: {script.slug} — {len(script.clips)} clip, {len(script.shots)} shot")
+
+        refs: list[RunRef] = []
+        for raw in params.get("run_refs") or []:
+            if not isinstance(raw, dict) or not raw.get("run_id") and not raw.get("run_dir"):
+                continue
+            ref = RunRef(
+                clip_id=str(raw.get("clip_id") or ""),
+                run_id=str(raw.get("run_id") or ""),
+                run_dir=str(raw.get("run_dir") or ""),
+                take=int(raw.get("take") or 1),
+                prompt=str(raw.get("prompt") or ""),
+                seed=raw.get("seed"),
+                model=str(raw.get("model") or "abra_i2v_8s"),
+                policy_retries=int(raw.get("policy_retries") or 0),
+                video_path=raw.get("video_path"),
+                plate_path=raw.get("plate_path"),
+            )
+            if not ref.run_dir:
+                ref.run_dir = str(self.node_out / ref.run_id)
+            refs.append(ref)
+
+        item_refs: list[ItemRef] = []
+        for raw in params.get("item_refs") or []:
+            if not isinstance(raw, dict):
+                continue
+            # Chấp nhận 2 kiểu: nối vào `items[]` của script (`item_id`), hoặc chỉ có
+            # tên món do người dùng đặt. Không có cả hai thì không biết đặt tên gì.
+            name = str(raw.get("name") or "").strip()
+            item_id = str(raw.get("item_id") or "").strip() or None
+            if not item_id and not name:
+                continue
+            ref = ItemRef(
+                name=name,
+                item_id=item_id,
+                run_id=str(raw.get("run_id") or ""),
+                run_dir=str(raw.get("run_dir") or ""),
+                file_path=raw.get("file_path"),
+            )
+            if not ref.run_dir and ref.run_id:
+                ref.run_dir = str(self.node_out / ref.run_id)
+            item_refs.append(ref)
+        if item_refs:
+            ev("info", f"nhận {len(item_refs)} ảnh sản phẩm sinh từ Flow")
+
+        dest_root = params.get("dest_dir") or None
+        result = build_delivery(
+            script,
+            refs,
+            dest_root=dest_root,
+            overwrite=bool(params.get("overwrite")),
+            item_refs=item_refs,
+        )
+
+        for m in result.assets_missing:
+            ev("warn", f"thiếu: {m}")
+        for w in result.warnings:
+            ev("warn", w)
+        ev("done", f"bộ dựng phim ở {result.dest_dir}")
+
+        job.result = {
+            **result.to_dict(),
+            "dest_dir": result.dest_dir,
+            "file_url_base": f"/api/deliveries/{script.slug}",
+        }
+        job.set_state("succeeded")
 
     # -- single-account jobs ---------------------------------------------------- #
 
@@ -1050,6 +1148,10 @@ class JobManager:
             job.set_state("succeeded")
             if res.run_id:
                 self._bind_workspace_asset(job, f"output:{res.run_id}")
+            # Node ảnh đánh dấu `is_item` ⇒ chép kết quả vào thư viện món đồ của project.
+            # Không phụ thuộc script: người bán có nhiều món và dùng lại ảnh cho nhiều bộ.
+            if params.get("is_item") and res.file_path:
+                self._save_project_item(job, res.file_path, d)
         elif res.status == "rejected":
             job.set_state("rejected")
         else:
@@ -1145,79 +1247,6 @@ class JobManager:
         job.result = res
         job.set_state("succeeded")
         self._bind_workspace_asset(job, f"output:{run_name}")
-
-    # -- hf-studio (composition render) ---------------------------------------- #
-
-    def _run_hf_render(self, job: Job) -> None:
-        """Render a HyperFrames composition through the hf-studio service.
-
-        hf-studio is a separate process and takes no account: there is no credit,
-        no browser, no anti-abuse surface.
-
-        The service renders one job at a time and answers 429 while busy. In
-        practice that never fires from here — `JobManager` runs a single worker
-        thread, so this job cannot overlap another one — but the wait lives in the
-        client because the service is also reachable by anything else, and a 429
-        answered with a failure would be wrong for a caller that just wants a
-        video.
-        """
-        params = job.params
-        ev = job.add_event
-        project_id = params.get("hf_project_id")
-        if not project_id:
-            raise ValueError("hf_render cần hf_project_id")
-
-        base_url = params.get("hf_base_url") or HF_STUDIO_URL
-        # Same layout as the other node kinds (`out/nodes/<run>/<file>`), so the
-        # existing /api/node/files route serves it with no extra wiring.
-        run_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_hf_{str(project_id)[-8:]}"
-        run_dir = self.node_out / run_name
-        run_dir.mkdir(parents=True, exist_ok=True)
-        dest = run_dir / "render.mp4"
-
-        ev("step", f"Render composition {project_id} qua hf-studio…")
-
-        with HfStudioClient(base_url) as hf:
-            # Overrides are applied at render time only; the stored delta is not
-            # touched, so rendering a variant cannot quietly rewrite the project.
-            variables = params.get("variables") or None
-
-            try:
-                out_path = hf.render_and_wait(
-                    project_id,
-                    dest,
-                    variables=variables,
-                    on_event=lambda kind, msg, _data: ev(
-                        "progress" if kind in ("progress", "wait") else kind, msg
-                    ),
-                    abort=job.cancel_event,
-                )
-            except HfStudioError as exc:
-                if exc.code == "hf_unreachable":
-                    # Actionable: this is a deployment mistake, not a render bug.
-                    raise HfStudioError(
-                        exc.status,
-                        exc.code,
-                        exc.message,
-                        hint="khởi động service: cd services/hf-studio && npm start",
-                    ) from exc
-                raise
-
-        if not out_path.is_file() or out_path.stat().st_size < 1000:
-            raise RuntimeError(f"hf-studio báo thành công nhưng file không hợp lệ: {out_path}")
-
-        job.result = {
-            "status": "ok",
-            "run_id": run_name,
-            "run_dir": str(run_dir),
-            "file_path": str(out_path),
-            "file_url": f"/api/node/files/{run_name}/{out_path.name}",
-            "file_bytes": out_path.stat().st_size,
-            "hf_project_id": project_id,
-        }
-        job.set_state("succeeded")
-        self._bind_workspace_asset(job, f"output:{run_name}")
-        ev("done", f"Render xong → {out_path.name} ({out_path.stat().st_size // 1024} KB)")
 
     def _run_project_op(self, job: Job) -> None:
         params = job.params

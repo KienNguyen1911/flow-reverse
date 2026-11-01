@@ -272,12 +272,6 @@ export function AgentSettingsPanel() {
                 </span>
               </div>
               <p className="text-[11px] text-dim leading-relaxed">{s.description}</p>
-              {s.policy_clause && (
-                <div className="mt-2 text-[10px] text-mut font-mono bg-ink/40 p-2 rounded border border-line/40 truncate">
-                  <span className="text-acc font-semibold">[Policy Clause]: </span>
-                  {s.policy_clause}
-                </div>
-              )}
             </div>
           ))}
         </div>

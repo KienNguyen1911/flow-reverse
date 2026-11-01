@@ -320,6 +320,10 @@ export interface NodeImageRequest {
   reference_image_paths?: string[];
   project_id?: string | null;
   workspace_project_id?: string | null;
+  /** Ảnh này là ảnh sản phẩm ⇒ chép vào thư viện `items/` của project sau khi sinh. */
+  is_item?: boolean;
+  /** Tên món để đặt tên file (bỏ dấu, thường hoá). */
+  item_name?: string | null;
   dry_run?: boolean;
   remove_watermark?: boolean;
   confirm?: boolean;
@@ -408,7 +412,6 @@ export interface AgentSkillInfo {
   name: string;
   description: string;
   file_path: string;
-  policy_clause?: string;
 }
 
 export interface LocalAgentConfig {
@@ -427,6 +430,24 @@ export interface GenerateNodePromptRequest {
   is_video_continuation?: boolean;
   agent?: string;
   model?: string;
+  /** Ngữ cảnh kịch bản — nếu bỏ trống, server tự đọc configs/lookbook_script.json. */
+  clip_id?: string;
+  clip_role?: string;
+  item_id?: string;
+  /** Node ảnh là ảnh sản phẩm ⇒ agent dùng skill cutout thay vì skill lookbook. */
+  is_item?: boolean;
+  /** Tên món — ngữ cảnh duy nhất khi node không gắn ảnh tham chiếu. */
+  item_name?: string;
+  /** Phạm vi cắt món: `top` | `bottom` | `full_set`. Bỏ trống ⇒ skill tự chọn. */
+  item_scope?: ItemScope;
+  script_path?: string;
+}
+
+export interface PromptLintWarning {
+  code: string;
+  level: "error" | "warn";
+  message: string;
+  match?: string;
 }
 
 export interface GenerateNodePromptResponse {
@@ -437,6 +458,76 @@ export interface GenerateNodePromptResponse {
   agent: string;
   upstream_files: string[];
   elapsed_s: number;
+  lint?: {
+    ok: boolean;
+    word_count: number;
+    warnings: PromptLintWarning[];
+  } | null;
+}
+
+/** Một run đã sinh file, nối vào một clip trong script. */
+export interface DeliveryRunRef {
+  clip_id: string;
+  run_id?: string;
+  run_dir?: string;
+  take?: number;
+  prompt?: string;
+  seed?: number | null;
+  model?: string;
+  policy_retries?: number;
+  video_path?: string | null;
+  plate_path?: string | null;
+}
+
+/**
+ * Ảnh sản phẩm sinh từ node ảnh có cờ `is_item`.
+ *
+ * Không bắt buộc thuộc kịch bản: có `item_id` thì delivery dùng đúng tên `cutout` script
+ * khai; chỉ có `name` thì đặt tên file theo slug của tên món (`aó kiểu nữ donna.png`
+ * → `ao_kieu_nu_donna.png`).
+ */
+export interface DeliveryItemRef {
+  name?: string;
+  item_id?: string | null;
+  run_id?: string;
+  run_dir?: string;
+  file_path?: string | null;
+}
+
+/** Một ảnh trong thư viện món đồ của project (`out/items/<project_id>/`). */
+export interface LibraryItem {
+  name: string;
+  file: string;
+  path: string;
+  size_bytes: number;
+}
+
+export interface DeliveryBuildRequest {
+  script_path?: string;
+  script?: Record<string, unknown>;
+  run_refs: DeliveryRunRef[];
+  item_refs?: DeliveryItemRef[];
+  dest_dir?: string;
+  overwrite?: boolean;
+}
+
+export interface DeliveryListItem {
+  slug: string;
+  title: string | null;
+  dest_dir: string;
+  manifest_path: string;
+  created_ts: string | null;
+  canvas: { width: number; height: number; fps: number; duration_s: number; aspect: string } | null;
+  summary: {
+    clips_expected: number;
+    clips_measured: number;
+    clips_missing: string[];
+    measured_total_s: number;
+    has_audio: boolean;
+    source_fps: number | null;
+  } | null;
+  warnings: number;
+  missing: number;
 }
 
 export interface TestAgentResponse {
@@ -525,7 +616,16 @@ export interface CanvasNodeState {
   elapsedS?: number | null;
   agentSkillId?: string | null;
   agentCustomHint?: string | null;
+  /** Ảnh node này sinh ra là **ảnh sản phẩm** ⇒ chép vào thư viện `items/` của project. */
+  isItem?: boolean;
+  /** Tên món, dùng để đặt tên file trong thư viện. */
+  itemName?: string | null;
+  /** Phạm vi cắt món: `top` (áo) | `bottom` (quần/váy) | `full_set` (cả bộ). */
+  itemScope?: ItemScope | null;
 }
+
+/** Phạm vi ảnh sản phẩm — quyết định món nào lên ảnh khi ảnh ref là cả bộ. */
+export type ItemScope = "top" | "bottom" | "full_set";
 
 export interface CanvasGroupState {
   id: string;

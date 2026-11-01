@@ -62,9 +62,14 @@ python -m src.WebUI.app --port 4000 --open
 
 # 4) Canvas node API (ảnh/video độc lập, có/không ảnh đính kèm)
 curl http://127.0.0.1:4000/api/node/options
+
+# 5) Xuất bộ nguyên liệu dựng phim cho HyperFrames desktop (không tốn credit)
+python -m scripts.cutout_items --help        # tách nền cutout sản phẩm (cần: pip install rembg onnxruntime)
+curl -X POST http://127.0.0.1:4000/api/deliveries -H "content-type: application/json" \
+  -d '{"script_path":"configs/lookbook_script.json","run_refs":[],"overwrite":true}'
 ```
 
-Tài liệu: [cẩm nang học tập reverse API](docs/reverse_api_study_guide.md) · [đặc tả protocol](docs/api_specs/) · [Node Media API](docs/api_specs/node_media_api.md) · [hướng dẫn playground](docs/playground.md) · [báo cáo tổng hợp](docs/phase4_report.md)
+Tài liệu: [cẩm nang học tập reverse API](docs/reverse_api_study_guide.md) · [đặc tả protocol](docs/api_specs/) · [Node Media API](docs/api_specs/node_media_api.md) · [hướng dẫn playground](docs/playground.md) · [báo cáo tổng hợp](docs/phase4_report.md) · [pipeline lookbook → HyperFrames](docs/lookbook_pipeline.md)
 
 ## 5. Miễn trừ trách nhiệm
 

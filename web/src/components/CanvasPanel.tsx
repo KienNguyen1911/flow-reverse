@@ -23,13 +23,17 @@ import {
 } from "@phosphor-icons/react";
 import { api } from "../api";
 import type {
+  DeliveryItemRef,
+  ItemScope,
   Job,
+  LibraryItem,
   NodeMediaOptions,
   WorkspaceCanvasState,
 } from "../types";
 import { CanvasDrawer, type CanvasDrawerNode } from "./CanvasDrawer";
 import { Chip, Spinner } from "./ui";
 import { MediaPreviewModal, type PreviewMediaItem } from "./MediaPreviewModal";
+import { DeliveryModal } from "./DeliveryModal";
 
 // --------------------------------------------------------------------------- //
 // Canvas node graph — image nodes feed video nodes (image-to-video chains).
@@ -127,9 +131,20 @@ function clamp(v: number, lo: number, hi: number): number {
 // -- workspace serialization ------------------------------------------------ //
 
 export const BUILTIN_TEMPLATES = [
-  { id: "lookbook_8s", name: "Lookbook Video 8s (Đẩy UI + Nối tiếp)" },
+  { id: "lookbook_8s", name: "Lookbook 16s (Plate → Video 1 → Video 2)" },
   { id: "tryon", name: "Video Thử Đồ (Try-On 16s)" },
 ] as const;
+
+/**
+ * Phạm vi ảnh sản phẩm. Bắt buộc phải chọn khi ảnh ref là cả bộ: skill cutout mặc định
+ * "một món", nên không nói rõ thì model chọn vật thể nổi bật nhất — luôn là chiếc áo.
+ */
+const ITEM_SCOPE_OPTIONS: { value: ItemScope; label: string; hint: string }[] = [
+  { value: "top", label: "Áo", hint: "Chỉ món mặc trên: áo, camisole, cardigan" },
+  { value: "bottom", label: "Quần / Váy", hint: "Chỉ món mặc dưới: quần, váy, shorts" },
+  { value: "full_set", label: "Cả bộ", hint: "Các món xếp cạnh nhau trên một ảnh — không tách nền được" },
+];
+const ITEM_SCOPES: readonly string[] = ITEM_SCOPE_OPTIONS.map((o) => o.value);
 
 const NODE_TYPES: ReadonlySet<string> = new Set(["ref", "image", "video", "last_frame"]);
 const NODE_STATUSES: ReadonlySet<string> = new Set([
@@ -228,6 +243,11 @@ export function canvasStateToGraph(state?: WorkspaceCanvasState | null): {
       elapsedS: typeof r.elapsedS === "number" ? r.elapsedS : null,
       agentSkillId: optionalStr(r.agentSkillId),
       agentCustomHint: optionalStr(r.agentCustomHint),
+      isItem: typeof r.isItem === "boolean" ? r.isItem : false,
+      itemName: optionalStr(r.itemName),
+      itemScope: ITEM_SCOPES.includes(String(r.itemScope) as ItemScope)
+        ? (r.itemScope as ItemScope)
+        : null,
     });
   }
 
@@ -569,6 +589,8 @@ function newNode(type: NodeType, opts: NodeMediaOptions | null, x: number, y: nu
     removeWatermark: true,
     jobId: null,
     status: "idle",
+    isItem: false,
+    itemScope: null,
   };
   return base;
 }
@@ -594,11 +616,14 @@ function statusStyle(s: NodeStatus): { border: string; label: string; cls: strin
 
 function createLookbook8sTemplate(): { nodes: CanvasNode[]; groups: CanvasGroup[] } {
   const nodes: CanvasNode[] = [
-    // --- Nhóm 1: Lookbook Video 8s (Đẩy UI + Nối tiếp) ---
+    // --- Nhóm 1: Plate → Video 1 → Frame cuối → Video 2 ---
+    // Board có cột item đã bị bỏ: AI video không vẽ được chữ/logic UI. Lớp dựng
+    // (HyperFrames desktop) lo card/kinetic text và tự canh vị trí, nên plate không
+    // cần chừa cột trái nữa — chỉ cần nền sạch và người mẫu đúng khung.
     {
       id: "lb_ref_model",
       type: "ref",
-      label: "Ảnh tham chiếu (Lookbook)",
+      label: "Ảnh tham chiếu (ảnh sản phẩm gốc)",
       x: 60,
       y: 80,
       prompt: "",
@@ -613,21 +638,42 @@ function createLookbook8sTemplate(): { nodes: CanvasNode[]; groups: CanvasGroup[
       removeWatermark: true,
       jobId: null,
       status: "idle",
-      fileUrl: "/api/assets/lookbook_split.jpg",
-      fileName: "lookbook_nabi_split.jpg",
+      fileUrl: null,
+      fileName: null,
     },
     {
-      id: "lb_video_1",
-      type: "video",
-      label: "Node Video 1 (8s: Push UI)",
+      id: "lb_plate",
+      type: "image",
+      label: "Plate (chỉ người mẫu, nền sạch)",
       x: 420,
       y: 80,
-      prompt: "Prompt chuyển động cho video 8s...",
+      prompt: "",
       aspectRatio: "9:16",
       seed: null,
       sourceImageId: "lb_ref_model",
       sourceImageIds: ["lb_ref_model"],
-      agentSkillId: "lookbook-video-1-push",
+      agentSkillId: "try-on-image-prompter",
+      agentCustomHint: "plate first frame",
+      videoRatio: "9:16",
+      resolution: "1080p",
+      imageAspectRatio: "9:16",
+      autoImagePrompt: "",
+      removeWatermark: true,
+      jobId: null,
+      status: "idle",
+    },
+    {
+      id: "lb_video_1",
+      type: "video",
+      label: "Video 1 (8s: hook)",
+      x: 780,
+      y: 80,
+      prompt: "Prompt chuyển động cho clip hook 8s...",
+      aspectRatio: "9:16",
+      seed: null,
+      sourceImageId: "lb_plate",
+      sourceImageIds: ["lb_plate"],
+      agentSkillId: "lookbook-video-prompter",
       videoRatio: "9:16",
       resolution: "1080p",
       imageAspectRatio: "9:16",
@@ -640,7 +686,7 @@ function createLookbook8sTemplate(): { nodes: CanvasNode[]; groups: CanvasGroup[
       id: "lb_last_frame",
       type: "last_frame",
       label: "Frame Cuối Video 1",
-      x: 780,
+      x: 1140,
       y: 80,
       prompt: "",
       aspectRatio: "9:16",
@@ -658,15 +704,15 @@ function createLookbook8sTemplate(): { nodes: CanvasNode[]; groups: CanvasGroup[
     {
       id: "lb_video_2",
       type: "video",
-      label: "Node Video 2 (8s: Showcase)",
-      x: 1140,
+      label: "Video 2 (8s: showcase)",
+      x: 1500,
       y: 80,
-      prompt: "Prompt chuyển động cho video 8s...",
+      prompt: "Prompt chuyển động cho clip showcase 8s...",
       aspectRatio: "9:16",
       seed: null,
       sourceImageId: "lb_last_frame",
       sourceImageIds: ["lb_last_frame"],
-      agentSkillId: "lookbook-video-2-showcase",
+      agentSkillId: "lookbook-video-prompter",
       videoRatio: "9:16",
       resolution: "1080p",
       imageAspectRatio: "9:16",
@@ -676,33 +722,12 @@ function createLookbook8sTemplate(): { nodes: CanvasNode[]; groups: CanvasGroup[
       status: "idle",
     },
 
-    // --- Nhóm 2: Sinh Ảnh Thử Đồ & Lookbook 9:16 (Đặt cách hàng trên để không đè) ---
-    {
-      id: "lb_ref_model_face",
-      type: "ref",
-      label: "Ảnh Người Mẫu Tham Chiếu",
-      x: 60,
-      y: 690,
-      prompt: "",
-      aspectRatio: "9:16",
-      seed: null,
-      sourceImageId: null,
-      sourceImageIds: [],
-      videoRatio: "9:16",
-      resolution: "1080p",
-      imageAspectRatio: "9:16",
-      autoImagePrompt: "",
-      removeWatermark: true,
-      jobId: null,
-      status: "idle",
-      fileUrl: "/api/assets/sample_model.png",
-      fileName: "sample_model.png",
-    },
+    // --- Nhóm 2: Cutout sản phẩm cho lớp card (không phải first frame) ---
     {
       id: "lb_ref_garment_upload",
       type: "ref",
-      label: "Ảnh Trang Phục (Kéo thả)",
-      x: 420,
+      label: "Ảnh Shopee (lifestyle, kéo thả)",
+      x: 60,
       y: 690,
       prompt: "",
       aspectRatio: "9:16",
@@ -720,40 +745,23 @@ function createLookbook8sTemplate(): { nodes: CanvasNode[]; groups: CanvasGroup[
       fileName: null,
     },
     {
-      id: "lb_node_tryon_image",
+      id: "lb_node_cutout_front",
       type: "image",
-      label: "Node Ảnh (Thử Đồ)",
-      x: 780,
+      label: "Cutout sản phẩm",
+      x: 420,
       y: 690,
       prompt: "",
       aspectRatio: "9:16",
       seed: null,
-      sourceImageId: "lb_ref_model_face",
-      sourceImageIds: ["lb_ref_model_face", "lb_ref_garment_upload"],
-      agentSkillId: "try-on-image-prompter",
+      sourceImageId: "lb_ref_garment_upload",
+      sourceImageIds: ["lb_ref_garment_upload"],
+      agentSkillId: "lookbook-item-cutout-prompter",
+      isItem: true,
+      itemName: "",
+      itemScope: "top",
       videoRatio: "9:16",
       resolution: "1080p",
-      imageAspectRatio: "9:16",
-      autoImagePrompt: "",
-      removeWatermark: true,
-      jobId: null,
-      status: "idle",
-    },
-    {
-      id: "lb_node_lookbook_image",
-      type: "image",
-      label: "Node Ảnh (Lookbook 9:16)",
-      x: 1140,
-      y: 690,
-      prompt: "",
-      aspectRatio: "9:16",
-      seed: null,
-      sourceImageId: "lb_node_tryon_image",
-      sourceImageIds: ["lb_node_tryon_image"],
-      agentSkillId: "lookbook-image-prompter",
-      videoRatio: "9:16",
-      resolution: "1080p",
-      imageAspectRatio: "9:16",
+      imageAspectRatio: "1:1",
       autoImagePrompt: "",
       removeWatermark: true,
       jobId: null,
@@ -761,17 +769,26 @@ function createLookbook8sTemplate(): { nodes: CanvasNode[]; groups: CanvasGroup[
     },
   ];
 
+  // Mỗi món đúng MỘT node cutout — một mặt trước là đủ, không có node mặt sau.
+  // Thẻ sản phẩm trên timeline chỉ cần một ảnh; ảnh lưng là chi phí credit không đổi lại
+  // được gì (nó chỉ xuất hiện ở một shot 2–3s và có thể bị che bởi chữ).
+  // Template chỉ cấp MỘT node mẫu: người bán có bao nhiêu món cũng dùng lại được bằng
+  // cách nhân bản node và đặt `itemName`, không phải khai danh sách vào script.
+  const cutoutIds = nodes
+    .filter((n) => n.id.startsWith("lb_node_cutout_"))
+    .map((n) => n.id);
+
   const groups: CanvasGroup[] = [
     {
       id: "lb_group_video_8s",
-      name: "Nhóm 1: Lookbook Video 8s (Đẩy UI + Nối tiếp)",
-      nodeIds: ["lb_ref_model", "lb_video_1", "lb_last_frame", "lb_video_2"],
+      name: "Nhóm 1: Plate → Video 1 → Video 2 (nền cho HyperFrames)",
+      nodeIds: ["lb_ref_model", "lb_plate", "lb_video_1", "lb_last_frame", "lb_video_2"],
       color: GROUP_COLORS[0],
     },
     {
-      id: "lb_group_image_tryon",
-      name: "Nhóm 2: Sinh Ảnh Thử Đồ & Lookbook 9:16",
-      nodeIds: ["lb_ref_model_face", "lb_ref_garment_upload", "lb_node_tryon_image", "lb_node_lookbook_image"],
+      id: "lb_group_items",
+      name: "Nhóm 2: Cutout sản phẩm (lớp card, không phải first frame)",
+      nodeIds: ["lb_ref_garment_upload", ...cutoutIds],
       color: GROUP_COLORS[1],
     },
   ];
@@ -957,6 +974,7 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
   const [opts, setOpts] = useState<NodeMediaOptions | null>(null);
   const [linking, setLinking] = useState<{ id: string; kind: NodeType; side: "in" | "out" } | null>(null);
   const [previewMedia, setPreviewMedia] = useState<PreviewMediaItem | null>(null);
+  const [deliveryOpen, setDeliveryOpen] = useState(false);
 
   const [toast, setToast] = useState<ToastInfo | null>(null);
   const [wfBusy, setWfBusy] = useState(false);
@@ -965,6 +983,8 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
   const [aiGeneratingId, setAiGeneratingId] = useState<string | null>(null);
   const [jitPromptEnabled, setJitPromptEnabled] = useState<boolean>(true);
   const [skillsList, setSkillsList] = useState<{ id: string; name: string }[]>([]);
+  // Thư viện ảnh sản phẩm của project (`out/items/<project_id>/`). Không phụ thuộc script.
+  const [itemLibrary, setItemLibrary] = useState<LibraryItem[]>([]);
   const [confirmTarget, setConfirmTarget] = useState<
     { mode: "workflow" } | { mode: "node"; nodeId: string } | null
   >(null);
@@ -1184,6 +1204,16 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
       .catch(() => {});
   }, []);
 
+  // Thư viện món đồ đổi theo project ⇒ nạp lại khi đổi project.
+  useEffect(() => {
+    api
+      .itemLibrary(props.workspaceProjectId ?? null)
+      .then((res) => setItemLibrary(res.items))
+      .catch(() => {
+        /* chưa có thư viện cũng chạy bình thường — chỉ mất danh sách gợi ý */
+      });
+  }, [props.workspaceProjectId]);
+
   const patchNode = useCallback((id: string, patch: Partial<CanvasNode>) => {
     if (nodesRef.current) {
       nodesRef.current = nodesRef.current.map((n) => (n.id === id ? { ...n, ...patch } : n));
@@ -1380,6 +1410,11 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
         patch.reason = errDetail;
       }
       patch.elapsedS = (r.elapsed_s as number) ?? null;
+      // run_id là thứ duy nhất nối được node → thư mục file thật khi xuất bộ dựng phim.
+      if (typeof r.run_id === "string" && r.run_id) patch.runId = r.run_id;
+      // Ảnh sản phẩm đã được server chép vào thư viện: tên file thật (đã slugify) có thể
+      // khác chữ người dùng gõ, nên ghi lại để lần xuất sau không đẻ ra file thứ hai.
+      if (typeof r.item_name === "string" && r.item_name) patch.itemName = r.item_name;
     }
     if (!patch.reason && j.error) patch.reason = j.error;
     return patch;
@@ -1391,6 +1426,16 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
       const n = nodesRef.current.find((x) => x.id === nodeId);
       if (!n) return { ok: false };
 
+      // Nút "Chạy node" trên thẻ đã bị `canRun` chặn prompt rỗng, nhưng workflow theo
+      // nhóm và nút "Chạy lại" trong drawer gọi thẳng vào đây. Không chặn ở tầng này thì
+      // request rỗng bay tới backend và quay về 422 "prompt: String should have at least
+      // 1 character" — một lỗi trông như lỗi mạng, không chỉ ra được node nào.
+      if (!dry && n.type !== "ref" && n.type !== "last_frame" && !n.prompt.trim()) {
+        const reason = "Prompt đang rỗng — nhập prompt hoặc bấm AI Prompt trước khi chạy.";
+        patchNode(nodeId, { status: "failed", reason });
+        showToast(reason, "err", nodeId);
+        return { ok: false };
+      }
 
       patchNode(nodeId, { status: "queued", reason: null });
       try {
@@ -1413,6 +1458,10 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
             reference_image_paths: srcRes.urls,
             project_id: undefined,
             workspace_project_id: props.workspaceProjectId ?? null,
+            // Server chép ảnh vào `out/items/<project>/` ngay sau khi sinh xong — không
+            // phải đợi tới lúc xuất bộ dựng phim mới copy tay.
+            is_item: !!n.isItem,
+            item_name: n.isItem ? n.itemName || n.label || n.id : undefined,
             dry_run: dry,
             confirm: !dry,
           });
@@ -1518,6 +1567,11 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
           skill_id: target.agentSkillId || undefined,
           custom_hint: target.agentCustomHint || undefined,
           is_video_continuation: isCont,
+          // Ảnh sản phẩm ⇒ agent chọn skill cutout, và tên món là ngữ cảnh duy nhất khi
+          // node chưa gắn ảnh tham chiếu.
+          is_item: !!target.isItem,
+          item_name: target.isItem ? target.itemName || undefined : undefined,
+          item_scope: target.isItem ? target.itemScope ?? undefined : undefined,
         });
 
         if (res.ok && res.prompt) {
@@ -1534,6 +1588,27 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
     },
     [patchNode, showToast],
   );
+
+  // Run id của từng clip trong script, suy từ node canvas theo template chuẩn.
+  // Nối bằng id node (không đoán theo thứ tự) để đổi template vẫn ra đúng cặp.
+  const deliveryRuns = useMemo<Record<string, string | null | undefined>>(() => {
+    const byNodeId = new Map(nodes.map((n) => [n.id, n]));
+    return {
+      clip1: byNodeId.get("lb_video_1")?.runId ?? null,
+      clip2: byNodeId.get("lb_video_2")?.runId ?? null,
+    };
+  }, [nodes]);
+
+  // Ảnh sản phẩm đã sinh: node ảnh nào tick `isItem` và đã có run thì đưa vào bộ dựng phim.
+  // Không cần khớp `items[]` của script — tên file lấy từ `itemName` người dùng đặt.
+  const deliveryItems = useMemo<DeliveryItemRef[]>(() => {
+    return nodes
+      .filter((n) => n.type === "image" && n.isItem && !!n.runId)
+      .map((n) => ({
+        name: n.itemName || n.label || n.id,
+        run_id: n.runId as string,
+      }));
+  }, [nodes]);
 
   // -- run whole workflow (per group, isolated failure) ------------------------- //
   // Each Visual Group is an independent execution unit. A node failure aborts
@@ -1608,6 +1683,11 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
                     skill_id: n.agentSkillId || undefined,
                     custom_hint: n.agentCustomHint || undefined,
                     is_video_continuation: isVideoContinuation(nodesRef.current, n),
+                    // Thiếu 2 trường này thì JIT chọn skill lookbook thay vì skill cutout,
+                    // và prompt sinh ra lại đi vẽ người mẫu cho node ảnh sản phẩm.
+                    is_item: !!n.isItem,
+                    item_name: n.isItem ? n.itemName || undefined : undefined,
+                    item_scope: n.isItem ? n.itemScope ?? undefined : undefined,
                   });
                   if (aiRes.ok && aiRes.prompt) {
                     patchNode(n.id, { prompt: aiRes.prompt });
@@ -2074,8 +2154,10 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
       }
 
       if (nameOrId === "lookbook_8s") {
+        // Template chỉ cấp MỘT node cutout mẫu: người bán có bao nhiêu món cũng nhân bản
+        // node rồi đặt tên, không phải khai danh sách món vào script.
         const tpl = createLookbook8sTemplate();
-        return { ...tpl, label: "Lookbook Video 8s (Đẩy UI + Nối tiếp)" };
+        return { ...tpl, label: "Lookbook 16s (Plate → Video 1 → Video 2)" };
       }
 
       const custom = customTemplates.find((x) => x.id === nameOrId || x.name === nameOrId);
@@ -2357,6 +2439,17 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
             </div>
           )}
         </div>
+
+        {/* Xuất bộ dựng phim — gom file thật vào một thư mục cho HyperFrames desktop */}
+        <button
+          type="button"
+          onClick={() => setDeliveryOpen(true)}
+          className="absolute right-3 top-3 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-ctl border border-line2 bg-panel/90 backdrop-blur-md text-[12px] font-semibold text-dim hover:text-fg hover:border-acc/60 hover:bg-panel2 shadow-lg transition-all cursor-pointer group"
+          title="Xuất plate + clip + cutout thành thư mục cho HyperFrames desktop"
+        >
+          <DownloadSimple size={15} weight="bold" className="text-acc group-hover:scale-110 transition-transform" />
+          <span>Xuất bộ dựng phim</span>
+        </button>
 
         {/* Floating Left Assets Drawer Toggle */}
         {props.onToggleAssetDrawer && !props.assetDrawerOpen && (
@@ -2661,6 +2754,7 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
               aiGeneratingId={aiGeneratingId}
               onGenerateAiPrompt={handleGenerateAiPrompt}
               skillsList={skillsList}
+              itemLibrary={itemLibrary}
               selected={selectedIds.includes(n.id)}
               onSelect={(additive) => toggleSelect(n.id, additive)}
               onMeasure={measureNode}
@@ -2918,6 +3012,12 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
         onClose={() => setPreviewMedia(null)}
         onInsertToCanvas={(it) => addReferenceNode(it.url, it.name)}
       />
+      <DeliveryModal
+        open={deliveryOpen}
+        onClose={() => setDeliveryOpen(false)}
+        runsByClip={deliveryRuns}
+        itemsByNode={deliveryItems}
+      />
     </div>
   );
 });
@@ -2948,12 +3048,13 @@ function CanvasNodeCard(props: {
   aiGeneratingId?: string | null;
   onGenerateAiPrompt?: (id: string) => void;
   skillsList?: { id: string; name: string }[];
+  itemLibrary?: LibraryItem[];
   selected?: boolean;
   onSelect?: (additive: boolean) => void;
   onMeasure?: (id: string, height: number) => void;
   onHeaderDown: (e: React.PointerEvent) => void;
 }) {
-  const { n, allNodes, imageRatios, verifiedRatios, videoRatios, resolutions, linking, wfBusy, aiGeneratingId, onGenerateAiPrompt, skillsList, selected } = props;
+  const { n, allNodes, imageRatios, verifiedRatios, videoRatios, resolutions, linking, wfBusy, aiGeneratingId, onGenerateAiPrompt, skillsList, itemLibrary, selected } = props;
   const st = statusStyle(n.status);
   const isRef = n.type === "ref";
   const isImg = n.type === "image";
@@ -3359,6 +3460,85 @@ function CanvasNodeCard(props: {
                 )}
               </div>
             </div>
+
+            {/* Ô này KHÔNG gắn ảnh — ảnh tham chiếu nằm ở ô "+ Chọn ảnh tham chiếu" phía trên.
+                Nó chỉ đánh dấu: ảnh node này sinh ra là **ảnh sản phẩm**, nên được chép vào
+                thư viện `out/items/<project>/` ngay khi sinh xong. Tên món quyết định tên file.
+                Không phụ thuộc script: người bán có bao nhiêu món cũng chỉ cần tick ô này. */}
+            {n.type === "image" && (
+              <div className="flex flex-col gap-1">
+                <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={!!n.isItem}
+                    onChange={(e) =>
+                      props.onFieldChange({
+                        isItem: e.target.checked,
+                        // Bật cờ thì mặc định luôn một phạm vi: để null nghĩa là agent
+                        // không được chỉ định món nào và quay lại lỗi "ra chiếc áo".
+                        ...(e.target.checked ? { itemScope: n.itemScope ?? "top" } : {}),
+                      })
+                    }
+                    className="h-3 w-3 accent-[var(--acc)] cursor-pointer"
+                  />
+                  <span className="text-[10px] font-semibold text-mut">
+                    Đây là ảnh sản phẩm{" "}
+                    <span className="font-normal text-dim">(lưu vào thư viện items/)</span>
+                  </span>
+                </label>
+                {n.isItem && (
+                  <input
+                    type="text"
+                    value={n.itemName ?? ""}
+                    onChange={(e) => props.onFieldChange({ itemName: e.target.value })}
+                    placeholder="Tên món — vd: Áo Kiểu Nữ Donna"
+                    list="canvas-item-library"
+                    className="h-7 rounded-ctl border border-line2 bg-panel2 px-1.5 text-[11px] text-fg focus:border-acc outline-none"
+                    title="Tên file trong thư viện: bỏ dấu, thường hoá, cách nhau bằng _"
+                  />
+                )}
+                {/* Ảnh ref Shopee là CẢ BỘ. Không chọn phạm vi thì model tự lấy món nổi
+                    bật nhất — thực tế luôn ra chiếc áo, không bao giờ ra quần. */}
+                {n.isItem && (
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-center gap-1">
+                      <span className="text-[10px] font-semibold text-mut shrink-0">Cắt món</span>
+                      <div className="flex items-center gap-1 flex-1">
+                        {ITEM_SCOPE_OPTIONS.map((opt) => {
+                          const active = (n.itemScope ?? "top") === opt.value;
+                          return (
+                            <button
+                              key={opt.value}
+                              type="button"
+                              onClick={() => props.onFieldChange({ itemScope: opt.value })}
+                              title={opt.hint}
+                              className={`flex-1 h-6 rounded-[4px] text-[10px] font-semibold border transition-colors cursor-pointer ${
+                                active
+                                  ? "border-acc bg-acc/15 text-acc"
+                                  : "border-line2 bg-panel2 text-dim hover:text-fg"
+                              }`}
+                            >
+                              {opt.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    {n.itemScope === "full_set" && (
+                      <p className="text-[9.5px] leading-snug text-warn">
+                        Cả bộ nằm chung một ảnh ⇒ không tách nền bằng rembg được (alpha dính
+                        liền). Dùng thẳng ảnh nền trơn.
+                      </p>
+                    )}
+                  </div>
+                )}
+                <datalist id="canvas-item-library">
+                  {(itemLibrary ?? []).map((it) => (
+                    <option key={it.file} value={it.name} />
+                  ))}
+                </datalist>
+              </div>
+            )}
 
             <textarea
               rows={2}

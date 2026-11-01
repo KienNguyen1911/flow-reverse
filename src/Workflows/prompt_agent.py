@@ -9,9 +9,44 @@ from typing import Optional
 
 from .local_agent_runner import LocalAgentRunner, get_agent_runner
 from .media_service import resolve_input_path
+from .script_contract import LookbookScript, ScriptError, load_default_script, load_script
 from .skill_manager import PromptSkill, get_skill_manager
 
 ROOT = Path(__file__).resolve().parents[2]
+
+#: Phạm vi món đồ của node ảnh sản phẩm. Skill cutout mặc định bắt "chỉ một món", nên
+#: phải nói rõ món nào — không thì model tự chọn vật thể nổi bật nhất (thường là chiếc áo).
+#: `full_set` là ngoại lệ duy nhất: người dùng chủ động muốn cả bộ trên một ảnh.
+ITEM_SCOPES: dict[str, dict[str, str]] = {
+    "top": {
+        "label": "chỉ ÁO",
+        "rule": (
+            "Isolate the UPPER garment only (top / shirt / blouse / camisole / jacket). "
+            "Exclude every bottom piece (skirt, shorts, trousers): they must not appear "
+            "in the image at all."
+        ),
+        "exclude": "bottoms, skirt, shorts, trousers, and any second garment",
+    },
+    "bottom": {
+        "label": "chỉ QUẦN / VÁY",
+        "rule": (
+            "Isolate the LOWER garment only (skirt / shorts / trousers). Exclude every top "
+            "piece (shirt, camisole, cardigan): they must not appear in the image at all."
+        ),
+        "exclude": "tops, shirt, camisole, cardigan, and any second garment",
+    },
+    "full_set": {
+        "label": "CẢ BỘ (nhiều món)",
+        "rule": (
+            "This is the ONLY case where the skill's single-garment rule is overridden: the "
+            "user wants the COMPLETE SET on one plate. Lay every piece of the outfit together "
+            "as one coordinated flat-lay — the top and the bottom arranged next to each other "
+            "(top above, bottom below, or side by side), all pieces fully visible and not "
+            "overlapping. Same background, lighting and framing for the whole set."
+        ),
+        "exclude": "background scenery, furniture, props",
+    },
+}
 
 
 @dataclass
@@ -24,6 +59,25 @@ class NodePromptTask:
     is_video_continuation: bool = False
     agent: Optional[str] = None
     model: Optional[str] = None
+    # Ngữ cảnh cắt ra từ configs/lookbook_script.json (không bắt buộc)
+    clip_id: Optional[str] = None       # "clip1" | "clip2" | ...
+    clip_role: Optional[str] = None     # "hook" | "showcase" | "detail"
+    item_id: Optional[str] = None       # "item_1" khi sinh ảnh cutout
+    #: Node ảnh được đánh dấu là **ảnh sản phẩm** ⇒ dùng skill cutout, và `item_name` là
+    #: tên món người dùng đặt (ngữ cảnh duy nhất khi không có ảnh tham chiếu).
+    is_item: bool = False
+    item_name: Optional[str] = None
+    #: Phạm vi món đồ người dùng chọn trên node ảnh sản phẩm:
+    #: `"top"` (chỉ áo) | `"bottom"` (chỉ quần/váy) | `"full_set"` (cả bộ, ngoại lệ của
+    #: quy tắc "một món" trong skill cutout). `None` ⇒ giữ nguyên hành vi cũ.
+    item_scope: Optional[str] = None
+    #: Node ảnh sinh **first frame cho video** ⇒ agent dùng chế độ plate của skill try-on
+    #: (§2.5): chỉ một ảnh đầu vào, bối cảnh studio thay thế, negative thêm nhóm nền sạch.
+    #: Trước đây là skill riêng `lookbook-model-only-prompter`; đã gộp vào try-on.
+    plate_mode: bool = False
+    #: Đường dẫn script (mặc định `configs/lookbook_script.json` nếu tồn tại). Khi có,
+    #: agent nhận đúng brief của clip + các shot rơi vào clip đó để viết prompt khớp phim.
+    script_path: Optional[str] = None
 
 
 @dataclass
@@ -58,47 +112,68 @@ class PromptAgent:
                 paths.append(resolved)
         return paths
 
+    #: ID của skill đã gộp vào `try-on-image-prompter`. Project lưu trên đĩa và template
+    #: canvas cũ vẫn ghi ID này, nên phải map chứ không để rơi về nhánh mặc định — rơi
+    #: xuống đó sẽ mất cờ plate_mode và agent lại viết prompt cần 2 ảnh.
+    LEGACY_SKILL_ALIASES = {"lookbook-model-only-prompter": "try-on-image-prompter"}
+
     def select_skill(self, task: NodePromptTask) -> PromptSkill:
-        """Find matching skill or pick best default."""
+        """Find matching skill or pick best default.
+
+        Thứ tự ưu tiên: skill chỉ định rõ → role của clip trong script → loại node.
+        Không bao giờ rơi sang một skill khác loại (ảnh ↔ video chéo nhau).
+        """
         if task.skill_id:
-            s = self.skill_mgr.get_skill(task.skill_id)
+            sid = task.skill_id.strip().lower()
+            if sid in self.LEGACY_SKILL_ALIASES:
+                task.plate_mode = True
+                sid = self.LEGACY_SKILL_ALIASES[sid]
+            s = self.skill_mgr.get_skill(sid)
             if s:
                 return s
 
-        # Auto-detect default based on node type
         if task.node_type == "video":
-            if task.is_video_continuation:
-                s = (
-                    self.skill_mgr.get_skill("lookbook-video-2-showcase")
-                    or self.skill_mgr.get_skill("lookbook-video-prompter")
-                )
-                if s:
-                    return s
-            else:
-                s = (
-                    self.skill_mgr.get_skill("lookbook-video-1-push")
-                    or self.skill_mgr.get_skill("lookbook-video-prompter")
-                )
-                if s:
-                    return s
-            s = self.skill_mgr.get_skill("try-on-image-prompter")
+            # Mọi clip video đều dùng chung skill motion-only.
+            s = self.skill_mgr.get_skill("lookbook-video-prompter")
             if s:
                 return s
         else:
-            if task.custom_hint and "lookbook" in task.custom_hint.lower():
-                s = self.skill_mgr.get_skill("lookbook-image-prompter")
+            if task.item_id or task.is_item:
+                # Ảnh sản phẩm phẳng trên nền trơn. `is_item` là cờ người dùng tick trên
+                # node; `item_id` là kiểu cũ khi còn gắn cứng vào `items[]` của script.
+                s = self.skill_mgr.get_skill("lookbook-item-cutout-prompter")
                 if s:
                     return s
+            hint = (task.custom_hint or "").lower()
+            if "plate" in hint or task.clip_role:
+                # Ảnh first frame cho video lookbook. Không còn skill riêng: chế độ plate
+                # là §2.5 của skill try-on, nên vẫn trả về đúng skill đó. Cờ này chỉ để
+                # `format_agent_instruction` nói rõ chế độ cho agent, tránh nó lấy 2 ảnh.
+                task.plate_mode = True
             s = self.skill_mgr.get_skill("try-on-image-prompter")
             if s:
                 return s
 
-        # Fallback to first available skill
-        skills = self.skill_mgr.list_skills()
-        if skills:
-            return skills[0]
+        # Fallback: skill cùng loại đầu tiên, tránh trả về skill khác loại
+        for s in self.skill_mgr.list_skills():
+            if task.node_type == "video" and "video" in s.id:
+                return s
+            if task.node_type != "video" and "video" not in s.id:
+                return s
 
         raise RuntimeError("Không tìm thấy skill nào trong thư mục prompt-skills/.")
+
+    def resolve_item_scope(self, task: NodePromptTask) -> Optional[tuple[str, dict[str, str]]]:
+        """Phạm vi tách món đồ đang áp dụng cho task, `None` khi không liên quan.
+
+        Chỉ node ẢNH đánh dấu `is_item` mới có phạm vi — video không tách món. Giá trị
+        lạ (dữ liệu cũ, gõ tay) bị coi như không có, để không đổi hành vi cũ.
+        """
+        if task.node_type == "video" or not task.is_item:
+            return None
+        key = (task.item_scope or "").strip().lower()
+        spec = ITEM_SCOPES.get(key)
+        return (key, spec) if spec else None
 
     def format_agent_instruction(
         self,
@@ -115,97 +190,169 @@ class PromptAgent:
                 rel_files.append(str(p).replace("\\", "/"))
 
         is_video = task.node_type == "video"
-        is_cont = task.is_video_continuation
 
-        # Craft prompt instruction
+        # Skill .md là nguồn sự thật duy nhất. Ở đây chỉ bổ sung NGỮ CẢNH NODE
+        # (loại node, file upstream, spec cắt ra từ script), không lặp lại quy tắc của skill.
         lines = [
-            f"Bạn là AI Prompt Director chuyên nghiệp cho workflow Google Flow (Flow Bench).",
-            f"Quy chuẩn kỹ năng bắt buộc tuân theo nằm trong file: {skill.file_path}",
+            "Bạn là AI Prompt Director cho workflow Google Flow (Flow Bench).",
+            f"Quy chuẩn kỹ năng BẮT BUỘC tuân theo nằm trong file: {skill.file_path}",
+            "Đọc kỹ toàn bộ skill dưới đây; nó là nguồn quy tắc duy nhất, đừng tự suy diễn thêm.",
             "",
             "--- NỘI DUNG SKILL QUY CHUẨN ---",
             skill.raw_content,
             "---------------------------------",
             "",
-            "--- THÔNG TIN ĐẦU VÀO VÀ BỐI CẢNH CỦA NODE HIỆN TẠI ---",
-            f"- Loại Node cần tạo prompt: {'VIDEO' if is_video else 'ẢNH (IMAGE)'}",
-            f"- Mã Node: {task.node_id}",
+            "--- BỐI CẢNH NODE HIỆN TẠI ---",
+            f"- Loại node: {'VIDEO' if is_video else 'ẢNH (IMAGE)'}",
+            f"- Mã node: {task.node_id}",
+            f"- Skill đang áp dụng: {skill.id}",
         ]
 
-        if is_video:
-            if is_cont:
+        if task.clip_id or task.clip_role:
+            lines.append(
+                f"- Clip trong script: id={task.clip_id or '?'}, role={task.clip_role or '?'}"
+            )
+        if task.plate_mode:
+            lines.extend([
+                "- **Chế độ PLATE** (ảnh này làm first frame cho node video).",
+                "  → Áp §2.5 của skill: giả định chỉ có MỘT ảnh tham chiếu đóng cả vai identity và",
+                "    trang phục. Không viết câu nào nhắc tới `Image 2` / `Image 3`.",
+                "  → Bối cảnh: LUÔN thay bằng studio trơn §2.5.2, kể cả khi ảnh gốc chụp ngoài trời.",
+                "  → Negative: nối thêm nhóm nền sạch §2.5.3 (no props / no other people /",
+                "    no progress bar / no banner / no product cards / no catalog strip / no thumbnails).",
+                "  → Bố cục: căn giữa trục dọc như khối Height — KHÔNG dùng mẹo lệch phải cũ,",
+                "    HyperFrames desktop đã tự canh lớp chữ nên không cần chừa cột trái nữa.",
+            ])
+        if task.item_id:
+            lines.append(f"- Món đồ trong script: {task.item_id}")
+        elif task.is_item and task.item_name:
+            lines.append(f"- Món đồ cần dựng ảnh sản phẩm: {task.item_name}")
+
+        scope = self.resolve_item_scope(task)
+        if scope is not None:
+            key, spec = scope
+            lines.append(f"- Phạm vi cần tách: **{spec['label']}**.")
+            lines.append(f"  → {spec['rule']}")
+            lines.append(f"  → Ảnh phải KHÔNG có: {spec['exclude']}.")
+            if key == "full_set":
                 lines.append(
-                    "- Vai trò Video: VIDEO 2 (8s-16s Nối tiếp) — Bắt đầu từ Frame Cuối của Video 1.\n"
-                    "  YÊU CẦU QUY CHUẨN:\n"
-                    "  1. TUYỆT ĐỐI KHÔNG chèn [POLICY COMPLIANCE] (không có tác dụng trong prompt video).\n"
-                    "  2. KHÔNG mô tả chi tiết dài dòng về nhân vật/trang phục. Chỉ mở đầu bằng đúng 1 câu ngắn: 'Seamless continuation from the starting frame, maintaining exact model and outfit.'\n"
-                    "  3. BẮT BUỘC GIỮ NGUYÊN cấu trúc TIMELINE chi tiết từng giây (0-1s, 1-4s, 4-6s, 6-8s) và block Negative. TUYỆT ĐỐI KHÔNG cắt ngắn, tóm tắt hay gộp timeline!\n"
-                    "  4. Tập trung vào CHUYỂN ĐỘNG: Người mẫu tiếp tục cử động tự nhiên từ tư thế cuối, xoay người 180 độ nửa vòng khoe phom dáng trang phục, camera lướt cận cảnh beauty shot thanh lịch."
-                )
-            else:
-                lines.append(
-                    "- Vai trò Video: VIDEO 1 (0s-8s The Push UI & Hook) — Bắt đầu từ ảnh Lookbook 9:16 có cột item bên trái.\n"
-                    "  YÊU CẦU QUY CHUẨN:\n"
-                    "  1. TUYỆT ĐỐI KHÔNG chèn [POLICY COMPLIANCE] (không có tác dụng trong prompt video).\n"
-                    "  2. KHÔNG mô tả chi tiết dài dòng về nhân vật/trang phục. Chỉ mở đầu bằng đúng 1 câu ngắn: 'Maintain exact model and outfit from the reference image.'\n"
-                    "  3. BẮT BUỘC GIỮ NGUYÊN cấu trúc TIMELINE chi tiết từng giây (0-1s, 1-2s, 2-4s, 4-8s) và block Negative. TUYỆT ĐỐI KHÔNG cắt ngắn, tóm tắt hay gộp timeline!\n"
-                    "  4. Tập trung vào HÀNH ĐỘNG: 0-1s camera khóa cứng người mẫu nhìn ống kính, 1-2s người mẫu dùng tay đẩy mạnh cột item NABI văng sang trái ra khỏi khung hình với motion blur và quán tính woosh, 2-4s camera khóa cứng giữ khoảng trống negative space sạch sẽ, 4-8s camera push-in zoom mượt mà vào mẫu lookbook posing."
-                )
-        else:
-            if "lookbook" in skill.id:
-                lines.append(
-                    "- Vai trò Ảnh: ẢNH LOOKBOOK BỐ CỤC CHIA ĐÔI (Split-Screen 9:16 có CỘT ITEM NABI). "
-                    "Yêu cầu: 1/3 bên trái là cột nền tối than chì có header 'NABI' và các thẻ trắng hiển thị từng món đồ bóc tách "
-                    "(áo, váy, mũ, túi xách, giày). 2/3 bên phải là người mẫu toàn thân mặc trọn bộ trang phục trong studio tối giản. "
-                    "BẮT BUỘC có cột item NABI để node video tiếp theo thực hiện hành động đẩy văng cột ra khỏi khung hình."
+                    "  → Ngoại lệ có chủ đích: bỏ quy tắc 'một món' của skill; giữ nguyên "
+                    "các quy tắc còn lại (nền trơn, cấm người, cấm chữ)."
                 )
 
+        # Ngữ cảnh script: shot nào rơi vào clip này, đang nhấn món nào. Đây là thứ
+        # trước kia agent không hề biết, nên prompt sinh ra không khớp timeline.
+        script = self._load_script_context(task)
+        if script is not None:
+            lines.extend(self._script_context_lines(script, task))
+        if is_video and task.is_video_continuation:
+            lines.append(
+                "- Clip này nối tiếp clip trước: dùng frame cuối của clip trước làm starting frame."
+            )
+
         if rel_files:
-            lines.append("- Các file ảnh kết quả từ node trước / ảnh tham chiếu đang kết nối vào node này:")
+            lines.append("- File ảnh upstream đang kết nối vào node này:")
             for idx, rf in enumerate(rel_files, 1):
                 lines.append(f"  {idx}. {rf}")
             if not is_video:
                 lines.append(
-                    "  => HÃY ĐỌC VÀ PHÂN TÍCH TRỰC TIẾP các file ảnh trên (nhận diện màu sắc, phom dáng, chất liệu vải, "
-                    "chi tiết may mặc và tư thế thực tế của người mẫu) để viết prompt khớp 100% với ảnh thật vừa tạo."
+                    "  => ĐỌC TRỰC TIẾP các file trên (màu sắc, phom dáng, chất liệu vải, chi tiết may mặc) "
+                    "để prompt khớp 100% với sản phẩm thật."
                 )
         else:
-            lines.append("- Node chưa có file ảnh kết nối trực tiếp, hãy tạo prompt tổng quát dựa theo quy chuẩn của skill.")
+            lines.append("- Node chưa có file upstream; viết prompt tổng quát theo quy chuẩn của skill.")
 
         if task.custom_hint and task.custom_hint.strip():
-            lines.append(f"- Ghi chú phong cách bổ sung từ người dùng: \"{task.custom_hint.strip()}\"")
+            lines.append(f"- Ghi chú bổ sung từ người dùng: \"{task.custom_hint.strip()}\"")
 
-        if is_video:
-            lines.extend([
-                "",
-                "--- YÊU CẦU ĐẦU RA CHO PROMPT VIDEO ---",
-                "1. TUYỆT ĐỐI KHÔNG đưa [POLICY COMPLIANCE] vào prompt video.",
-                "2. KHÔNG mô tả chi tiết dài dòng về khuôn mặt, tóc, áo, váy, túi, giày (ảnh nguồn đã có sẵn 100%).",
-                "3. Bắt đầu bằng 1 câu ngắn duy nhất:",
-                "   - Cho Video 1: 'Maintain exact model and outfit from the reference image.'",
-                "   - Cho Video 2: 'Seamless continuation from the starting frame, maintaining exact model and outfit.'",
-                "4. BẮT BUỘC GIỮ NGUYÊN CẤU TRÚC TIMELINE CHI TIẾT ĐẦY ĐỦ TỪNG MỐC THỜI GIAN VÀ KHỐI NEGATIVE:",
-                "   - Phải có header 'Timeline:' và chia rõ từng mốc giây (0-1s:, 1-2s:, 2-4s:, 4-8s: cho Video 1; 0-1s:, 1-4s:, 4-6s:, 6-8s: cho Video 2).",
-                "   - TUYỆT ĐỐI KHÔNG cắt ngắn hay tóm tắt timeline thành một đoạn văn ngắn.",
-                "   - Phải có header 'Negative:' với đầy đủ các từ khóa chống lỗi.",
-                "5. Trả về CHỈ nội dung Prompt hoàn chỉnh bằng tiếng Anh (English) đặt gọn gàng trong 1 khối code markdown:",
-                "```markdown",
-                "<nội dung prompt video tiếng Anh>",
-                "```",
-                "Không kèm lời chào hỏi hay giải thích rườm rà ngoài khối code.",
-            ])
-        else:
-            lines.extend([
-                "",
-                "--- YÊU CẦU ĐẦU RA CHO PROMPT ẢNH ---",
-                "1. BẮT BUỘC chèn mệnh đề khẳng định nhân vật hư cấu AI ([POLICY COMPLIANCE]) ở dòng đầu tiên.",
-                "2. Trả về CHỈ nội dung Prompt hoàn chỉnh bằng tiếng Anh (English) đặt gọn gàng trong 1 khối code markdown:",
-                "```markdown",
-                "<nội dung prompt ảnh tiếng Anh>",
-                "```",
-                "Không kèm lời chào hỏi hay giải thích rườm rà ngoài khối code.",
-            ])
+        lines.extend([
+            "",
+            "--- ĐỊNH DẠNG ĐẦU RA ---",
+            "Trả về CHỈ các khối code markdown, mỗi khối một prompt tiếng Anh hoàn chỉnh.",
+            "Số khối đúng bằng số clip/món đồ được giao ở trên (1 nếu chỉ có 1).",
+            "Không lời chào, không giải thích, không header dạng '[Video Prompt N]'.",
+            "```markdown",
+            "<prompt tiếng Anh>",
+            "```",
+        ])
 
         return "\n".join(lines)
+
+    def _load_script_context(self, task: NodePromptTask) -> Optional[LookbookScript]:
+        """Script để bổ sung ngữ cảnh; không có cũng chạy bình thường."""
+        try:
+            if task.script_path:
+                return load_script(task.script_path)
+            return load_default_script()
+        except ScriptError:
+            return None
+
+    def _script_context_lines(self, script: LookbookScript, task: NodePromptTask) -> list[str]:
+        is_video = task.node_type == "video"
+        lines = ["", "--- KỊCH BẢN PHIM (nguồn: configs/lookbook_script.json) ---"]
+        lines.append(f"- Bộ: {script.slug} — {script.title}")
+        lines.append(
+            f"- Khung hình {script.canvas.get('width')}×{script.canvas.get('height')} @ "
+            f"{script.fps}fps, tổng {script.duration_s}s / {len(script.clips)} clip"
+        )
+
+        clip_id = task.clip_id
+        if not clip_id and is_video and len(script.clips) == 1:
+            clip_id = script.clips[0].id
+
+        if is_video and clip_id:
+            try:
+                clip = script.clip(clip_id)
+            except ScriptError:
+                clip = None
+            if clip is not None:
+                lines.append(
+                    f"- Clip đang viết: {clip.id} — vai **{clip.role}**, "
+                    f"{clip.duration_s}s, camera={clip.camera or 'tự do'}"
+                )
+                if clip.chain_from:
+                    lines.append(
+                        f"  → nối tiếp từ `{clip.chain_from}`: mở đầu phải khớp tư thế frame cuối clip trước."
+                    )
+                shots = script.shots_for_clip(clip.id)
+                if shots:
+                    lines.append("- Các shot rơi vào clip này (lớp dựng phim lo phần chữ/UI):")
+                    for s in shots:
+                        bits = [f"{s.clip_offset_s}–{s.end_s}s"]
+                        if s.text:
+                            bits.append(f'chữ: "{s.text}"')
+                        if s.emphasis_item:
+                            bits.append(f"nhấn {s.emphasis_item}")
+                        lines.append("  · " + " · ".join(bits))
+                    lines.append(
+                        "  → Prompt video KHÔNG mô tả chữ/caption/card; chỉ mô tả chuyển động "
+                        "camera + cơ thể đủ để lớp dựng đặt được chữ lên trên."
+                    )
+                if task.item_id:
+                    try:
+                        item = script.item(task.item_id)
+                        lines.append(
+                            f"- Món đồ đang nhấn: {item.id} — {item.name}"
+                            + (f" (callout: {item.callout})" if item.callout else "")
+                        )
+                    except ScriptError:
+                        pass
+        elif not is_video and not task.is_item:
+            # Ảnh không phải sản phẩm: hoặc plate (first frame cho video), hoặc try-on trả
+            # cho khách. Chỉ nhánh plate mới được nói "không chữ/không UI" — nếu gán nhãn
+            # đó cho ảnh try-on thường thì agent viết prompt lệch mục tiêu.
+            names = ", ".join(f"{i.id}({i.name})" for i in script.items) or "chưa khai báo"
+            lines.append(f"- Món đồ trong bộ: {names}")
+            if task.plate_mode:
+                lines.append(
+                    "- Ảnh này là **plate nền** cho video: người mẫu toàn thân, không chữ, không cột UI."
+                )
+            else:
+                lines.append(
+                    "- Ảnh này là **ảnh thành phẩm trả cho khách**, không phải plate cho video."
+                )
+
+        return lines
 
     async def generate_prompt_for_node(self, task: NodePromptTask) -> NodePromptResult:
         """Executes prompt generation for a single canvas node."""

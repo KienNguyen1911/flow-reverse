@@ -49,6 +49,7 @@ from ..Bridge.flow_video_bridge import FlowVideoBridge
 from .account_pool import ReferenceMediaRegistry, sha256_file
 from .flow_client import FlowClient
 from .flow_models import GenerationResult, ReferenceTemplate, parse_project_ref
+from .media_probe import probe_video
 from .watermark_remover import remove_video_watermark
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -335,6 +336,8 @@ class NodeVideoResult:
     video_path: Optional[str] = None
     video_bytes: Optional[int] = None
     resolution: str = "1080p"
+    #: Tham số YÊU CẦU 8s. Số đo thật nằm ở `measured_*` bên dưới — đừng dùng field này
+    #: để đặt thời lượng trên timeline dựng phim.
     duration_s: int = VIDEO_DURATION_S
     frame_path: Optional[str] = None
     frame_source: Optional[Literal["provided", "generated"]] = None
@@ -344,6 +347,12 @@ class NodeVideoResult:
     elapsed_s: float = 0.0
     reason: Optional[str] = None
     hint: Optional[str] = None
+    # -- đo bằng ffprobe sau khi tải xong (None nếu dry-run/không đo được) ---------- #
+    measured_duration_s: Optional[float] = None
+    measured_fps: Optional[float] = None
+    measured_width: Optional[int] = None
+    measured_height: Optional[int] = None
+    has_audio: Optional[bool] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -754,6 +763,24 @@ class MediaService:
                     result.video_bytes = video_path.stat().st_size
                 except Exception as exc:  # noqa: BLE001 - keep the render, warn only
                     self._emit(on_event, "warn", f"Xóa watermark video bỏ qua: {exc}")
+
+            # Đo thật thay vì tin `duration_s` (tham số yêu cầu). Editor dựng phim đọc
+            # thẳng manifest, nếu ghi số yêu cầu thì timeline lệch mà không ai biết.
+            if video_path.is_file():
+                info = probe_video(video_path)
+                result.measured_duration_s = info.duration_s
+                result.measured_fps = info.fps
+                result.measured_width = info.width
+                result.measured_height = info.height
+                result.has_audio = info.has_audio
+                if info.measured and info.duration_s is not None:
+                    self._emit(
+                        on_event, "info",
+                        f"Đo được: {info.width}×{info.height} @ {info.fps or '?'}fps, "
+                        f"{info.duration_s}s, audio={'có' if info.has_audio else 'không'}",
+                    )
+                elif info.error:
+                    self._emit(on_event, "warn", f"Không đo được thông số video: {info.error}")
 
             result.elapsed_s = round(time.time() - t0, 2)
             self._write_manifest(result)

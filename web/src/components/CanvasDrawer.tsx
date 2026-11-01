@@ -39,6 +39,8 @@ export interface CanvasDrawerNode {
   autoImagePrompt: string;
   removeWatermark?: boolean;
   jobId: string | null;
+  /** `run_id` của lần sinh thành công gần nhất — delivery export cần nó để nối clip → file. */
+  runId?: string | null;
   status: "idle" | "queued" | "running" | "succeeded" | "failed" | "rejected" | "skipped";
   fileUrl?: string | null;
   videoUrl?: string | null;
@@ -47,6 +49,12 @@ export interface CanvasDrawerNode {
   elapsedS?: number | null;
   agentSkillId?: string | null;
   agentCustomHint?: string | null;
+  /** Ảnh node này sinh ra là **ảnh sản phẩm** ⇒ chép vào thư viện `items/` của project. */
+  isItem?: boolean;
+  /** Tên món, dùng để đặt tên file trong thư viện. */
+  itemName?: string | null;
+  /** Phạm vi cắt món: `top` (áo) | `bottom` (quần/váy) | `full_set` (cả bộ). */
+  itemScope?: "top" | "bottom" | "full_set" | null;
 }
 
 interface CanvasDrawerProps {
@@ -165,14 +173,25 @@ function diagnoseError(reason: string | null | undefined): ErrorDiagnosis {
     };
   }
 
-  if (lower.includes("validation") || lower.includes("422") || lower.includes("invalid_argument")) {
+  // Backend trả câu tiếng Việt ("Tham số không hợp lệ: prompt: …") từ
+  // validation_exception_handler, nên khớp theo tiếng Anh là trượt và rơi xuống
+  // EXECUTION_ERROR — người dùng bị hướng dẫn đi kiểm tra mạng dù lỗi nằm ở chỗ khác.
+  if (
+    lower.includes("validation") ||
+    lower.includes("422") ||
+    lower.includes("invalid_argument") ||
+    lower.includes("tham số không hợp lệ") ||
+    lower.includes("tham so khong hop le") ||
+    lower.includes("should have at least") ||
+    lower.includes("string should have")
+  ) {
     return {
       code: "VALIDATION_ERROR",
       title: "Tham số đầu vào không hợp lệ",
       explanation:
-        "Dữ liệu gửi lên server không đúng định dạng hoặc vượt quá giới hạn cho phép (độ dài prompt, tỷ lệ khung hình, seed,...).",
+        "Dữ liệu gửi lên server không đúng định dạng hoặc vượt quá giới hạn cho phép (prompt rỗng, quá 5.000 ký tự, tỷ lệ khung hình, seed,...). Lỗi này phát sinh ngay tại app, chưa gửi gì lên Google Flow nên không mất credit.",
       fixHint:
-        "Kiểm tra lại độ dài prompt (tối đa 5.000 ký tự) và chọn tỷ lệ khung hình đã được xác thực.",
+        "1. Prompt rỗng là nguyên nhân phổ biến nhất — nhập prompt hoặc bấm AI Prompt trên node rồi chạy lại.\n2. Prompt tối đa 5.000 ký tự; chọn tỷ lệ khung hình đã được xác thực.",
     };
   }
 
@@ -262,6 +281,11 @@ export function CanvasDrawer({
         skill_id: targetSkill,
         custom_hint: targetHint,
         is_video_continuation: isCont,
+        // Thiếu 3 trường này thì node ảnh sản phẩm bị coi là node ảnh lookbook: agent dùng
+        // skill vẽ người mẫu và không biết phải cắt món nào.
+        is_item: !!node.isItem,
+        item_name: node.isItem ? node.itemName || undefined : undefined,
+        item_scope: node.isItem ? node.itemScope ?? undefined : undefined,
       });
 
       if (res.ok && res.prompt) {

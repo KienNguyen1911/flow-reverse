@@ -158,8 +158,13 @@ class LocalAgentRunner:
                 cwd=str(ROOT),
             )
         elif target_agent == "pi":
-            # For Windows .cmd files
-            cmd = ["cmd.exe", "/c", bin_path, "--no-session", "--no-tools", "-p", instruction]
+            # For Windows .cmd files. Model phải được truyền vào, nếu không field
+            # pi_model trong configs/agent_config.json sẽ là cấu hình chết.
+            chosen_model = model or self.config.pi_model or "agnes-3.0-flash"
+            cmd = [
+                "cmd.exe", "/c", bin_path, "--no-session", "--no-tools",
+                "--model", chosen_model, "-p", instruction,
+            ]
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,

@@ -21,6 +21,9 @@ import type {
   TestAgentResponse,
   AssetUploadedItem,
   AssetOutputItem,
+  DeliveryBuildRequest,
+  DeliveryListItem,
+  LibraryItem,
   WorkspaceCanvasState,
   WorkspaceProject,
 } from "./types";
@@ -264,6 +267,29 @@ export const api = {
 
   pinAsset: (p: { key: string; kind?: string; isPinned: boolean }) =>
     post("/api/assets/pin", p).then(j<{ ok: boolean; key: string; isPinned: boolean }>),
+
+  /** Thư viện ảnh sản phẩm của project (`out/items/<project_id>/`) — không phụ thuộc script. */
+  itemLibrary: (projectId?: string | null) =>
+    fetch(`/api/items/library${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`).then(
+      j<{ project_id: string | null; dir: string; items: LibraryItem[] }>,
+    ),
+
+  // -- Deliveries (bộ nguyên liệu cho HyperFrames desktop) -------------------
+  createDelivery: (p: DeliveryBuildRequest) =>
+    post("/api/deliveries", p).then(
+      j<{ job_id: string; kind: "delivery_build"; slug: string; dest_dir: string }>,
+    ),
+
+  deliveries: () => fetch("/api/deliveries").then(j<{ deliveries: DeliveryListItem[] }>),
+
+  deliveryManifest: (slug: string) =>
+    fetch(`/api/deliveries/${encodeURIComponent(slug)}`).then(j<Record<string, unknown>>),
+
+  deliveryFileUrl: (slug: string, relPath: string) =>
+    `/api/deliveries/${encodeURIComponent(slug)}/${relPath
+      .split("/")
+      .map(encodeURIComponent)
+      .join("/")}`,
 
   // -- Workspace projects (local canvas groups) ------------------------------
   workspaceProjects: () =>

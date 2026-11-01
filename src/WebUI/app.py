@@ -52,6 +52,14 @@ from ..Workflows.local_agent_runner import (
     load_agent_config,
     save_agent_config,
 )
+from ..Workflows.delivery import (
+    DEFAULT_DELIVERY_ROOT,
+    DeliveryError,
+    RunRef,
+    build_delivery,
+    list_deliveries,
+)
+from ..Workflows.media_probe import probe_video
 from ..Workflows.media_service import (
     AspectNotVerifiedError,
     UnsupportedOptionError,
@@ -63,6 +71,7 @@ from ..Workflows.media_service import (
     validate_video_duration,
 )
 from ..Workflows.prompt_agent import NodePromptTask, get_prompt_agent
+from ..Workflows.script_contract import ScriptError, load_script
 from ..Workflows.skill_manager import get_skill_manager
 from .jobs import JobManager, ProjectsStore
 from .workspace import (
@@ -105,6 +114,11 @@ class NodeImageBody(BaseModel):
     reference_image_paths: Optional[list[str]] = None
     project_id: Optional[str] = None
     workspace_project_id: Optional[str] = None
+    #: Đánh dấu ảnh này là **ảnh sản phẩm** ⇒ chép vào `out/items/<project_id>/` sau khi
+    #: sinh xong. Độc lập với kịch bản: người bán có nhiều món, dùng lại cho nhiều bộ phim.
+    is_item: bool = False
+    #: Tên món để đặt tên file trong thư viện (`Áo Kiểu Nữ Donna` → `ao_kieu_nu_donna.png`).
+    item_name: Optional[str] = None
     dry_run: bool = False
     remove_watermark: bool = True
     confirm: bool = False
@@ -134,19 +148,6 @@ class NodeLastFrameBody(BaseModel):
 
     video_path: str
     remove_watermark: bool = True
-    workspace_project_id: Optional[str] = None
-
-
-class HfRenderBody(BaseModel):
-    """Render a HyperFrames composition through the hf-studio service.
-
-    A separate service from the Flow API: no account, no credits, no browser.
-    `hf_project_id` names a composition project on that service; `variables`
-    overrides its knobs for this render only and does not save them.
-    """
-
-    hf_project_id: str = Field(min_length=1)
-    variables: Optional[dict] = None
     workspace_project_id: Optional[str] = None
 
 
@@ -256,6 +257,31 @@ class GenerateNodePromptBody(BaseModel):
     is_video_continuation: bool = False
     agent: Optional[str] = None
     model: Optional[str] = None
+    #: Ngữ cảnh kịch bản — cho phép UI chỉ định clip/món đồ thay vì đoán.
+    clip_id: Optional[str] = None
+    clip_role: Optional[str] = None
+    item_id: Optional[str] = None
+    #: Node ảnh tick "đây là ảnh sản phẩm" ⇒ dùng skill cutout + tên món làm ngữ cảnh.
+    is_item: bool = False
+    item_name: Optional[str] = None
+    #: Phạm vi tách món: `"top"` | `"bottom"` | `"full_set"`. Chỉ có nghĩa khi `is_item`.
+    item_scope: Optional[str] = None
+    script_path: Optional[str] = None
+
+
+class DeliveryBuildBody(BaseModel):
+    """Dựng thư mục nguyên liệu cho HyperFrames desktop từ một lookbook script."""
+
+    script_path: Optional[str] = None
+    script: Optional[dict] = None
+    run_refs: list[dict] = Field(default_factory=list)
+    #: Ảnh sản phẩm sinh từ node ảnh Flow: `{name, item_id?, run_id|run_dir|file_path}`.
+    #: Có `item_id` khớp `items[]` của script thì dùng đúng tên script khai; chỉ có `name`
+    #: thì đặt tên theo slug của tên món. Mỗi món một ảnh.
+    item_refs: list[dict] = Field(default_factory=list)
+    #: Thư mục đích. Mặc định `out/deliveries`.
+    dest_dir: Optional[str] = None
+    overwrite: bool = False
 
 
 class TestAgentBody(BaseModel):
@@ -433,6 +459,19 @@ def scan_output_assets(
                 thumb_url = f"/api/node/files/{d.name}/{thumb.name}" if thumb.exists() else None
                 url = f"/api/node/files/{d.name}/{v.name}"
                 seen_urls.add(url)
+                # Manifest cũ chỉ có `duration_s` = tham số yêu cầu (8). Ưu tiên số đo
+                # thật; nếu manifest chưa có (bản cũ) thì đo ngay tại đây.
+                measured = None
+                if meta.get("measured_duration_s") is None or meta.get("measured_fps") is None:
+                    measured = probe_video(v)
+                m_dur = meta.get("measured_duration_s")
+                if m_dur is None and measured is not None:
+                    m_dur = measured.duration_s
+                m_fps = meta.get("measured_fps")
+                if m_fps is None and measured is not None:
+                    m_fps = measured.fps
+                m_w = meta.get("measured_width") or (measured.width if measured else None)
+                m_h = meta.get("measured_height") or (measured.height if measured else None)
                 items.append(add_project_fields({
                     "id": f"node_{d.name}_{v.name}",
                     "run_id": d.name,
@@ -442,8 +481,15 @@ def scan_output_assets(
                     "thumbnail_url": thumb_url,
                     "prompt": meta.get("prompt") or "",
                     "created_ts": meta.get("created_ts") or v.stat().st_mtime,
-                    "duration_s": meta.get("duration_s") or 8,
-                    "resolution": meta.get("resolution") or "1080p",
+                    "duration_s": m_dur or meta.get("duration_s") or 8,
+                    "fps": m_fps,
+                    "width": m_w,
+                    "height": m_h,
+                    "has_audio": meta.get("has_audio"),
+                    "resolution": (
+                        f"{m_w}x{m_h}" if m_w and m_h
+                        else meta.get("resolution") or "1080p"
+                    ),
                     "aspect_ratio": meta.get("aspect_ratio") or "9:16",
                     "size_bytes": v.stat().st_size,
                     "source": "canvas_video_node",
@@ -662,7 +708,8 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
                projects_file: Optional[Path] = None, web_dist: Optional[Path] = None,
                pool_config: Optional[Path] = None, pool_state: Optional[Path] = None,
                workspace_file: Optional[Path] = None,
-               asset_meta_file: Optional[Path] = None) -> FastAPI:
+               asset_meta_file: Optional[Path] = None,
+               delivery_root: Optional[Path] = None) -> FastAPI:
     out_root = Path(out_dir) if out_dir else DEFAULT_OUT
     asset_root = out_root.parent if out_dir else (ROOT / "out")
     store = ProjectsStore(Path(projects_file) if projects_file else DEFAULT_PROJECTS_FILE)
@@ -1104,6 +1151,8 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
             "reference_image_paths": all_refs if all_refs else None,
             "project_id": body.project_id,
             "workspace_project_id": body.workspace_project_id,
+            "is_item": body.is_item,
+            "item_name": body.item_name,
             "dry_run": body.dry_run,
             "remove_watermark": body.remove_watermark,
         })
@@ -1165,45 +1214,6 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
         })
         return {"job_id": job.id, "kind": "last_frame"}
 
-    @app.post("/api/hf/render")
-    def api_hf_render(body: HfRenderBody):
-        """Render a HyperFrames composition via the hf-studio service.
-
-        No account or credit is involved, so unlike /api/generate there is no
-        confirm gate.
-        """
-        job = manager.submit("hf_render", {
-            "hf_project_id": body.hf_project_id,
-            "variables": body.variables,
-            "workspace_project_id": body.workspace_project_id,
-        })
-        return {"job_id": job.id, "kind": "hf_render"}
-
-    @app.get("/api/hf/health")
-    def api_hf_health():
-        """Is the render service reachable? Cheap enough to use as a UI probe."""
-        from ..Workflows.hf_client import HfStudioClient, HfStudioError
-
-        try:
-            with HfStudioClient() as hf:
-                return {"ok": True, **hf.health()}
-        except HfStudioError as exc:
-            return JSONResponse(
-                status_code=503,
-                content={"ok": False, "error": exc.message, "hint": exc.hint},
-            )
-
-    @app.get("/api/hf/bases")
-    def api_hf_bases():
-        """Available compositions and their editable knobs."""
-        from ..Workflows.hf_client import HfStudioClient, HfStudioError
-
-        try:
-            with HfStudioClient() as hf:
-                return {"ok": True, "bases": hf.list_bases()}
-        except HfStudioError as exc:
-            raise HTTPException(status_code=503, detail=exc.message) from exc
-
     @app.get("/api/node/files/{file_path:path}")
     def api_node_file(file_path: str):
         base = manager.node_out.resolve()
@@ -1211,6 +1221,85 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
         if not p.is_relative_to(base) or not p.is_file():
             raise HTTPException(status_code=404, detail="không tìm thấy file node")
         return FileResponse(p)
+
+    # -- deliveries (bộ nguyên liệu dựng phim cho HyperFrames desktop) ------------ #
+
+    def _delivery_root() -> Path:
+        return Path(delivery_root) if delivery_root else DEFAULT_DELIVERY_ROOT
+
+    @app.get("/api/items/library")
+    def api_item_library(project_id: Optional[str] = None):
+        """Thư viện ảnh sản phẩm của một project: `out/items/<project_id>/`.
+
+        Không phụ thuộc kịch bản — mỗi lần node ảnh có cờ `is_item` sinh xong, file được
+        chép vào đây theo tên món. Người bán xem lại toàn bộ món đã có, dùng cho nhiều bộ.
+        """
+        from ..Workflows.item_library import item_dir, list_items
+
+        return {
+            "project_id": project_id,
+            "dir": str(item_dir(project_id)),
+            "items": list_items(project_id),
+        }
+
+    @app.post("/api/deliveries")
+    def api_create_delivery(body: DeliveryBuildBody):
+        """Dựng (hoặc dựng lại) thư mục nguyên liệu. Không gọi Flow → không tốn credit."""
+        params: dict = {
+            "run_refs": body.run_refs,
+            "item_refs": body.item_refs,
+            "overwrite": body.overwrite,
+        }
+        if body.script_path:
+            params["script_path"] = body.script_path
+        elif body.script:
+            params["script"] = body.script
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="cần `script_path` hoặc `script` (object) để biết dựng bộ nào",
+            )
+
+        # Validate sớm để trả lỗi 400 thay vì để job chết ở nền.
+        try:
+            script = load_script(body.script_path or body.script or "")
+        except ScriptError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        if body.dest_dir:
+            params["dest_dir"] = body.dest_dir
+        elif delivery_root:
+            params["dest_dir"] = str(delivery_root)
+
+        job = manager.submit("delivery_build", params)
+        return {
+            "job_id": job.id,
+            "kind": "delivery_build",
+            "slug": script.slug,
+            "dest_dir": str((Path(params["dest_dir"]) if params.get("dest_dir") else _delivery_root()) / script.slug),
+        }
+
+    @app.get("/api/deliveries")
+    def api_list_deliveries():
+        return {"deliveries": list_deliveries(_delivery_root())}
+
+    @app.get("/api/deliveries/{slug}/{file_path:path}")
+    def api_delivery_file(slug: str, file_path: str):
+        base = (_delivery_root() / slug).resolve()
+        p = (base / file_path).resolve()
+        if not p.is_relative_to(base) or not p.is_file():
+            raise HTTPException(status_code=404, detail="không tìm thấy file trong bộ dựng phim")
+        return FileResponse(p)
+
+    @app.get("/api/deliveries/{slug}")
+    def api_delivery_detail(slug: str):
+        manifest = _delivery_root() / slug / "delivery.json"
+        if not manifest.is_file():
+            raise HTTPException(status_code=404, detail="không tìm thấy bộ dựng phim")
+        try:
+            return json.loads(manifest.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            raise HTTPException(status_code=500, detail=f"delivery.json hỏng: {exc}")
 
     # -- jobs ------------------------------------------------------------------ #
 
@@ -1519,7 +1608,6 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
                     "name": s.name,
                     "description": s.description,
                     "file_path": s.file_path,
-                    "policy_clause": s.policy_clause,
                 }
                 for s in mgr.list_skills()
             ]
@@ -1560,10 +1648,23 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
             is_video_continuation=body.is_video_continuation,
             agent=body.agent,
             model=body.model,
+            clip_id=body.clip_id,
+            clip_role=body.clip_role,
+            item_id=body.item_id,
+            is_item=body.is_item,
+            item_name=body.item_name,
+            item_scope=body.item_scope,
+            script_path=body.script_path,
         )
         try:
             res = await agent.generate_prompt_for_node(task)
-            return {"ok": True, **res.to_dict()}
+            # Lint không chặn — trả về để UI hiện cảnh báo trước khi tốn credit.
+            try:
+                from ..Workflows.prompt_lint import lint_prompt as _lint
+                lint = _lint(res.prompt, body.node_type).to_dict()
+            except Exception:  # noqa: BLE001 - lint hỏng không được chặn việc sinh prompt
+                lint = None
+            return {"ok": True, **res.to_dict(), "lint": lint}
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Lỗi AI Prompt Agent: {e}")
 
@@ -1595,10 +1696,19 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--port", type=int, default=4000)
     ap.add_argument("--cdp-url", default=DEFAULT_CDP_URL)
     ap.add_argument("--out", default=None)
+    ap.add_argument(
+        "--deliveries",
+        default=None,
+        help="thư mục chứa bộ nguyên liệu dựng phim (mặc định <out>/deliveries)",
+    )
     ap.add_argument("--open", action="store_true", help="mở UI trong browser mặc định")
     args = ap.parse_args(argv)
 
-    app = create_app(cdp_url=args.cdp_url, out_dir=Path(args.out) if args.out else None)
+    app = create_app(
+        cdp_url=args.cdp_url,
+        out_dir=Path(args.out) if args.out else None,
+        delivery_root=Path(args.deliveries) if args.deliveries else None,
+    )
     url = f"http://{args.host}:{args.port}"
     print(f"Flow Bench: {url}  (CDP: {args.cdp_url})")
     if args.open:
