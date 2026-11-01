@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "slug": "havana_donna_set",
+  "title": "(HAVANA) Set áo kiểu nữ DONNA hai dây voan tơ kèm cardigan",
+  "aspect": "9:16",
+  "fps": 24,
+  "canvas": { "width": 1080, "height": 1920 },
+  "duration_s": 16,
+  "clips": [
+    {
+      "id": "clip1",
+      "role": "hook",
+      "source": "video_node",
+      "camera": "push_in_slow",
+      "duration_s": 8,
+      "motion_prompt": "Camera pushes in slowly at natural real-time speed. For the first three seconds the model stands square to the lens and holds steady eye contact, one hand brushing the halter neckline, natural blinks and quiet breathing. The model then turns a full 360 degrees in place, hem lifting with the turn, hair settling as the front silhouette returns."
+    },
+    {
+      "id": "clip2",
+      "role": "showcase",
+      "source": "video_node",
+      "chain_from": "clip1.last_frame",
+      "camera": "drift_same_axis",
+      "duration_s": 8,
+      "motion_prompt": "Continuing from that pose, the model angles forty-five degrees, lifts the light cardi higher on the shoulder, eyes settling downward once, then returns to the lens. Camera drifts closer on the same axis. A soft breeze lifts the hair as the model settles back into the opening stance so the clip loops."
+    }
+  ],
+  "shots": [
+    {
+      "id": "s1",
+      "clip": "clip1",
+      "clip_offset_s": 0,
+      "duration_s": 3,
+      "text": "Lưng ngắn, vai ngang mặc gì vừa sang vừa hack dáng?",
+      "text_enter": "slide_up",
+      "emphasis_item": null,
+      "transition": "cut"
+    },
+    {
+      "id": "s2",
+      "clip": "clip1",
+      "clip_offset_s": 3,
+      "duration_s": 5,
+      "text": null,
+      "emphasis_item": "item_1",
+      "transition": "cut"
+    },
+    {
+      "id": "s3",
+      "clip": "clip2",
+      "clip_offset_s": 0,
+      "duration_s": 5,
+      "text": null,
+      "emphasis_item": "item_2",
+      "transition": "crossfade"
+    },
+    {
+      "id": "s4",
+      "clip": "clip2",
+      "clip_offset_s": 5,
+      "duration_s": 3,
+      "text": "Lưu ngay set này cho chuyến đi sắp tới",
+      "text_enter": "scale_pop",
+      "emphasis_item": null,
+      "transition": "cut"
+    }
+  ],
+  "items": [
+    {
+      "id": "item_1",
+      "name": "DONNA CAMISOLE",
+      "cutout": "items/item_1_top_front.png",
+      "cutout_back": "items/item_1_top_back.png",
+      "callout": "Hai dây voan tơ: gom dáng vai, khoe khéo lưng trần",
+      "focus_s": [2.5, 5.5],
+      "source_images": [
+        "C:/Users/ngkie/Downloads/ShopeeSave_20261031/havana_set_ao_kieu_nu_donna_hai_day_voan_to_kem_ca/main_images/1.jpg",
+        "C:/Users/ngkie/Downloads/ShopeeSave_20261031/havana_set_ao_kieu_nu_donna_hai_day_voan_to_kem_ca/main_images/6.jpg"
+      ]
+    },
+    {
+      "id": "item_2",
+      "name": "SHEER CARDIGAN",
+      "cutout": "items/item_2_cardigan.png",
+      "cutout_back": null,
+      "callout": "Cardigan voan mỏng: che bắp tay, giữ vibe nhẹ nhàng",
+      "focus_s": [8.0, 11.0],
+      "source_images": [
+        "C:/Users/ngkie/Downloads/ShopeeSave_20261031/havana_set_ao_kieu_nu_donna_hai_day_voan_to_kem_ca/main_images/1.jpg"
+      ]
+    }
+  ],
+  "audio": { "bgm": null, "bgm_start_s": null, "sfx": [] }
+}

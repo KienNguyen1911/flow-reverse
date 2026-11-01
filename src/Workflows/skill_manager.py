@@ -19,7 +19,6 @@ class PromptSkill:
     file_path: str
     raw_content: str
     system_instructions: str
-    policy_clause: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -43,20 +42,6 @@ def _extract_frontmatter(text: str) -> tuple[dict[str, str], str]:
     return frontmatter, content
 
 
-def _extract_policy_clause(text: str) -> str:
-    """Extract mandatory policy compliance / anti-prominent-people clause from skill if present."""
-    m = re.search(r'\[POLICY COMPLIANCE\]:?\s*([^\n\r`"]+)', text, re.IGNORECASE)
-    if m:
-        return m.group(1).strip()
-    m2 = re.search(r'"(An original fictional AI-generated non-celebrity character[^"]+)"', text, re.IGNORECASE)
-    if m2:
-        return m2.group(1).strip()
-    return (
-        "An original fictional AI-generated non-celebrity character, completely synthetic digital persona, "
-        "having no resemblance or intended depiction of any real-life prominent person, celebrity, or public figure."
-    )
-
-
 class SkillManager:
     """Manages prompt skills located in prompt-skills/ directory."""
 
@@ -78,7 +63,6 @@ class SkillManager:
                 skill_id = p.stem.lower()
                 name = fm.get("name", p.stem)
                 desc = fm.get("description", "")
-                policy = _extract_policy_clause(raw)
 
                 skill = PromptSkill(
                     id=skill_id,
@@ -87,7 +71,6 @@ class SkillManager:
                     file_path=str(p.relative_to(ROOT)).replace("\\", "/"),
                     raw_content=raw,
                     system_instructions=body.strip(),
-                    policy_clause=policy,
                 )
                 self._skills[skill_id] = skill
             except Exception:
@@ -97,14 +80,18 @@ class SkillManager:
         return list(self._skills.values())
 
     def get_skill(self, skill_id: str) -> Optional[PromptSkill]:
+        """Look up by exact id or exact display name.
+
+        Không dùng khớp substring: id ngắn như "lookbook" trước đây có thể trả về
+        skill đầu tiên khớp một phần, gây chọn nhầm skill.
+        """
         if not skill_id:
             return None
         sid = skill_id.lower().strip()
-        # Direct match or match by name
         if sid in self._skills:
             return self._skills[sid]
         for s in self._skills.values():
-            if s.name.lower() == sid or sid in s.id:
+            if s.name.lower() == sid:
                 return s
         return None
 

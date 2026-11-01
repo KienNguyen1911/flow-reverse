@@ -54,8 +54,27 @@ Chế độ aggressive đổi `She` → `the subject` mà **không** viết hoa 
 
 ## 1. When to Use
 
-- Node Video đã có first frame (ảnh Mode A "model only" của `lookbook-image-prompter`).
-- Cần chuỗi 2 clip 8s nối liền mạch: clip 1 (0–8s) mở đầu, clip 2 (8–16s) nối từ last frame clip 1.
+Đây là **skill video duy nhất** của pipeline tách lớp. Hai skill cũ `lookbook-video-1-push` và
+`lookbook-video-2-showcase` đã bị xoá vì chúng yêu cầu cột UI nằm trong pixel — trái với nguyên tắc
+"AI chỉ làm người mẫu".
+
+- Node Video đã có plate làm first frame (`try-on-image-prompter`, chế độ plate §2.5).
+- Cần chuỗi 2 clip 8s nối liền mạch: clip 1 (0–8s) hook, clip 2 (8–16s) nối từ last frame clip 1.
+
+### 1.1 Map từ script sang prompt
+
+Script (`configs/lookbook_script.json`) đã khai báo `clips[].role` và `clips[].motion_prompt`.
+Khi được giao một `clip.id`, đọc đúng entry đó:
+
+| `role` | Ý nghĩa | Đặc điểm prompt |
+| :--- | :--- | :--- |
+| `hook` | 0–8s, giữ chân người xem | 3 giây đầu **không được quay lưng**; eye contact trước, xoay sau |
+| `showcase` | nối tiếp, khoe phom | Mở đầu bằng `Continuing from that pose`; kết ở tư thế mở đầu clip trước để loop |
+| `detail` | cận cảnh chi tiết | Camera áp gần, chuyển động cơ thể tối thiểu |
+
+`motion_prompt` trong script là **bản nháp của người viết kịch bản**. Agent được phép viết lại cho đúng
+ngân sách từ và đúng bộ lọc, nhưng **không được đổi** thứ tự chuyển động cốt lõi (ví dụ hook vẫn phải
+eye-contact trước rồi mới xoay).
 
 ## 2. Nguyên tắc cốt lõi — ảnh đã nói thay phần mô tả
 
@@ -157,7 +176,10 @@ log `[Bridge Mode 2/2]` trước khi sửa prompt.
 
 ## 8. Output Format
 
-Trả về **chỉ hai khối code**, mỗi khối một prompt tiếng Anh, không giải thích ngoài khối:
+Số khối code **bằng đúng số clip được giao**. Nếu chỉ giao một `clip.id` → trả **một** khối. Nếu giao cả
+hai → trả hai khối, đúng thứ tự clip1 rồi clip2.
+
+Không giải thích ngoài khối, không header `[Video Prompt N]` (parser sẽ để lại rác `[`):
 
 ````text
 ```text
@@ -168,3 +190,15 @@ Trả về **chỉ hai khối code**, mỗi khối một prompt tiếng Anh, kh�
 <clip 2 prompt>
 ```
 ````
+
+---
+
+## 9. Checklist trước khi trả prompt
+
+- [ ] 25–60 từ (trần cứng 80).
+- [ ] Không header mốc thời gian nào: `0-3s:`, `[2s-5s]`, `Timeline:`, `Camera & Realism:`.
+- [ ] Không có `she`, `her`, `the woman`, `the girl`, `the lady` — gọi `the model`.
+- [ ] Không có `looks at the camera`, `facing the camera`, `glances over her shoulder`, `slow motion`.
+- [ ] Không có từ vựng UI (mục 6).
+- [ ] Không mô tả lại khuôn mặt, trang phục, ánh sáng, bối cảnh.
+- [ ] Có đúng 1 câu camera + 2 câu chuyển động cơ thể.

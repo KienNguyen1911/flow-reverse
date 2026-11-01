@@ -848,11 +848,22 @@ def sanitize_video_prompt(prompt_text: str, aggressive: bool = False) -> str:
     for pattern, repl in replacements:
         clean = re.sub(pattern, repl, clean, flags=re.IGNORECASE)
 
-    # Always strip Gemini timecode section labels and Camera & Realism identity boilerplate
-    clean = re.sub(r"Camera\s*&\s*Realism:.*$", "", clean, flags=re.IGNORECASE).strip()
-    clean = re.sub(r"-\s*0s\s*to\s*2s\s*\([^)]*\):\s*", "", clean, flags=re.IGNORECASE)
-    clean = re.sub(r"-\s*2s\s*to\s*6s\s*\([^)]*\):\s*", " ", clean, flags=re.IGNORECASE)
-    clean = re.sub(r"-\s*6s\s*to\s*8s\s*\([^)]*\):\s*", " ", clean, flags=re.IGNORECASE)
+    # Strip Gemini timecode section labels and "Camera & Realism" identity boilerplate.
+    # NOTE: `clean` đã bị join thành MỘT dòng ở trên, nên mọi regex `.*$` ở đây sẽ ăn tới hết
+    # chuỗi. Chỉ xoá đúng header, không xoá phần nội dung phía sau nó.
+    clean = re.sub(r"Camera\s*&\s*Realism\s*:\s*", "", clean, flags=re.IGNORECASE).strip()
+    # Xoá nhãn mốc thời gian ở mọi dạng phổ biến, giữ lại phần mô tả sau nhãn.
+    timecode_patterns = (
+        r"-\s*\d+(?:\.\d+)?s\s*to\s*\d+(?:\.\d+)?s\s*\([^)]*\)\s*:\s*",
+        r"\d+(?:\.\d+)?s\s*[-–]\s*\d+(?:\.\d+)?s\s*\([^)]*\)\s*:\s*",
+        r"\d+(?:\.\d+)?s\s*[-–]\s*\d+(?:\.\d+)?s\s*:\s*",
+        r"\d+(?:\.\d+)?\s*[-–]\s*\d+(?:\.\d+)?s\s*:\s*",
+        r"\[\s*\d+(?:\.\d+)?s?\s*[-–]\s*\d+(?:\.\d+)?s\s*\]\s*:?\s*",
+        r"\[\s*\d+(?:\.\d+)?s\s*\]\s*:?\s*",
+        r"\(\s*\d+(?:\.\d+)?s\s*[-–]\s*\d+(?:\.\d+)?s\s*\)\s*:\s*",
+    )
+    for pat in timecode_patterns:
+        clean = re.sub(pat, " ", clean, flags=re.IGNORECASE)
     clean = re.sub(r"\s{2,}", " ", clean).strip()
 
     if aggressive:

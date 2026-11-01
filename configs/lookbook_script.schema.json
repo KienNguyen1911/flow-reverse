@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rev-flow.local/schemas/lookbook_script.schema.json",
+  "title": "Lookbook Script",
+  "description": "Hợp đồng dữ liệu duy nhất giữa Flow (AI raw assets) và lớp dựng phim (HyperFrames). Mọi prompt và delivery manifest đều sinh ra từ file này.",
+  "type": "object",
+  "required": ["version", "slug", "aspect", "fps", "clips", "shots", "items"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_]*$",
+      "description": "Dùng làm tên thư mục delivery: out/deliveries/<slug>/"
+    },
+    "title": { "type": "string" },
+    "aspect": { "enum": ["9:16", "16:9"] },
+    "fps": {
+      "enum": [24, 30],
+      "description": "fps NGUỒN. Flow trả tối đa 24fps; 30 chỉ hợp lệ khi composition chủ động resample. KHÔNG dùng 60."
+    },
+    "duration_s": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Tổng thời lượng composition. Nếu bỏ trống, tính từ tổng clips[].duration_s."
+    },
+    "canvas": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "width": { "type": "integer", "const": 1080 },
+        "height": { "type": "integer", "const": 1920 }
+      }
+    },
+    "clips": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "role"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+          "role": { "enum": ["hook", "showcase", "detail"] },
+          "source": { "enum": ["video_node", "file"] },
+          "chain_from": {
+            "type": "string",
+            "pattern": "^[a-z0-9_]+\\.last_frame$",
+            "description": "Ví dụ 'clip1.last_frame' — clip này lấy frame cuối của clip1 làm starting frame."
+          },
+          "motion_prompt": {
+            "type": "string",
+            "description": "Prompt chuyển động (motion-only). Agent được phép viết lại theo skill."
+          },
+          "camera": {
+            "enum": ["locked", "push_in_slow", "drift_same_axis", "pan_down", "handheld_subtle", null]
+          },
+          "duration_s": { "type": "number", "exclusiveMinimum": 0, "maximum": 8 }
+        }
+      }
+    },
+    "shots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "clip", "clip_offset_s", "duration_s"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "clip": { "type": "string" },
+          "clip_offset_s": { "type": "number", "minimum": 0 },
+          "duration_s": { "type": "number", "exclusiveMinimum": 0 },
+          "text": { "type": ["string", "null"] },
+          "text_enter": {
+            "enum": ["slide_up", "typewriter", "fade", "scale_pop", null]
+          },
+          "emphasis_item": { "type": ["string", "null"] },
+          "transition": { "enum": ["cut", "crossfade", null] }
+        }
+      }
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^item_[0-9]+$" },
+          "name": { "type": "string" },
+          "cutout": {
+            "type": ["string", "null"],
+            "description": "Đường dẫn tương đối trong delivery, ví dụ items/item_1_top_front.png"
+          },
+          "cutout_back": { "type": ["string", "null"] },
+          "callout": { "type": ["string", "null"] },
+          "focus_s": {
+            "type": ["array", "null"],
+            "items": { "type": "number", "minimum": 0 },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "source_images": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Ảnh Shopee gốc dùng làm reference (đường dẫn tuyệt đối hoặc tương đối tới repo)."
+          }
+        }
+      }
+    },
+    "audio": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bgm": { "type": ["string", "null"] },
+        "bgm_start_s": { "type": ["number", "null"] },
+        "sfx": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["at_s", "file"],
+            "additionalProperties": false,
+            "properties": {
+              "at_s": { "type": "number", "minimum": 0 },
+              "file": { "type": "string" },
+              "kind": { "enum": ["pop", "whoosh", "click", null] }
+            }
+          }
+        }
+      }
+    }
+  }
+}
