@@ -1,16 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowsCounterClockwise,
+  CaretDown,
+  CaretUp,
   CheckCircle,
   Copy,
   DownloadSimple,
   FilmSlate,
   Image as ImageIcon,
+  ImageSquare,
   Info,
   ListDashes,
   Play,
   Sparkle,
   Terminal,
+  Timer,
   Trash,
   UploadSimple,
   VideoCamera,
@@ -20,7 +24,31 @@ import {
 import { api } from "../api";
 import type { Job, JobEvent } from "../types";
 import { FALLBACK_LIMITS, useLimits } from "../hooks";
+import { OrderBadge, PromptEditor, highlightPrompt } from "./canvasNodeBits";
 import { Spinner } from "./ui";
+
+/** Option list builders — giữ giá trị hiện tại của node kể cả khi options chưa tải xong. */
+function aspectRatioOptions(current: string): string[] {
+  const base = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"];
+  return base.includes(current) ? base : [current, ...base];
+}
+
+function videoRatioOptions(current: string): string[] {
+  const base = ["9:16", "16:9", "1:1"];
+  return base.includes(current) ? base : [current, ...base];
+}
+
+function resolutionOptions(current: string): string[] {
+  const base = ["1080p", "720p"];
+  return base.includes(current) ? base : [current, ...base];
+}
+
+/** Phạm vi ảnh sản phẩm — phải khớp `ITEM_SCOPE_OPTIONS` trong CanvasPanel. */
+const ITEM_SCOPE_OPTIONS: { value: "top" | "bottom" | "full_set"; label: string; hint: string }[] = [
+  { value: "top", label: "Áo", hint: "Chỉ món mặc trên: áo, camisole, cardigan" },
+  { value: "bottom", label: "Quần / Váy", hint: "Chỉ món mặc dưới: quần, váy, shorts" },
+  { value: "full_set", label: "Cả bộ", hint: "Các món xếp cạnh nhau trên một ảnh — không tách nền được" },
+];
 
 export interface CanvasDrawerNode {
   id: string;
@@ -61,6 +89,8 @@ export interface CanvasDrawerNode {
 interface CanvasDrawerProps {
   node: CanvasDrawerNode | null;
   allNodes: CanvasDrawerNode[];
+  /** Tab / vùng cần focus khi mở từ node body (pill, chip, nút Expand). */
+  initialSection?: "config" | "prompt" | "sources" | "preview" | "logs" | "error";
   onClose: () => void;
   onRunNode: (id: string, dry: boolean) => void;
   onRemoveNode: (id: string) => void;
@@ -223,6 +253,7 @@ function diagnoseError(
 export function CanvasDrawer({
   node,
   allNodes,
+  initialSection = "config",
   onClose,
   onRunNode,
   onRemoveNode,
@@ -237,11 +268,15 @@ export function CanvasDrawer({
   const [copiedLogs, setCopiedLogs] = useState(false);
   const [stopping, setStopping] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const promptAnchorRef = useRef<HTMLDivElement>(null);
+  const sourcesAnchorRef = useRef<HTMLDivElement>(null);
 
   const [aiGenerating, setAiGenerating] = useState(false);
   const [customHint, setCustomHint] = useState("");
   const [selectedSkill, setSelectedSkill] = useState("");
   const [skillsList, setSkillsList] = useState<{ id: string; name: string }[]>([]);
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [hoverUpId, setHoverUpId] = useState<string | null>(null);
 
   useEffect(() => {
     if (node) {
@@ -311,7 +346,19 @@ export function CanvasDrawer({
   // default tab on node change
   useEffect(() => {
     if (!node) return;
-    if (hasError) {
+    if (initialSection === "preview" && (node.fileUrl || node.videoUrl)) {
+      setActiveTab("preview");
+    } else if (initialSection === "logs") {
+      setActiveTab("logs");
+    } else if (initialSection === "error" && hasError) {
+      setActiveTab("error");
+    } else if (
+      initialSection === "config" ||
+      initialSection === "prompt" ||
+      initialSection === "sources"
+    ) {
+      setActiveTab("config");
+    } else if (hasError) {
       setActiveTab("error");
     } else if (node.fileUrl || node.videoUrl) {
       setActiveTab("preview");
@@ -319,6 +366,8 @@ export function CanvasDrawer({
       setActiveTab("logs");
     }
     setJob(null);
+    // `initialSection` chỉ định tab lúc mở; đổi tab sau đó là quyền của người dùng.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [node?.id, hasError]);
 
   // poll job events when open
@@ -356,6 +405,18 @@ export function CanvasDrawer({
       stop = true;
     };
   }, [node?.jobId, node?.status]);
+
+  // Scroll thẳng tới vùng được yêu cầu (Prompt / Nguồn kết nối) ngay sau khi tab render.
+  useEffect(() => {
+    if (!node || activeTab !== "config") return;
+    const anchor =
+      initialSection === "prompt" ? promptAnchorRef.current
+      : initialSection === "sources" ? sourcesAnchorRef.current
+      : null;
+    if (!anchor) return;
+    const t = window.setTimeout(() => anchor.scrollIntoView({ block: "start", behavior: "smooth" }), 80);
+    return () => window.clearTimeout(t);
+  }, [node?.id, activeTab]);
 
   // auto scroll logs
   useEffect(() => {
@@ -418,6 +479,48 @@ export function CanvasDrawer({
   const upstreams = upstreamIds
     .map((id) => allNodes.find((x) => x.id === id))
     .filter(Boolean) as CanvasDrawerNode[];
+
+  const isImageNode = node.type === "image";
+
+  /** Ghi lại danh sách nguồn đã sắp xếp — `sourceImageId` luôn = phần tử đầu. */
+  const commitSources = (sids: string[]) => {
+    onUpdateNode?.(node.id, {
+      sourceImageIds: sids,
+      sourceImageId: sids[0] ?? null,
+      status: "idle",
+      reason: null,
+    });
+  };
+
+  const moveUpstream = (from: number, to: number) => {
+    const sids = [...upstreamIds];
+    if (to < 0 || to >= sids.length || from === to) return;
+    const [moved] = sids.splice(from, 1);
+    sids.splice(to, 0, moved);
+    commitSources(sids);
+  };
+
+  const removeUpstream = (id: string) => commitSources(upstreamIds.filter((x) => x !== id));
+
+  const addUpstream = (id: string) => {
+    if (upstreamIds.includes(id)) return;
+    commitSources([...upstreamIds, id]);
+  };
+
+  // Node nguồn có thể nối thêm: không phải chính nó, không nằm trong danh sách đã nối.
+  const addableSources = allNodes
+    .filter((c) => c.id !== node.id && !upstreamIds.includes(c.id))
+    .filter((c) => c.type === "ref" || c.type === "image" || c.type === "last_frame")
+    .map((c) => ({
+      id: c.id,
+      label:
+        c.label ||
+        (c.type === "ref"
+          ? `Tham chiếu: ${c.fileName ?? c.id}`
+          : c.type === "last_frame"
+            ? `Frame cuối: ${c.id}`
+            : `Ảnh: ${c.prompt ? c.prompt.slice(0, 24) + "…" : c.id}`),
+    }));
 
   const nodeTitle =
     node.label ||
@@ -773,86 +876,315 @@ export function CanvasDrawer({
                 </div>
               )}
 
-              {node.prompt && (
-                <div className="flex flex-col gap-1">
-                  <span className="text-[11px] font-semibold text-mut">Prompt</span>
-                  <div className="rounded-ctl border border-line2 bg-panel2 p-3 text-[11.5px] font-mono text-fg leading-relaxed select-text break-words max-h-48 overflow-y-auto slim-scroll">
-                    {node.prompt}
-                  </div>
+              {node.type === "image" && (
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="rounded-ctl border border-line2 bg-panel2 p-2.5 flex flex-col gap-1">
+                    <span className="text-[10px] text-mut block">Tỷ lệ khung hình</span>
+                    <select
+                      value={node.aspectRatio}
+                      onChange={(e) => onUpdateNode?.(node.id, { aspectRatio: e.target.value })}
+                      className="h-7 rounded-ctl border border-line2 bg-panel px-1.5 text-[11.5px] text-fg outline-none focus:border-acc cursor-pointer"
+                    >
+                      {aspectRatioOptions(node.aspectRatio).map((r) => (
+                        <option key={r} value={r}>
+                          {r}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="rounded-ctl border border-line2 bg-panel2 p-2.5 flex flex-col gap-1">
+                    <span className="text-[10px] text-mut block">Seed (trống = ngẫu nhiên)</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={2147483647}
+                      value={node.seed ?? ""}
+                      onChange={(e) =>
+                        onUpdateNode?.(node.id, {
+                          seed: e.target.value === "" ? null : Number(e.target.value),
+                        })
+                      }
+                      placeholder="random"
+                      className="h-7 rounded-ctl border border-line2 bg-panel px-1.5 text-[11.5px] font-mono text-fg outline-none focus:border-acc"
+                    />
+                  </label>
                 </div>
               )}
 
               {node.type === "image" && (
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="rounded-ctl border border-line2 bg-panel2 p-2.5">
-                    <span className="text-[10px] text-mut block">Tỷ lệ khung hình</span>
-                    <span className="text-[12px] font-semibold text-fg">{node.aspectRatio}</span>
-                  </div>
-                  <div className="rounded-ctl border border-line2 bg-panel2 p-2.5">
-                    <span className="text-[10px] text-mut block">Seed</span>
-                    <span className="text-[12px] font-mono text-fg">{node.seed ?? "Ngẫu nhiên"}</span>
-                  </div>
+                <div className="rounded-ctl border border-line2 bg-panel2 p-2.5 flex flex-col gap-2">
+                  <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={!!node.isItem}
+                      onChange={(e) =>
+                        onUpdateNode?.(node.id, {
+                          isItem: e.target.checked,
+                          ...(e.target.checked ? { itemScope: node.itemScope ?? "top" } : {}),
+                        })
+                      }
+                      className="h-3.5 w-3.5 accent-[var(--color-acc)] cursor-pointer"
+                    />
+                    <span className="text-[11px] font-semibold text-dim">
+                      Đây là ảnh sản phẩm <span className="font-normal text-mut">(lưu vào items/)</span>
+                    </span>
+                  </label>
+                  {node.isItem && (
+                    <>
+                      <input
+                        type="text"
+                        value={node.itemName ?? ""}
+                        onChange={(e) => onUpdateNode?.(node.id, { itemName: e.target.value })}
+                        placeholder="Tên món — vd: Áo Kiểu Nữ Donna"
+                        className="h-7 rounded-ctl border border-line2 bg-panel px-1.5 text-[11.5px] text-fg outline-none focus:border-acc"
+                      />
+                      <div className="flex items-center gap-1">
+                        <span className="text-[10px] font-semibold text-mut shrink-0">Cắt món</span>
+                        <div className="flex items-center gap-1 flex-1">
+                          {ITEM_SCOPE_OPTIONS.map((opt) => {
+                            const active = (node.itemScope ?? "top") === opt.value;
+                            return (
+                              <button
+                                key={opt.value}
+                                type="button"
+                                onClick={() => onUpdateNode?.(node.id, { itemScope: opt.value })}
+                                title={opt.hint}
+                                className={`flex-1 h-6 rounded-[4px] text-[10px] font-semibold border transition-colors cursor-pointer ${
+                                  active
+                                    ? "border-acc bg-acc/15 text-acc"
+                                    : "border-line2 bg-panel text-dim hover:text-fg"
+                                }`}
+                              >
+                                {opt.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
 
               {node.type === "video" && (
                 <div className="grid grid-cols-2 gap-2">
-                  <div className="rounded-ctl border border-line2 bg-panel2 p-2.5">
+                  <label className="rounded-ctl border border-line2 bg-panel2 p-2.5 flex flex-col gap-1">
                     <span className="text-[10px] text-mut block">Tỷ lệ video</span>
-                    <span className="text-[12px] font-semibold text-fg">{node.videoRatio}</span>
-                  </div>
-                  <div className="rounded-ctl border border-line2 bg-panel2 p-2.5">
+                    <select
+                      value={node.videoRatio}
+                      onChange={(e) => onUpdateNode?.(node.id, { videoRatio: e.target.value })}
+                      className="h-7 rounded-ctl border border-line2 bg-panel px-1.5 text-[11.5px] text-fg outline-none focus:border-acc cursor-pointer"
+                    >
+                      {videoRatioOptions(node.videoRatio).map((r) => (
+                        <option key={r} value={r}>
+                          {r}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="rounded-ctl border border-line2 bg-panel2 p-2.5 flex flex-col gap-1">
                     <span className="text-[10px] text-mut block">Độ phân giải</span>
-                    <span className="text-[12px] font-semibold text-fg">{node.resolution}</span>
-                  </div>
+                    <select
+                      value={node.resolution}
+                      onChange={(e) => onUpdateNode?.(node.id, { resolution: e.target.value })}
+                      className="h-7 rounded-ctl border border-line2 bg-panel px-1.5 text-[11.5px] text-fg outline-none focus:border-acc cursor-pointer"
+                    >
+                      {resolutionOptions(node.resolution).map((r) => (
+                        <option key={r} value={r}>
+                          {r}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 </div>
               )}
 
               {node.type === "last_frame" && (
-                <div className="rounded-ctl border border-line2 bg-panel2 p-2.5">
-                  <span className="text-[10px] text-mut block">Xóa Watermark Flow</span>
-                  <span className="text-[12px] font-semibold text-fg">
-                    {node.removeWatermark ?? true ? "Bật (tự động xóa bằng OpenCV/Inpaint)" : "Tắt"}
-                  </span>
-                </div>
+                <label className="rounded-ctl border border-line2 bg-panel2 p-2.5 flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={node.removeWatermark ?? true}
+                    onChange={(e) => onUpdateNode?.(node.id, { removeWatermark: e.target.checked })}
+                    className="h-3.5 w-3.5 accent-[var(--color-acc)] cursor-pointer"
+                  />
+                  <span className="text-[11px] font-semibold text-dim">Tự động xóa watermark Flow</span>
+                </label>
               )}
 
               {upstreams.length > 0 && (
-                <div className="rounded-ctl border border-line2 bg-panel2 p-2.5 flex flex-col gap-1.5">
-                  <span className="text-[10px] text-mut">
-                    {upstreams.length > 1
-                      ? `Nguồn kết nối (${upstreams.length} ảnh tham chiếu)`
-                      : "Nguồn kết nối (Upstream Node)"}
-                  </span>
-                  {upstreams.map((up) => (
-                    <div key={up.id} className="flex items-center justify-between text-[11.5px] font-semibold text-fg">
-                      <span className="truncate pr-2">
-                        {up.type === "ref"
-                          ? `Ảnh tham chiếu: ${up.fileName ?? up.id}`
-                          : up.type === "video"
-                            ? `Video: ${up.prompt.slice(0, 30)}...`
-                            : up.type === "last_frame"
-                              ? `Frame Cuối: ${up.id}`
-                              : `Ảnh: ${up.prompt.slice(0, 30)}...`}
-                      </span>
-                      {up.fileUrl && (
+                <div
+                  ref={sourcesAnchorRef}
+                  className="rounded-ctl border border-line2 bg-panel2 p-2.5 flex flex-col gap-1.5 scroll-mt-2"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold text-dim">
+                      {upstreams.length > 1
+                        ? `Nguồn kết nối (${upstreams.length} ảnh tham chiếu)`
+                        : "Nguồn kết nối (Upstream Node)"}
+                    </span>
+                    {upstreams.length > 1 && (
+                      <span className="text-[9.5px] text-mut">Thứ tự = Image 1, 2, 3 trong prompt</span>
+                    )}
+                  </div>
+
+                  {upstreams.map((up, idx) => (
+                    <div
+                      key={up.id}
+                      draggable={isImageNode}
+                      onDragStart={(e) => {
+                        if (!isImageNode) return;
+                        e.dataTransfer.setData("text/plain", String(idx));
+                        e.dataTransfer.effectAllowed = "move";
+                        setDragIdx(idx);
+                      }}
+                      onDragOver={(e) => {
+                        if (!isImageNode) return;
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = "move";
+                      }}
+                      onDrop={(e) => {
+                        if (!isImageNode) return;
+                        e.preventDefault();
+                        const from = Number(e.dataTransfer.getData("text/plain"));
+                        const to = idx;
+                        if (Number.isFinite(from) && from !== to) moveUpstream(from, to);
+                        setDragIdx(null);
+                      }}
+                      onDragEnd={() => setDragIdx(null)}
+                      onMouseEnter={() => setHoverUpId(up.id)}
+                      onMouseLeave={() => setHoverUpId(null)}
+                      className={`flex items-center gap-2 rounded-ctl border px-2 py-1.5 text-[11.5px] transition-colors ${
+                        dragIdx === idx
+                          ? "border-acc/70 bg-acc/10"
+                          : hoverUpId === up.id
+                            ? "border-warn/50 bg-warn/5"
+                            : "border-line2 bg-panel"
+                      } ${isImageNode ? "cursor-grab active:cursor-grabbing" : ""}`}
+                    >
+                      {isImageNode ? <OrderBadge index={idx + 1} size="sm" /> : null}
+                      {up.fileUrl ? (
                         <img
                           src={up.fileUrl}
                           alt=""
-                          className="size-6 object-cover rounded border border-line2 shrink-0"
+                          className="size-8 object-cover rounded border border-line2 shrink-0"
                         />
+                      ) : (
+                        <div className="size-8 grid place-items-center rounded border border-line2 bg-panel2 text-mut shrink-0">
+                          <ImageIcon size={13} />
+                        </div>
+                      )}
+                      <div className="flex flex-col min-w-0 flex-1">
+                        <span className="truncate font-semibold text-fg">
+                          {up.type === "ref"
+                            ? (up.fileName ?? up.id)
+                            : up.type === "video"
+                              ? `Video: ${up.prompt.slice(0, 26)}…`
+                              : up.type === "last_frame"
+                                ? `Frame cuối: ${up.id}`
+                                : `Ảnh: ${up.prompt.slice(0, 26)}…`}
+                        </span>
+                        <span className="text-[9.5px] text-mut truncate">
+                          {up.type === "ref" ? "Ảnh upload" : up.type === "last_frame" ? "Frame cuối" : "Node ảnh"}
+                          {!up.fileUrl && up.status !== "succeeded" ? " · chưa có kết quả" : ""}
+                        </span>
+                      </div>
+                      {isImageNode && (
+                        <div className="flex items-center gap-0.5 shrink-0">
+                          <button
+                            type="button"
+                            disabled={idx === 0}
+                            onClick={() => moveUpstream(idx, idx - 1)}
+                            className="grid place-items-center size-6 rounded border border-line2 bg-panel2 text-dim hover:text-fg hover:border-line2/80 cursor-pointer transition-colors disabled:opacity-30 disabled:pointer-events-none"
+                            title="Đưa lên trước (giảm số thứ tự)"
+                          >
+                            <CaretUp size={11} weight="bold" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={idx === upstreams.length - 1}
+                            onClick={() => moveUpstream(idx, idx + 1)}
+                            className="grid place-items-center size-6 rounded border border-line2 bg-panel2 text-dim hover:text-fg hover:border-line2/80 cursor-pointer transition-colors disabled:opacity-30 disabled:pointer-events-none"
+                            title="Đưa xuống sau (tăng số thứ tự)"
+                          >
+                            <CaretDown size={11} weight="bold" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => removeUpstream(up.id)}
+                            className="grid place-items-center size-6 rounded border border-line2 bg-panel2 text-mut hover:text-err hover:border-err/50 cursor-pointer transition-colors"
+                            title="Gỡ kết nối ảnh tham chiếu này"
+                          >
+                            <X size={11} weight="bold" />
+                          </button>
+                        </div>
                       )}
                     </div>
                   ))}
+
+                  {isImageNode && addableSources.length > 0 && (
+                    <select
+                      value=""
+                      onChange={(e) => {
+                        if (e.target.value) addUpstream(e.target.value);
+                      }}
+                      className="h-7 rounded-ctl border border-line2 bg-panel px-1.5 text-[11px] text-fg focus:border-acc outline-none cursor-pointer"
+                    >
+                      <option value="">+ Nối thêm ảnh tham chiếu…</option>
+                      {addableSources.map((i) => (
+                        <option key={i.id} value={i.id}>
+                          {i.label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </div>
               )}
 
-              {node.elapsedS != null && (
-                <div className="rounded-ctl border border-line2 bg-panel2 p-2.5">
-                  <span className="text-[10px] text-mut block">Thời gian thực thi</span>
-                  <span className="text-[12px] font-mono text-fg">{node.elapsedS.toFixed(1)}s</span>
+              {/* Prompt đặt SAU nhóm cấu hình: phần cấu hình (tỷ lệ, seed, ảnh sản phẩm,
+                  nguồn kết nối) là thứ cần chỉnh trước, còn prompt dài chiếm trọn phần
+                  còn lại của drawer nên không bị đẩy xuống dưới cùng. */}
+              <div ref={promptAnchorRef} className="flex flex-col gap-1.5 scroll-mt-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] font-semibold text-dim">Prompt</span>
+                    <span className="text-[9.5px] text-mut">
+                      {node.type === "video" ? "· chuyển động 8s" : "· mô tả ảnh"}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {node.elapsedS != null && (
+                      <span
+                        className="inline-flex items-center gap-1 h-6 px-2 rounded-full border border-line2 bg-panel2 text-[10.5px] font-mono text-dim"
+                        title="Thời gian thực thi của lần chạy gần nhất"
+                      >
+                        <Timer size={11} className="text-mut" />
+                        {node.elapsedS.toFixed(1)}s
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab("preview")}
+                      disabled={!node.fileUrl && !node.videoUrl}
+                      className="inline-flex items-center gap-1 h-6 px-2 rounded-ctl border border-line2 bg-panel2 text-[10.5px] font-semibold text-dim hover:text-fg hover:border-line2/80 transition-colors cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
+                      title="Xem kết quả ảnh / video của node"
+                    >
+                      <ImageSquare size={11} />
+                      <span>Kết quả</span>
+                    </button>
+                  </div>
                 </div>
-              )}
+                <PromptEditor
+                  value={node.prompt}
+                  onChange={(v) => onUpdatePrompt?.(node.id, v)}
+                  placeholder={
+                    node.type === "video"
+                      ? "Prompt chuyển động cho video 8s…"
+                      : "Prompt mô tả ảnh cần tạo…"
+                  }
+                  minHeight={220}
+                  maxChars={limits.max_prompt_chars}
+                />
+              </div>
             </div>
           )}
 

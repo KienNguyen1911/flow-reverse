@@ -95,6 +95,23 @@ dialog.account-modal::backdrop {
   backdrop-filter: blur(3px);
 }
 
+/* Node đang được "soi" khi hover chip `#n`: nổi lên khỏi lớp node khác. */
+.canvas-node-focus {
+  box-shadow:
+    0 0 0 2px var(--color-warn),
+    0 0 22px color-mix(in srgb, var(--color-warn) 45%, transparent),
+    0 16px 40px rgb(0 0 0 / 0.55);
+  z-index: 6;
+}
+
+/* Prompt preview: clamp 3 dòng, không scrollbar để không giành sự kiện zoom canvas. */
+.prompt-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

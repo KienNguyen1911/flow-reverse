@@ -31,7 +31,15 @@ import type {
   WorkspaceCanvasState,
 } from "../types";
 import { CanvasDrawer, type CanvasDrawerNode } from "./CanvasDrawer";
+import {
+  OrderBadge,
+  PromptEditorModal,
+  PromptPreviewCard,
+  SummaryPill,
+  highlightPrompt,
+} from "./canvasNodeBits";
 import { Chip, Spinner } from "./ui";
+import { useLimits } from "../hooks";
 import { MediaPreviewModal, type PreviewMediaItem } from "./MediaPreviewModal";
 import { DeliveryModal } from "./DeliveryModal";
 
@@ -64,6 +72,10 @@ const ACTIVE = new Set(["queued", "running"]);
 
 type NodeStatus = "idle" | "queued" | "running" | "succeeded" | "failed" | "rejected" | "skipped";
 type NodeType = "ref" | "image" | "video" | "last_frame";
+
+/** Tab / section the Right Inspector should focus when opened from the node body. */
+export type DrawerSection = "config" | "prompt" | "sources" | "preview" | "logs" | "error";
+
 
 type CanvasNode = CanvasDrawerNode;
 
@@ -970,6 +982,7 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
   ref,
 ) {
   const [graph, setGraph] = useState<Graph>(loadGraph);
+  const limits = useLimits();
   const [view, setView] = useState<View>({ x: 40, y: 20, z: 1 });
   const [opts, setOpts] = useState<NodeMediaOptions | null>(null);
   const [linking, setLinking] = useState<{ id: string; kind: NodeType; side: "in" | "out" } | null>(null);
@@ -980,6 +993,17 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
   const [wfBusy, setWfBusy] = useState(false);
   const [canvasDrag, setCanvasDrag] = useState(false);
   const [drawerNodeId, setDrawerNodeId] = useState<string | null>(null);
+  const [drawerSection, setDrawerSection] = useState<DrawerSection>("config");
+  const [promptEditorNodeId, setPromptEditorNodeId] = useState<string | null>(null);
+  /** Hover trên chip `#n` → tô sáng đúng edge + node nguồn. */
+  const [focusLink, setFocusLink] = useState<{ from: string; to: string } | null>(null);
+  /** Tooltip xem nhanh ảnh tham chiếu — toạ độ viewport (portal, không bị strip cắt). */
+  const [hoverRef, setHoverRef] = useState<{
+    src: CanvasNode;
+    index: number;
+    x: number;
+    y: number;
+  } | null>(null);
   const [aiGeneratingId, setAiGeneratingId] = useState<string | null>(null);
   const [jitPromptEnabled, setJitPromptEnabled] = useState<boolean>(true);
   const [skillsList, setSkillsList] = useState<{ id: string; name: string }[]>([]);
@@ -1882,6 +1906,11 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
     [showToast],
   );
 
+  const openDrawer = useCallback((id: string, section: DrawerSection = "config") => {
+    setDrawerSection(section);
+    setDrawerNodeId(id);
+  }, []);
+
   // -- Ctrl/Cmd+G groups the current selection ------------------------------- //
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -2076,6 +2105,7 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
   const resolutions = opts?.video.resolutions ?? ["1080p", "720p"];
 
   const drawerNode = nodes.find((n) => n.id === drawerNodeId) ?? null;
+  const promptEditorNode = nodes.find((n) => n.id === promptEditorNodeId) ?? null;
 
   // Execution plan preview for the confirm modal + TopBar.
   const runUnits = useMemo(
@@ -2544,15 +2574,26 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
               const y2 = to.y + ANCHOR_Y;
               const mid = Math.max(40, Math.abs(x2 - x1) / 2);
               const active = from.status === "succeeded";
+              const focused = focusLink?.from === from.id && focusLink?.to === to.id;
               return (
                 <g key={`${from.id}->${to.id}`}>
+                  {focused && (
+                    <path
+                      d={`M ${x1} ${y1} C ${x1 + mid} ${y1}, ${x2 - mid} ${y2}, ${x2} ${y2}`}
+                      fill="none"
+                      stroke="var(--color-warn)"
+                      strokeOpacity={0.28}
+                      strokeWidth={9}
+                      strokeLinecap="round"
+                    />
+                  )}
                   <path
                     d={`M ${x1} ${y1} C ${x1 + mid} ${y1}, ${x2 - mid} ${y2}, ${x2} ${y2}`}
                     fill="none"
-                    stroke={active ? "var(--color-ok)" : "var(--color-acc)"}
-                    strokeOpacity={active ? 0.9 : 0.55}
-                    strokeWidth={2}
-                    strokeDasharray={active ? undefined : "6 5"}
+                    stroke={focused ? "var(--color-warn)" : active ? "var(--color-ok)" : "var(--color-acc)"}
+                    strokeOpacity={focused ? 1 : active ? 0.9 : 0.55}
+                    strokeWidth={focused ? 3 : 2}
+                    strokeDasharray={active || focused ? undefined : "6 5"}
                     markerEnd="url(#cv-arrow)"
                   />
                 </g>
@@ -2749,7 +2790,8 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
               }}
               onDot={(side) => handleDotClick(n, side)}
               onUpload={(file) => void uploadRef(n.id, file)}
-              onOpenDrawer={(id) => setDrawerNodeId(id)}
+              onOpenDrawer={openDrawer}
+              onOpenPromptEditor={(id) => setPromptEditorNodeId(id)}
               onPreviewMedia={setPreviewMedia}
               aiGeneratingId={aiGeneratingId}
               onGenerateAiPrompt={handleGenerateAiPrompt}
@@ -2758,6 +2800,9 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
               selected={selectedIds.includes(n.id)}
               onSelect={(additive) => toggleSelect(n.id, additive)}
               onMeasure={measureNode}
+              focusLink={focusLink}
+              onFocusLink={setFocusLink}
+              onHoverRef={setHoverRef}
               onHeaderDown={(e) => {
                 e.stopPropagation();
                 // Shift/Ctrl+click toggles membership instead of starting a drag.
@@ -2896,11 +2941,25 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
       <CanvasDrawer
         node={drawerNode}
         allNodes={nodes}
+        initialSection={drawerSection}
         onClose={() => setDrawerNodeId(null)}
         onRunNode={(id, dry) => void runNodeNow(id, dry)}
         onRemoveNode={removeNode}
         onUpdatePrompt={(id, prompt) => patchNode(id, { prompt })}
         onUpdateNode={patchNode}
+      />
+
+      {/* Centered Prompt Editor Modal (mở từ khung Prompt trên node) */}
+      <PromptEditorModal
+        open={!!promptEditorNode}
+        title={`Prompt — ${promptEditorNode?.label ?? (promptEditorNode?.type === "video" ? "Node Video" : "Node Ảnh")}`}
+        value={promptEditorNode?.prompt ?? ""}
+        onChange={(v) => {
+          if (promptEditorNode) patchNode(promptEditorNode.id, { prompt: v });
+        }}
+        onClose={() => setPromptEditorNodeId(null)}
+        placeholder="Mô tả ảnh / chuyển động cần tạo…"
+        maxChars={limits.max_prompt_chars}
       />
 
       {/* Confirm Modal (Real Run) */}
@@ -3006,6 +3065,40 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
           </div>
         </div>
       )}
+      {/* Tooltip xem nhanh ảnh tham chiếu — portal ở cấp panel nên không bị
+          strip chip (overflow) cắt mất. */}
+      {hoverRef && (
+        <div
+          className="fixed z-[70] pointer-events-none"
+          style={{
+            left: Math.min(hoverRef.x, window.innerWidth - 190),
+            top: Math.min(hoverRef.y + 8, window.innerHeight - 150),
+          }}
+        >
+          <div className="w-44 rounded-ctl border border-line2 bg-panel p-1.5 shadow-2xl">
+            {hoverRef.src.fileUrl ? (
+              <img
+                src={hoverRef.src.fileUrl}
+                alt=""
+                className="w-full h-40 object-contain rounded bg-ink"
+              />
+            ) : (
+              <div className="w-full h-40 grid place-items-center rounded bg-ink text-mut text-[10px]">
+                Chưa có ảnh kết quả
+              </div>
+            )}
+            <div className="mt-1.5 flex items-center gap-1.5">
+              <OrderBadge index={hoverRef.index} size="xs" />
+              <span className="text-[10px] text-dim truncate" title={hoverRef.src.fileName ?? ""}>
+                {hoverRef.src.type === "ref"
+                  ? (hoverRef.src.fileName ?? hoverRef.src.id)
+                  : hoverRef.src.label || hoverRef.src.id}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Media Preview Modal (Large Split View) */}
       <MediaPreviewModal
         item={previewMedia}
@@ -3043,12 +3136,19 @@ function CanvasNodeCard(props: {
   onRun: () => void;
   onDot: (side: "in" | "out") => void;
   onUpload: (file: File) => void;
-  onOpenDrawer: (id: string) => void;
+  onOpenDrawer: (id: string, section?: DrawerSection) => void;
+  onOpenPromptEditor: (id: string) => void;
   onPreviewMedia?: (item: PreviewMediaItem) => void;
   aiGeneratingId?: string | null;
   onGenerateAiPrompt?: (id: string) => void;
   skillsList?: { id: string; name: string }[];
   itemLibrary?: LibraryItem[];
+  /** Cặp (nguồn → đích) đang được hover để tô sáng edge + node nguồn. */
+  focusLink?: { from: string; to: string } | null;
+  onFocusLink?: (link: { from: string; to: string } | null) => void;
+  onHoverRef?: (
+    info: { src: CanvasNode; index: number; x: number; y: number } | null,
+  ) => void;
   selected?: boolean;
   onSelect?: (additive: boolean) => void;
   onMeasure?: (id: string, height: number) => void;
@@ -3078,6 +3178,13 @@ function CanvasNodeCard(props: {
   }, [skillsList, isVid]);
 
   const [dragOver, setDragOver] = useState(false);
+  const [mediaTab, setMediaTab] = useState<"video" | "frame">("video");
+  /** URL đã 404/không giải mã được — ẩn khung thay vì hiện icon ảnh hỏng. */
+  const [brokenMedia, setBrokenMedia] = useState<Record<string, boolean>>({});
+  const markBroken = (url?: string | null) => {
+    if (!url) return;
+    setBrokenMedia((cur) => (cur[url] ? cur : { ...cur, [url]: true }));
+  };
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
 
@@ -3097,6 +3204,17 @@ function CanvasNodeCard(props: {
   const connectedSources = currentSids
     .map((sid) => allNodes.find((i) => i.id === sid))
     .filter(Boolean) as CanvasNode[];
+
+  /** Thứ tự `#n` của node này khi nó làm ảnh tham chiếu (dùng cho badge trên header). */
+  const refOrders = useMemo(() => {
+    const out: { to: string; index: number }[] = [];
+    for (const other of allNodes) {
+      if (other.type !== "image") continue;
+      const idx = getNodeSourceIds(other).indexOf(n.id);
+      if (idx >= 0) out.push({ to: other.id, index: idx + 1 });
+    }
+    return out;
+  }, [allNodes, n.id]);
 
   const canRun =
     !wfBusy &&
@@ -3168,12 +3286,15 @@ function CanvasNodeCard(props: {
     if (f) props.onUpload(f);
   };
 
+  const isFocusSource = props.focusLink?.from === n.id;
+  const isFocusTarget = props.focusLink?.to === n.id;
+
   return (
     <div
       ref={cardRef}
       className={`canvas-node-card absolute rounded-panel border-2 bg-panel shadow-xl ${st.border} ${
         selected ? "ring-2 ring-acc ring-offset-2 ring-offset-ink" : ""
-      }`}
+      } ${isFocusSource || isFocusTarget ? "canvas-node-focus" : ""}`}
       style={{ left: n.x, top: n.y, width: NODE_W }}
       onPointerDown={(e) => {
         e.stopPropagation();
@@ -3210,6 +3331,24 @@ function CanvasNodeCard(props: {
           )}
         </span>
         <span className="text-[12px] font-bold text-fg truncate flex-1">{nodeTitle}</span>
+
+        {/* Badge thứ tự ảnh tham chiếu: node này đang là Image 1/2/3 của node ảnh nào. */}
+        {refOrders.length > 0 && (
+          <span className="flex items-center gap-0.5 shrink-0">
+            {refOrders.map((o) => (
+              <span
+                key={o.to}
+                className="inline-flex items-center gap-1 rounded-full border border-warn/50 bg-warn/15 pl-1 pr-1.5 h-[18px]"
+                title={`Đang là ảnh tham chiếu #${o.index} (Image ${o.index}) của ${
+                  allNodes.find((x) => x.id === o.to)?.label || "node ảnh"
+                }`}
+              >
+                <OrderBadge index={o.index} size="xs" muted />
+                <span className="text-[8.5px] font-bold text-warn/80 leading-none">REF</span>
+              </span>
+            ))}
+          </span>
+        )}
 
         {n.status === "running" || n.status === "queued" ? (
           <Spinner size={12} className="text-acc shrink-0" />
@@ -3326,91 +3465,73 @@ function CanvasNodeCard(props: {
         {isImg && (
           <>
             <div className="flex flex-col gap-1.5">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-semibold text-mut">
+              {/* Tiêu đề + "Xóa hết" trên một dòng riêng; strip chip chiếm trọn bề ngang
+                  node bên dưới để 5+ ảnh xuống dòng gọn (3–4 chip/hàng) thay vì 1 chip/hàng. */}
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-semibold text-mut truncate">
                   Ảnh tham chiếu ({connectedSources.length})
                 </span>
                 {connectedSources.length > 0 && (
                   <button
                     type="button"
                     onClick={() => props.onSourcesChange([])}
-                    className="text-[9.5px] text-mut hover:text-err cursor-pointer"
+                    className="text-[9.5px] text-mut hover:text-err cursor-pointer shrink-0 whitespace-nowrap"
                     title="Bỏ tất cả ảnh tham chiếu"
                   >
                     Xóa hết
                   </button>
                 )}
               </div>
-
-              {/* List of connected reference thumbnails / chips */}
-              {connectedSources.length > 0 && (
-                <div className="flex flex-col gap-1 max-h-36 overflow-y-auto slim-scroll pr-0.5">
-                  {connectedSources.map((src, idx) => (
+              <div className="flex items-center gap-1 flex-wrap">
+                {connectedSources.map((src, idx) => (
                     <div
                       key={src.id}
-                      className="group flex items-center justify-between gap-1.5 bg-panel2/90 border border-line2 rounded-ctl px-2 py-1 text-[10.5px]"
+                      className="group/ref relative shrink-0"
+                      onMouseEnter={(e) => {
+                        props.onFocusLink?.({ from: src.id, to: n.id });
+                        const r = e.currentTarget.getBoundingClientRect();
+                        props.onHoverRef?.({ src, index: idx + 1, x: r.left, y: r.bottom });
+                      }}
+                      onMouseLeave={() => {
+                        props.onFocusLink?.(null);
+                        props.onHoverRef?.(null);
+                      }}
                     >
-                      <div className="flex items-center gap-2 min-w-0">
-                        {src.fileUrl ? (
-                          <img
-                            src={src.fileUrl}
-                            alt=""
-                            className="size-6 rounded object-cover border border-line2 shrink-0 opacity-90"
-                          />
-                        ) : (
-                          <div className="size-6 rounded bg-panel border border-line2 grid place-items-center text-mut shrink-0">
-                            <ImageIcon size={12} />
-                          </div>
-                        )}
-                        <div className="flex flex-col min-w-0">
-                          <span className="truncate text-fg font-medium leading-tight">
-                            #{idx + 1}: {src.type === "ref" ? (src.fileName ?? src.id) : (src.prompt ? src.prompt.slice(0, 18) + "…" : src.id)}
-                          </span>
-                          <span className="text-[9px] text-mut truncate">
-                            {src.type === "ref" ? "Ảnh upload" : src.type === "last_frame" ? "Frame cuối" : "Node ảnh"}
-                            {!src.fileUrl && src.status !== "succeeded" ? " (chưa có kết quả)" : ""}
-                          </span>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const next = currentSids.filter((id) => id !== src.id);
-                          props.onSourcesChange(next);
-                        }}
-                        className="text-mut hover:text-err p-1 rounded hover:bg-panel transition-colors cursor-pointer shrink-0 ml-1"
-                        title="Gỡ ảnh tham chiếu này"
+                      <div
+                        className={`inline-flex items-center gap-1 h-6 pl-1 pr-1.5 rounded-full border text-[10px] font-semibold transition-colors ${
+                          props.focusLink?.from === src.id && props.focusLink?.to === n.id
+                            ? "border-warn/70 bg-warn/20 text-warn"
+                            : "border-line2 bg-panel2 text-dim hover:border-warn/50 hover:text-fg"
+                        }`}
+                        title={
+                          src.type === "ref"
+                            ? `${src.fileName ?? src.id} — Image ${idx + 1}`
+                            : `${sourceLabel(src)} — Image ${idx + 1}`
+                        }
                       >
-                        <X size={12} weight="bold" />
-                      </button>
+                        <OrderBadge index={idx + 1} size="xs" />
+                        {src.fileUrl ? (
+                          <img src={src.fileUrl} alt="" className="size-4 rounded-[3px] object-cover" />
+                        ) : (
+                          <ImageIcon size={11} className="text-mut" />
+                        )}
+                      </div>
                     </div>
                   ))}
-                </div>
-              )}
-
-              {/* Selector to add another source */}
-              {availableOptions.length > 0 && (
-                <select
-                  value=""
-                  onChange={(e) => {
-                    if (e.target.value) {
-                      props.onSourcesChange([...currentSids, e.target.value]);
-                    }
-                  }}
-                  className="h-7 rounded-ctl border border-line2 bg-panel2 px-1.5 text-[11px] text-fg focus:border-acc outline-none cursor-pointer"
-                >
-                  <option value="">
-                    {connectedSources.length === 0
-                      ? "+ Chọn ảnh tham chiếu (tùy chọn)"
-                      : "+ Nối thêm ảnh tham chiếu…"}
-                  </option>
-                  {availableOptions.map((i) => (
-                    <option key={i.id} value={i.id}>
-                      {sourceLabel(i)}
-                    </option>
-                  ))}
-                </select>
-              )}
+                  {availableOptions.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => props.onOpenDrawer(n.id, "sources")}
+                      className="shrink-0 grid place-items-center size-6 rounded-full border border-dashed border-line2 text-mut hover:border-acc hover:text-acc transition-colors cursor-pointer"
+                      title="Nối thêm ảnh tham chiếu (mở Cấu hình)"
+                    >
+                      <Plus size={11} weight="bold" />
+                    </button>
+                  )}
+                  {connectedSources.length === 0 && availableOptions.length === 0 && (
+                    <span className="text-[9.5px] text-mut">Chưa có ảnh nào</span>
+                  )}
+              </div>
 
               {sourceBlocked && (
                 <p className="text-[10px] text-warn leading-snug">
@@ -3461,13 +3582,13 @@ function CanvasNodeCard(props: {
               </div>
             </div>
 
-            {/* Ô này KHÔNG gắn ảnh — ảnh tham chiếu nằm ở ô "+ Chọn ảnh tham chiếu" phía trên.
+            {/* Ô này KHÔNG gắn ảnh — ảnh tham chiếu nằm ở strip pill phía trên.
                 Nó chỉ đánh dấu: ảnh node này sinh ra là **ảnh sản phẩm**, nên được chép vào
                 thư viện `out/items/<project>/` ngay khi sinh xong. Tên món quyết định tên file.
-                Không phụ thuộc script: người bán có bao nhiêu món cũng chỉ cần tick ô này. */}
+                Phạm vi cắt món (Áo/Quần/Cả bộ) đã chuyển vào Drawer cho gọn node. */}
             {n.type === "image" && (
-              <div className="flex flex-col gap-1">
-                <label className="flex items-center gap-1.5 cursor-pointer select-none">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <label className="flex items-center gap-1.5 cursor-pointer select-none shrink-0">
                   <input
                     type="checkbox"
                     checked={!!n.isItem}
@@ -3481,56 +3602,18 @@ function CanvasNodeCard(props: {
                     }
                     className="h-3 w-3 accent-[var(--acc)] cursor-pointer"
                   />
-                  <span className="text-[10px] font-semibold text-mut">
-                    Đây là ảnh sản phẩm{" "}
-                    <span className="font-normal text-dim">(lưu vào thư viện items/)</span>
-                  </span>
+                  <span className="text-[10px] font-semibold text-mut whitespace-nowrap">Ảnh sản phẩm</span>
                 </label>
                 {n.isItem && (
                   <input
                     type="text"
                     value={n.itemName ?? ""}
                     onChange={(e) => props.onFieldChange({ itemName: e.target.value })}
-                    placeholder="Tên món — vd: Áo Kiểu Nữ Donna"
+                    placeholder="Tên món…"
                     list="canvas-item-library"
-                    className="h-7 rounded-ctl border border-line2 bg-panel2 px-1.5 text-[11px] text-fg focus:border-acc outline-none"
+                    className="h-6 min-w-0 flex-1 rounded-ctl border border-line2 bg-panel2 px-1.5 text-[10px] text-fg focus:border-acc outline-none"
                     title="Tên file trong thư viện: bỏ dấu, thường hoá, cách nhau bằng _"
                   />
-                )}
-                {/* Ảnh ref Shopee là CẢ BỘ. Không chọn phạm vi thì model tự lấy món nổi
-                    bật nhất — thực tế luôn ra chiếc áo, không bao giờ ra quần. */}
-                {n.isItem && (
-                  <div className="flex flex-col gap-1">
-                    <div className="flex items-center gap-1">
-                      <span className="text-[10px] font-semibold text-mut shrink-0">Cắt món</span>
-                      <div className="flex items-center gap-1 flex-1">
-                        {ITEM_SCOPE_OPTIONS.map((opt) => {
-                          const active = (n.itemScope ?? "top") === opt.value;
-                          return (
-                            <button
-                              key={opt.value}
-                              type="button"
-                              onClick={() => props.onFieldChange({ itemScope: opt.value })}
-                              title={opt.hint}
-                              className={`flex-1 h-6 rounded-[4px] text-[10px] font-semibold border transition-colors cursor-pointer ${
-                                active
-                                  ? "border-acc bg-acc/15 text-acc"
-                                  : "border-line2 bg-panel2 text-dim hover:text-fg"
-                              }`}
-                            >
-                              {opt.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                    {n.itemScope === "full_set" && (
-                      <p className="text-[9.5px] leading-snug text-warn">
-                        Cả bộ nằm chung một ảnh ⇒ không tách nền bằng rembg được (alpha dính
-                        liền). Dùng thẳng ảnh nền trơn.
-                      </p>
-                    )}
-                  </div>
                 )}
                 <datalist id="canvas-item-library">
                   {(itemLibrary ?? []).map((it) => (
@@ -3540,44 +3623,34 @@ function CanvasNodeCard(props: {
               </div>
             )}
 
-            <textarea
-              rows={2}
-              value={n.prompt}
-              onChange={(e) => props.onPromptChange(e.target.value)}
-              placeholder="Prompt mô tả ảnh cần tạo…"
-              className="w-full rounded-ctl border border-line2 bg-panel2 p-2 text-[11px] font-mono text-fg focus:border-acc outline-none resize-y leading-relaxed"
+            <PromptPreviewCard
+              prompt={n.prompt}
+              placeholder="Prompt mô tả ảnh cần tạo… bấm để sửa"
+              onExpand={() => props.onOpenPromptEditor(n.id)}
             />
 
-            <div className="grid grid-cols-2 gap-1.5">
-              <label className="flex flex-col gap-0.5">
-                <span className="text-[10px] font-semibold text-mut">Tỷ lệ</span>
-                <select
-                  value={n.aspectRatio}
-                  onChange={(e) => props.onFieldChange({ aspectRatio: e.target.value })}
-                  className="h-7 rounded-ctl border border-line2 bg-panel2 px-1.5 text-[11px] text-fg focus:border-acc outline-none"
-                >
-                  {imageRatios.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                      {verifiedRatios.has(r) ? "" : " (chưa verify)"}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="flex flex-col gap-0.5">
-                <span className="text-[10px] font-semibold text-mut">Seed (tùy chọn)</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={2147483647}
-                  value={n.seed ?? ""}
-                  onChange={(e) =>
-                    props.onFieldChange({ seed: e.target.value === "" ? null : Number(e.target.value) })
-                  }
-                  placeholder="random"
-                  className="h-7 rounded-ctl border border-line2 bg-panel2 px-1.5 text-[11px] text-fg focus:border-acc outline-none"
+            {/* Summary pills thay cho dropdown Tỷ lệ + ô Seed: 1 hàng, bấm → Drawer. */}
+            <div className="flex items-center gap-1 flex-wrap">
+              <SummaryPill
+                value={n.aspectRatio + (verifiedRatios.has(n.aspectRatio) ? "" : " ⚠")}
+                title={`Tỷ lệ khung hình: ${n.aspectRatio}${
+                  verifiedRatios.has(n.aspectRatio) ? "" : " (chưa verify)"
+                } — bấm để đổi`}
+                onClick={() => props.onOpenDrawer(n.id, "config")}
+              />
+              <SummaryPill
+                value={`Seed: ${n.seed ?? "random"}`}
+                title="Seed — bấm để đổi trong Cấu hình"
+                onClick={() => props.onOpenDrawer(n.id, "config")}
+              />
+              {n.isItem && (
+                <SummaryPill
+                  tone="warn"
+                  value={`Sản phẩm · ${ITEM_SCOPE_OPTIONS.find((o) => o.value === (n.itemScope ?? "top"))?.label ?? "Áo"}`}
+                  title="Ảnh sản phẩm lưu vào thư viện items/ — bấm để sửa"
+                  onClick={() => props.onOpenDrawer(n.id, "config")}
                 />
-              </label>
+              )}
             </div>
           </>
         )}
@@ -3648,52 +3721,31 @@ function CanvasNodeCard(props: {
               </div>
             </div>
 
-            <textarea
-              rows={2}
-              value={n.prompt}
-              onChange={(e) => props.onPromptChange(e.target.value)}
-              placeholder="Prompt chuyển động cho video 8s…"
-              className="w-full rounded-ctl border border-line2 bg-panel2 p-2 text-[11px] font-mono text-fg focus:border-acc outline-none resize-y leading-relaxed"
+            <PromptPreviewCard
+              prompt={n.prompt}
+              placeholder="Prompt chuyển động cho video 8s… bấm để sửa"
+              onExpand={() => props.onOpenPromptEditor(n.id)}
             />
 
-            <div className="grid grid-cols-2 gap-1.5">
-              <label className="flex flex-col gap-0.5">
-                <span className="text-[10px] font-semibold text-mut">Tỷ lệ video</span>
-                <select
-                  value={n.videoRatio}
-                  onChange={(e) => props.onFieldChange({ videoRatio: e.target.value })}
-                  className="h-7 rounded-ctl border border-line2 bg-panel2 px-1.5 text-[11px] text-fg focus:border-acc outline-none"
-                >
-                  {videoRatios.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="flex flex-col gap-0.5">
-                <span className="text-[10px] font-semibold text-mut">Độ phân giải</span>
-                <select
-                  value={n.resolution}
-                  onChange={(e) => props.onFieldChange({ resolution: e.target.value })}
-                  className="h-7 rounded-ctl border border-line2 bg-panel2 px-1.5 text-[11px] text-fg focus:border-acc outline-none"
-                >
-                  {resolutions.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            {!n.sourceImageId && (
-              <input
-                value={n.autoImagePrompt}
-                onChange={(e) => props.onFieldChange({ autoImagePrompt: e.target.value })}
-                placeholder="Prompt ảnh khung (bỏ trống = dùng prompt chính)"
-                className="w-full h-7 rounded-ctl border border-line2 bg-panel2 px-2 text-[10.5px] text-fg focus:border-acc outline-none"
+            {/* Summary pills: Tỷ lệ • Độ phân giải • Frame nguồn — chỉnh chi tiết trong Drawer. */}
+            <div className="flex items-center gap-1 flex-wrap">
+              <SummaryPill
+                value={n.videoRatio}
+                title={`Tỷ lệ video: ${n.videoRatio} — bấm để đổi`}
+                onClick={() => props.onOpenDrawer(n.id, "config")}
               />
-            )}
+              <SummaryPill
+                value={n.resolution}
+                title={`Độ phân giải: ${n.resolution} — bấm để đổi`}
+                onClick={() => props.onOpenDrawer(n.id, "config")}
+              />
+              <SummaryPill
+                label="Frame"
+                value={upstream ? (upstream.type === "last_frame" ? "Nối tiếp" : "Node Ảnh") : "Auto"}
+                title="Ảnh khung nguồn — bấm để đổi trong Cấu hình"
+                onClick={() => props.onOpenDrawer(n.id, "config")}
+              />
+            </div>
           </>
         )}
 
@@ -3745,43 +3797,92 @@ function CanvasNodeCard(props: {
           </>
         )}
 
-        {/* Result Preview */}
-        {(isImg || isLastFrame ? n.fileUrl : n.videoUrl) && (
-          <div className="rounded-ctl overflow-hidden border border-line2 bg-panel2 relative group">
-            {isImg || isLastFrame ? (
-              <img
-                src={n.fileUrl!}
-                alt="Kết quả"
-                className="w-full max-h-40 object-contain cursor-pointer hover:opacity-95 transition-opacity"
-                onClick={() =>
-                  props.onPreviewMedia?.({
-                    url: n.fileUrl!,
-                    name: n.label || (isImg ? "Node Ảnh" : "Frame Cuối"),
-                    category: "image",
-                    prompt: n.prompt,
-                    resolution: n.aspectRatio,
-                    aspect_ratio: n.aspectRatio,
-                    seed: n.seed,
-                  })
-                }
-                title="Bấm để xem ảnh to với kích thước đầy đủ"
-              />
-            ) : (
-              <video src={n.videoUrl!} controls className="w-full max-h-40" />
-            )}
+        {/* Result Preview — với Node Video, Video và Ảnh khung dùng chung MỘT khung
+            có tab chuyển đổi nhỏ, thay vì hai khung xếp dọc (giảm nửa chiều cao).
+            Chỉ render khi thực sự có media: một <video> rỗng vẫn chiếm 300×150 và
+            hiện khung đen "0:00" — đó là lỗi UI khi node chưa có kết quả. */}
+        {(() => {
+          const hasImage = !!(n.fileUrl && (isImg || isLastFrame) && !brokenMedia[n.fileUrl]);
+          const hasVideo = isVid && !!n.videoUrl && !brokenMedia[n.videoUrl];
+          const hasFrame = isVid && !!n.frameUrl && !brokenMedia[n.frameUrl];
+          const showVideo = hasVideo && (mediaTab === "video" || !hasFrame);
+          if (!hasImage && !hasVideo && !hasFrame) return null;
+          return (
+            <div className="rounded-ctl overflow-hidden border border-line2 bg-panel2 relative group">
+              {hasVideo && hasFrame && (
+                <div className="absolute top-1.5 left-1.5 z-10 flex items-center gap-0.5 rounded-full border border-line2 bg-ink/85 p-0.5 backdrop-blur-sm">
+                  {([
+                    { key: "video", label: "Video" },
+                    { key: "frame", label: "Ảnh khung" },
+                  ] as const).map((tb) => (
+                    <button
+                      key={tb.key}
+                      type="button"
+                      onClick={() => setMediaTab(tb.key)}
+                      className={`h-[18px] px-1.5 rounded-full text-[9px] font-bold transition-colors cursor-pointer ${
+                        mediaTab === tb.key ? "bg-acc text-accink" : "text-dim hover:text-fg"
+                      }`}
+                    >
+                      {tb.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {hasImage ? (
+                <img
+                  src={n.fileUrl!}
+                  alt="Kết quả"
+                  onError={() => markBroken(n.fileUrl)}
+                  className="w-full max-h-40 object-contain cursor-pointer hover:opacity-95 transition-opacity"
+                  onClick={() =>
+                    props.onPreviewMedia?.({
+                      url: n.fileUrl!,
+                      name: n.label || (isImg ? "Node Ảnh" : "Frame Cuối"),
+                      category: "image",
+                      prompt: n.prompt,
+                      resolution: n.aspectRatio,
+                      aspect_ratio: n.aspectRatio,
+                      seed: n.seed,
+                    })
+                  }
+                  title="Bấm để xem ảnh to với kích thước đầy đủ"
+                />
+              ) : showVideo ? (
+                <video
+                  src={n.videoUrl!}
+                  controls
+                  onError={() => markBroken(n.videoUrl)}
+                  className="w-full max-h-40"
+                />
+              ) : (
+                <img
+                  src={n.frameUrl!}
+                  alt="Ảnh khung"
+                  onError={() => markBroken(n.frameUrl)}
+                  className="w-full max-h-40 object-contain cursor-pointer hover:opacity-95 transition-opacity bg-ink/40"
+                  onClick={() =>
+                    props.onPreviewMedia?.({
+                      url: n.frameUrl!,
+                      name: `${n.label || "Video"} - Khung hình (First Frame)`,
+                      category: "image",
+                    })
+                  }
+                  title="Ảnh khung đã dùng / tự tạo — bấm để xem to"
+                />
+              )}
             <div className="absolute top-1.5 right-1.5 flex items-center gap-1">
               <button
                 type="button"
                 onClick={() =>
                   props.onPreviewMedia?.({
-                    url: isImg || isLastFrame ? n.fileUrl! : n.videoUrl!,
+                    url: showVideo ? n.videoUrl! : hasImage ? n.fileUrl! : n.frameUrl!,
                     name: n.label || (isImg ? "Node Ảnh" : isVid ? "Node Video" : "Frame Cuối"),
-                    category: isVid ? "video" : "image",
+                    category: showVideo ? "video" : "image",
                     prompt: n.prompt,
                     resolution: isVid ? n.resolution : n.aspectRatio,
                     aspect_ratio: isVid ? n.videoRatio : n.aspectRatio,
                     seed: n.seed,
-                    duration_s: isVid ? 8 : undefined,
+                    duration_s: showVideo ? 8 : undefined,
                   })
                 }
                 className="grid place-items-center size-7 rounded-ctl bg-ink/80 border border-line2 text-dim hover:text-acc cursor-pointer shadow-sm transition-colors"
@@ -3790,7 +3891,7 @@ function CanvasNodeCard(props: {
                 <ArrowsOut size={13} weight="bold" />
               </button>
               <a
-                href={isImg || isLastFrame ? n.fileUrl! : n.videoUrl!}
+                href={showVideo ? n.videoUrl! : hasImage ? n.fileUrl! : n.frameUrl!}
                 download
                 className="grid place-items-center size-7 rounded-ctl bg-ink/80 border border-line2 text-dim hover:text-acc cursor-pointer shadow-sm transition-colors"
                 title="Tải xuống"
@@ -3799,40 +3900,8 @@ function CanvasNodeCard(props: {
               </a>
             </div>
           </div>
-        )}
-
-        {/* Video node auto frame preview */}
-        {isVid && n.frameUrl && (
-          <div className="relative group overflow-hidden rounded-ctl border border-line2">
-            <img
-              src={n.frameUrl}
-              alt="Ảnh khung"
-              className="w-full max-h-16 object-cover opacity-80 cursor-pointer hover:opacity-100 transition-opacity"
-              title="Ảnh khung đã dùng / tự tạo — Bấm để xem to"
-              onClick={() =>
-                props.onPreviewMedia?.({
-                  url: n.frameUrl!,
-                  name: `${n.label || "Video"} - Khung hình (First Frame)`,
-                  category: "image",
-                })
-              }
-            />
-            <button
-              type="button"
-              onClick={() =>
-                props.onPreviewMedia?.({
-                  url: n.frameUrl!,
-                  name: `${n.label || "Video"} - Khung hình (First Frame)`,
-                  category: "image",
-                })
-              }
-              className="absolute top-1 right-1 grid place-items-center size-5 rounded bg-ink/80 text-dim hover:text-acc cursor-pointer shadow-sm transition-colors"
-              title="Xem ảnh to"
-            >
-              <ArrowsOut size={11} weight="bold" />
-            </button>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Sleek Error Banner (opens Right Drawer) */}
         {(n.status === "failed" || n.status === "rejected" || n.status === "skipped") && (
