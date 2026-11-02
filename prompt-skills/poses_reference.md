@@ -158,13 +158,19 @@ distorted joints or exaggerated anatomical modifications.
 [END HEIGHT & PROPORTION OPTIMIZATION]
 ```
 
-Khối này là bản điều chỉnh của khối cùng tên trong `try-on-image-prompter.md`. Hai tham số đã đổi so với bản
-try-on, có lý do:
+Khối này là bản điều chỉnh của khối cùng tên trong `try-on-image-prompter.md`. Hai tham số đã đổi so với **bản
+try-on trước V2 (70mm / 82-85%)**, có lý do:
 
-| Tham số | Try-on | Pose library | Vì sao đổi |
+| Tham số | Try-on V1 (cũ) | Pose library | Vì sao |
 | :--- | :--- | :--- | :--- |
 | Tiêu cự | 70mm | **50mm** | Pose có tay giơ cao, gối nâng, chân tách ngang. 70mm nén các chi này vào thân và làm dáng đọc ra "dẹt". 50mm giữ được độ sâu của tư thế. |
 | Occupancy | 82-85% | **76%** | 82-85% quá sát mép: `pose_14` (gối nâng cao) và `pose_11` (mũi chân duỗi) bị cắt gót. 76% chừa đủ biên cho mọi pose trong thư viện. |
+
+> Từ V2, khối try-on đã đồng bộ về `50mm` + `76%` + `horizon level` + `waist level` + tilt `3°` như bảng
+> trên; khác biệt duy nhất còn lại là **Body Proportion**: pose library neo tuyệt đối (`168 cm`,
+> `seven-and-a-half head-to-body ratio`) vì đó là một nhân vật do mình định nghĩa, còn try-on giữ đúng
+> tỷ lệ của Ảnh 1. Đừng "đồng bộ" dòng Body Proportion giữa hai nơi — xem
+> `try-on-image-prompter.md` §2.2.2a.
 
 ## 5. Negative prompt dùng chung
 

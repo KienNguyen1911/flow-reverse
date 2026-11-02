@@ -1,6 +1,6 @@
 ---
 name: Ảnh Thử Đồ (Try-On)
-description: Tạo prompt ảnh thử đồ và ảnh plate cho Google Flow. Ảnh chỉ sinh người mẫu mặc đồ, không UI; có khối HEIGHT & PROPORTION OPTIMIZATION cố định để người mẫu đọc ra cao, thanh thoát mà không đổi vóc dáng thật; có chế độ plate (một ảnh, studio trơn) làm first frame cho video lookbook. Prompt video thuộc `lookbook-video-prompter`. Không dùng dòng [POLICY COMPLIANCE].
+description: Tạo prompt ảnh thử đồ và ảnh plate cho Google Flow theo kiến trúc V2 (7 module, thứ tự ưu tiên rõ). Ảnh chỉ sinh người mẫu mặc đồ, không UI; giữ đúng nhận diện và tỷ lệ giải phẫu của Ảnh 1 thay vì áp một tỷ lệ đầu-thân cố định; có khối HEIGHT & PROPORTION OPTIMIZATION cố định để người mẫu đọc ra cao, thanh thoát mà không đổi vóc dáng thật; có chế độ plate (một ảnh, studio trơn) làm first frame cho video lookbook. Prompt video thuộc `lookbook-video-prompter`. Không dùng dòng [POLICY COMPLIANCE].
 ---
 
 # Flow Fashion Prompt Director — Try-On Photo
@@ -54,7 +54,7 @@ first frame video được — chữ sẽ méo và phải bỏ một phần khun
 | :--- | :--- |
 | Ảnh 1 | Identity Anchor — người mẫu gốc của người dùng |
 | Ảnh 2 | Garment & Pose Reference — người mẫu/ma-nơ-canh đang mặc trang phục cần thử |
-| Ảnh 3 (tuỳ chọn) | Background Reference — lấy bối cảnh và ánh sáng. Không có thì giữ bối cảnh của Ảnh 2 |
+| Ảnh 3 (tuỳ chọn) | Background Reference — **chỉ** lấy bối cảnh và ánh sáng. Không có thì dùng studio trơn mô tả trong module 5 (không kế thừa bối cảnh Ảnh 2) |
 
 **Chế độ Plate** (§2.5) chỉ nhận **một** ảnh duy nhất — ảnh đó đóng cả vai identity và trang phục.
 
@@ -65,21 +65,32 @@ first frame video được — chữ sẽ méo và phải bỏ một phần khun
 Chỉ dẫn thẳng: thay nhận diện khuôn mặt từ Ảnh 1 vào chủ thể của Ảnh 2; giữ nguyên tuyệt đối trang
 phục của Ảnh 2.
 
-**Bản 2 — Detailed Realism Try-On Prompt (chống mượt AI)**
+**Bản 2 — Detailed Realism Try-On Prompt (V2 — 7 module)**
 
-Gồm 5 khối, **theo đúng thứ tự này** (thứ tự quan trọng: Identity/Garment đứng trước, Height đứng
-sau, Negative đứng cuối cùng — model đọc từ đầu đến cuối và khối cuối là thứ nó bám vào):
+Prompt gồm **7 module, theo đúng thứ tự này**. Thứ tự là thứ tự ưu tiên khi hai mục tiêu xung đột
+với nhau — model đọc từ đầu đến cuối, module đứng trước thắng:
 
-1. **Câu mở + `[IDENTITY & OUTFIT PRESERVATION]`** — khoá gương mặt, mắt, mũi, môi, kiểu tóc, kết
-   cấu cơ thể từ Ảnh 1; khoá thiết kế, màu, chất liệu, cách may, layering từ Ảnh 2. Câu "Do not
-   redesign, simplify, replace or omit any clothing elements" là mệnh lệnh chống thu gọn phom.
-2. **`[POSE & PROPORTION LOCK]`** — chọn pose cụ thể (§2.2.1a) hoặc Mode A/B (§2.2.1) + bộ chống-lùn dùng chung.
-3. **`[HEIGHT & PROPORTION OPTIMIZATION]`** — khối cố định, chèn nguyên văn (§2.2.2). Điều khiển
-   *cách nhìn* (bố cục, phối cảnh, tiêu cự, đường silhouette), **không** phải chỗ yêu cầu vẽ lại cơ thể.
-4. **`[ENVIRONMENT & PHOTOGRAPHY STYLE]`** — bối cảnh + ánh sáng từ Ảnh 3, hoặc Ảnh 2 nếu thiếu Ảnh 3.
-5. **Negative** — gom đủ 4 nhóm: UI/chữ, phối cảnh, giải phẫu, **và chân** (đùi chồng, chân dính khối).
+| # | Module | Mức | Kiểm soát điều gì |
+| :--- | :--- | :--- | :--- |
+| 1 | `[IDENTITY LOCK]` | Critical | Khuôn mặt, mắt, mũi, môi, tóc, da từ Ảnh 1. Không beautify, không làm thon mặt |
+| 2 | `[GARMENT FIDELITY]` | Critical | Trang phục từ Ảnh 2: phom, màu, chất liệu, may, layering, branding có thật trên đồ |
+| 3 | `[ANATOMY & POSE]` | High | Tỷ lệ cơ thể gốc, tư thế, hướng thân **và hướng đầu/mắt riêng** |
+| 4 | `[HEIGHT & PROPORTION OPTIMIZATION]` | High | Cách máy ảnh ghi lại cơ thể: góc, khoảng cách, tiêu cự, bố cục, silhouette |
+| 5 | `[ENVIRONMENT & LIGHTING]` | Medium | Bối cảnh + ánh sáng từ Ảnh 3 nếu có; không có thì studio mô tả sẵn |
+| 6 | `[PHOTOGRAPHY AESTHETICS]` | Medium | Da thật, vân vải thật, film grain, phong cách editorial |
+| 7 | `Negative` | Low | Chỉ những lỗi thật sự cần loại trừ, gom 5 nhóm, **không lặp lại module 1–6** |
 
-Bộ modifier chống mượt AI nằm trong khối 4, dùng đúng cụm:
+Ba mục tiêu của một ảnh try-on, xếp theo mức ưu tiên khi phải hy sinh một cái:
+
+1. **Identity consistency** — kết quả phải là đúng người trong Ảnh 1.
+2. **Garment consistency** — đúng bộ đồ trong Ảnh 2.
+3. **Anatomy consistency** — đúng vóc dáng thật, không kéo giãn.
+4. **Presentation consistency** — tư thế, góc chụp, bố cục.
+
+**Không hy sinh 1–3 để được một tư thế đẹp hơn.** Nếu pose trong thư viện (§2.2.1a) xung đột với
+một trong ba mục tiêu đầu, đổi pose — không sửa cơ thể, không sửa trang phục.
+
+Bộ modifier chống mượt AI nằm trong module 6, dùng đúng cụm:
 
 ```text
 Raw candid fashion photography, natural lifestyle editorial aesthetic, realistic skin texture,
@@ -98,7 +109,7 @@ authentic fabric weave, subtle film grain, natural photographic imperfections.
 
 Model ảnh (Nano Banana / Gemini image) mặc định hay dựng **dáng trực diện**: hai vai và hai hông
 song song mặt phẳng ảnh, hai bàn chân ngang nhau, đùi dính vào nhau. Đây là lý do số 1 khiến mẫu
-trông **thấp và bè**, kể cả khi đã có `low camera angle` và tiêu cự nén phối cảnh:
+trông **thấp và bè**, kể cả khi đã có `low camera angle` và khoảng cách máy nén phối cảnh:
 
 - Khung toàn thân bị giới hạn bởi chiều cao khung. Vai/hông mở ngang tối đa ⇒ tỷ lệ cao : rộng của
   silhouette chạm mức thấp nhất. Mẫu đủ pixel chiều cao nhưng *đọc* ra là lùn.
@@ -122,7 +133,7 @@ thêu trước ngực, đai eo). Không chọn Mode B chỉ vì tiện — Mode 
 
 Mode A/B là **ngân sách xoay thân**. Để khỏi phải tự nghĩ ra dáng mỗi lần, chọn pose thật từ
 `poses/pose_assets.json` (xem `poses_reference.md`), rồi chèn `prompt_core` của pose đó vào khối
-`[POSE & PROPORTION LOCK]`. Pose đã được hiệu chuẩn sẵn cho 50mm + waist level, khớp §2.2.2.
+`[ANATOMY & POSE]`. Pose đã được hiệu chuẩn sẵn cho 50mm + waist level, khớp §2.2.2.
 
 | Mục tiêu ảnh | Pose dùng được | Mode | Vì sao hợp try-on |
 | :--- | :--- | :--- | :--- |
@@ -169,6 +180,8 @@ and narrow, shoulders and hips presented at a three-quarter angle instead of squ
 near shoulder lower than the far shoulder, weight settled on the back leg,
 the front foot placed forward without crossing the body's vertical centerline,
 one arm relaxed away from the torso to keep the waistline visible.
+Head turned gently back toward the camera on the neck, so the face stays readable while the torso
+keeps its three-quarter angle; eyes toward the lens or just beside it, chin level.
 ```
 
 ```text
@@ -183,22 +196,22 @@ One foot is placed slightly forward by about five centimetres, creating subtle d
 crossing the body's vertical centreline. Both knees remain naturally straight and relaxed.
 Keep the thighs, knees, calves and ankles clearly distinguishable, with clear separation between
 the two legs. Both feet point naturally forward with a slight outward angle, weight balanced.
+Head facing the camera almost square-on, chin level, eyes to the lens or just beside it.
 ```
 
-**Cả hai mode đều bắt buộc** — đây là bộ chống-lùn dùng chung:
+**Cả hai mode đều bắt buộc** — đây là bộ chống-lùn dùng chung, và là **chỗ duy nhất** trong prompt
+khai báo tư thế chân. Không lặp lại các cụm này trong Negative:
 
 ```text
-no crossed legs, no overlapping thighs, no legs merging into one mass,
-no wide-legged stance, no excessive lateral leg separation, no deeply bent knees,
-no hidden legs, no obscured ankles, no feet shoulder-width apart,
-no arms hanging symmetrically close to both sides of the torso
+Natural stance: the two legs clearly separated and individually readable from hip to ankle, both
+feet fully visible and grounded, knees relaxed rather than locked or deeply bent.
 ```
 
-> **Vì sao `no overlapping thighs` quan trọng ngang với góc máy:** khi hai đùi dính thành một khối,
-> mắt không tìm được điểm kết thúc của đường chân — chân đọc ra ngắn hơn thực tế rất nhiều, bất kể
-> camera đặt thấp bao nhiêu. Đây là lỗi mà cụm cũ `front foot placed forward and slightly across the
-> body line` **gây ra**: bước chéo qua đường trục làm hai chân giao nhau trong khung 2D. Đã thay
-> bằng `forward without crossing the body's vertical centerline`.
+> **Vì sao `no overlapping thighs` (Negative, nhóm 3) quan trọng ngang với góc máy:** khi hai đùi
+> dính thành một khối, mắt không tìm được điểm kết thúc của đường chân — chân đọc ra ngắn hơn thực tế
+> rất nhiều, bất kể camera đặt thấp bao nhiêu. Đây là lỗi mà cụm cũ `front foot placed forward and
+> slightly across the body line` **gây ra**: bước chéo qua đường trục làm hai chân giao nhau trong
+> khung 2D. Đã thay bằng `forward without crossing the body's vertical centerline`.
 
 **CẤM** — đẩy model về dáng bè hoặc vẽ lại giải phẫu:
 
@@ -208,7 +221,7 @@ no arms hanging symmetrically close to both sides of the torso
 | `both feet flat and parallel`, `feet shoulder-width apart` | Triệt tiêu đường chéo của chân |
 | `crossed legs`, `one leg in front of the other`, `legs touching` | Đùi chồng nhau ⇒ mất đường chân |
 | `arms at both sides`, `arms hanging symmetrically` | Che eo |
-| `elongated legs`, `longer legs`, `slimmer waist`, `tall and slim`, `8 heads tall` | Bắt model **vẽ lại** cơ thể ⇒ đổi vóc dáng người thật |
+| `elongated legs`, `longer legs`, `slimmer waist`, `tall and slim`, `8 heads tall`, `seven-and-a-half head-to-body ratio` | Bắt model **vẽ lại** cơ thể hoặc áp tỷ lệ không phải của Ảnh 1 |
 
 Phân biệt: `low camera angle` / tiêu cự 50mm / `floor breathing space` / `subtle five to ten degree
 rotation` chỉ đổi **cách nhìn và cách đứng**, giữ nguyên giải phẫu — dùng được. `elongated legs` /
@@ -227,7 +240,7 @@ số đo thực nghiệm). Tất cả đều tác động lên **cách máy ản
 
 | # | Nhóm | Vai trò | Ghi chú triển khai |
 | :--- | :--- | :--- | :--- |
-| 1 | Body Proportion | Cao nhất | Giữ tỷ lệ từ Ảnh 1, neo thêm mốc tuyệt đối, chỉ *đọc* rõ hơn nhờ đường eo và phối cảnh |
+| 1 | Body Proportion | Cao nhất | Giữ **đúng** tỷ lệ đầu-thân, chân-thân và chiều dài chi của Ảnh 1; **không** áp một tỷ lệ đầu-thân cố định. Chỉ *đọc* rõ hơn nhờ đường eo và phối cảnh |
 | 2 | Camera Perspective | Cao | **Ngang hông (waist level), hếch 3°**, **horizon thẳng** |
 | 3 | Vertical Composition | Cao | **76% chiều cao khung**, đỉnh đầu 12% dưới mép trên, đế giày 12% trên mép dưới |
 | 4 | Pose | Cao | Pose cụ thể (§2.2.1a) hoặc Mode A/B + cấm đùi chồng |
@@ -237,40 +250,30 @@ số đo thực nghiệm). Tất cả đều tác động lên **cách máy ản
 
 ```text
 [HEIGHT & PROPORTION OPTIMIZATION]
-Body Proportion: preserve the model's original anatomical identity, body structure and natural
-physical proportions from Image 1. Anchor that body to a realistic adult reference: slim build,
-seven-and-a-half head-to-body ratio, small head, long neck, long unbroken leg line, natural
-anatomical proportions. Create a naturally tall, elegant fashion-model silhouette through upright
-posture, clear leg visibility, balanced body positioning and photographic perspective. Emphasize
-the visual length of the legs relative to the torso while maintaining a naturally balanced
-leg-to-torso ratio. Maintain a naturally defined waistline, realistic hip proportions and a
-continuous visual line from the hips through the knees to the ankles. Enhance the perception of
-height through posture, pose and camera perspective rather than artificially modifying the model's
-anatomy. Do not lengthen the legs, shorten the torso, narrow the waist or widen the shoulders.
-Camera Perspective: full-body fashion photography with the camera positioned at waist level with a
-three-degree upward tilt. Use a subtle low-angle perspective to emphasize the vertical silhouette
-and natural leg proportions. Keep the camera orientation stable and the horizon level. Avoid steep
-low-angle perspectives, excessive upward tilting, high-angle shots, downward tilting and strong
-foreshortening.
-Lens: 50mm equivalent fashion-editorial perspective, realistic depth, natural perspective
-compression and authentic photographic rendering. Avoid wide-angle distortion, oversized foreground
-elements, disproportionately large feet and shortened-looking legs.
-Composition: clean vertical full-body fashion-editorial composition. The figure fills 76 percent of
-the frame height: crown of the head 12 percent below the top edge, soles of the shoes 12 percent
-above the bottom edge. Show the complete model from the top of the head to the bottom of both
-shoes. Both feet remain completely visible and grounded. Keep the model centered along the vertical
-axis of the frame, and keep the subject scale identical across every image in the same set.
-Posture: upright spine, relaxed shoulders, naturally elongated neck and balanced pelvis alignment.
-Avoid excessive shoulder elevation, torso compression or exaggerated body curvature. The posture
-feels effortless, graceful and anatomically realistic.
-Visual Silhouette: one clean continuous vertical line from the shoulders through the waist, hips,
-knees and ankles, with the thighs, knees, calves and ankles clearly distinguishable and the two
-legs never merging into a single mass. No visual compression between torso and hips, no horizontal
-compression caused by awkward garment positioning or body posture. The outfit retains its original
-design, cut, fit, drape, fabric structure and styling.
-Anatomical Integrity: maintain realistic human anatomy, natural joint positions, consistent limb
-lengths and the original body structure. No artificial body stretching, disproportionate limbs,
-distorted feet, distorted joints or exaggerated anatomical modifications.
+Body Proportion: preserve the exact head-to-body ratio, leg-to-torso ratio and limb lengths visible
+in Image 1; that body is the only proportion reference. Convey height through upright posture,
+clear leg separation, framing and camera distance, never through redrawn proportions. Do not
+lengthen the legs, shorten the torso, narrow the waist, widen the shoulders or stretch the neck.
+Camera Perspective: full-body fashion photography, camera at waist level with a three-degree
+upward tilt, horizon level, and the same subject-to-camera distance across every image in the set.
+Perspective is set by that distance: stand back far enough that the whole figure fits a
+50mm-equivalent frame with natural scale from crown to sole. Avoid steep low angles, high angles,
+downward tilt and strong foreshortening.
+Lens: 50mm equivalent field of view as the aesthetic target; focal length alone does not compress
+or elongate anything, so keep the camera distance constant and the feet never read oversized while
+the legs never read shortened. No wide-angle distortion.
+Composition: clean vertical full-body editorial composition. Crown of the head 12 percent below the
+top edge, soles of the shoes 12 percent above the bottom edge, figure filling 76 percent of the
+frame height. Both feet fully visible and grounded, model centred on the vertical axis of the frame,
+subject scale identical across every image in the same set.
+Posture: upright spine, relaxed shoulders, neck lengthened by posture rather than anatomy, balanced
+pelvis. No forced shoulder elevation, torso compression or exaggerated body curvature.
+Visual Silhouette: one continuous vertical line from the shoulders through the waist, hips, knees
+and ankles, with thighs, knees, calves and ankles individually distinguishable and the two legs
+never merging into one mass. No horizontal band from hem, sock line or waistband cuts the figure in
+half. The outfit keeps its own design, cut, fit, drape and styling.
+Anatomical Integrity: realistic joints, consistent limb lengths and the original body structure from
+Image 1. No artificial body stretching, disproportionate limbs, distorted feet or distorted joints.
 [END HEIGHT & PROPORTION OPTIMIZATION]
 ```
 
@@ -291,42 +294,93 @@ mẫu thấp, ảnh ra vẫn phải là người mẫu đó — chỉ được t
 | :--- | :--- | :--- |
 | `76% frame height` | Chặn model chiếm hết khung hoặc bị thu nhỏ; chừa biên cho giày và đỉnh đầu | Model tự chọn tỷ lệ; ảnh cùng bộ lệch nhau, ghép video bị nhảy cỡ |
 | `horizon level` | Giữ mặt sàn nằm ngang | Góc hếch nhẹ dễ làm sàn nghiêng, mất điểm neo trọng lực |
-| `50mm` | Khoá phối cảnh tự nhiên, không nén dẹt cũng không méo góc rộng | Model tự chọn 24–35mm, méo phối cảnh, chân gần to chân xa nhỏ |
+| `50mm` | Giữ một trường nhìn nhất quán giữa các ảnh; không nén dẹt cũng không méo góc rộng | Model tự chọn 24–35mm, méo phối cảnh, chân gần to chân xa nhỏ |
 
 > Hai con số này (`76%`, `50mm`) được hiệu chuẩn từ batch 8 ảnh thật trong
 > `prompt-skills/poses/results/`, cùng cặp với `poses_reference.md` §4. Đừng đổi riêng lẻ một trong hai:
-> occupancy quyết định độ lớn chủ thể, tiêu cự quyết định phối cảnh — đổi một cái là lệch cả bộ.
+> occupancy quyết định độ lớn chủ thể, còn trường nhìn + khoảng cách máy quyết định phối cảnh — đổi
+> một cái là lệch cả bộ.
 
-#### 2.2.3 Template Bản 2 — đủ 6 khối
+**`50mm` là hướng thẩm mỹ, không phải bộ bảo đảm tỷ lệ.** Nén phối cảnh do **khoảng cách
+máy–chủ thể** quyết định, không do tiêu cự. Vì vậy khối này khoá thêm `same subject-to-camera
+distance`; nếu chỉ ghi 50mm mà để model tự chọn khoảng cách, bàn chân vẫn có thể phóng to và chân
+vẫn đọc ra ngắn. Hai biến phải đi cùng nhau.
+
+**Occupancy cho ảnh bán trang phục (tuỳ chọn, chưa hiệu chuẩn):** `76%` là mức editorial đã
+kiểm chứng. Khi ảnh chỉ để khách đọc phom đồ, có thể nâng lên `84–88%` để trang phục chiếm nhiều
+pixel hơn. Đây là **lựa chọn cho cả bộ**, không phải cho từng ảnh — đổi giữa bộ là nhảy cỡ khi ghép
+video. Chưa có batch kiểm chứng ở mức này, nên mặc định vẫn là `76%`.
+
+#### 2.2.2a V2 đã bỏ gì khỏi khối Height (và vì sao)
+
+Bản V1 neo thêm `seven-and-a-half head-to-body ratio` để "chắc chắn" người mẫu cao. Đó là mâu thuẫn
+trực tiếp với `preserve the exact proportions from Image 1`: nếu Ảnh 1 là người 7 đầu, model phải
+chọn giữa hai mệnh lệnh — và nó chọn cái nào cũng sai. Tỷ lệ đầu-thân **cố định** chỉ đúng khi người
+mẫu là một nhân vật do mình định nghĩa (thư viện pose, xem `poses_reference.md` §4), không đúng khi
+identity đến từ ảnh người dùng.
+
+| V1 | V2 | Lý do |
+| :--- | :--- | :--- |
+| `seven-and-a-half head-to-body ratio` | bỏ hẳn | Xung đột với tỷ lệ thật của Ảnh 1 — Critical |
+| `slim build`, `small head`, `long neck` | bỏ hẳn | Đây là mô tả một người khác, không phải người trong Ảnh 1 |
+| `naturally tall ... silhouette` + `no tall and slim` | chỉ giữ vế "height through posture/framing/distance" | Positive và Negative đá nhau; một ý chỉ được nói một lần |
+| `natural perspective compression` | `focal length alone does not compress` | 50mm không tạo nén phối cảnh; khoảng cách mới tạo |
+| `Anatomically realistic posture` (tính từ chung) | mệnh lệnh cụ thể (spine, shoulders, pelvis) | Tính từ chung không điều khiển được gì |
+
+Khối Height **giữ nguyên 7 nhóm** và 3 mốc định lượng, vì đó là phần đã hiệu chuẩn và là thứ test
+canh. Chỉ nội dung bên trong đổi: bỏ áp đặt giải phẫu, giữ điều khiển cách nhìn.
+
+#### 2.2.3 Template Bản 2 — đủ 7 module
 
 ```text
 Try-on photograph of the exact same model from Image 1, wearing the exact garment from Image 2.
 
-[IDENTITY & OUTFIT PRESERVATION]
-Preserve the model's facial identity, eye shape, nose, lip shape, hairstyle, facial structure, natural skin texture and original anatomical body structure from Image 1. Reproduce the complete outfit from Image 2 exactly, preserving its original garment design, colors, proportions, fabric textures, construction, fit, layering and styling. Do not redesign, simplify, replace or omit any clothing elements. Maintain consistent garment placement and realistic fabric behaviour throughout the image.
+[IDENTITY LOCK]
+Preserve the facial identity from Image 1 exactly: East Asian facial features, soft delicate eye shape, natural nose structure, natural lips, messy high bun with face-framing wispy strands, natural skin texture. Same person, same face, same age as Image 1. Do not beautify, slim, symmetrise or age the face, and do not change the hairstyle.
 
-<POSE & PROPORTION LOCK — insert the prompt_core of the chosen pose from §2.2.1a, plus the shared anti-shortening clauses>
+[GARMENT FIDELITY]
+Reproduce the complete outfit from Image 2 exactly: <name each visible garment from Image 2 by category and colour — visible elements only>. Copy only what the reference shows: seams, weave, trims, hardware and branding that are physically part of the garment are reproduced; anything hidden behind the body, hair or another layer is not invented, extended or restyled. Where this description and Image 2 disagree, Image 2 wins. Do not redesign, simplify, replace, omit, recolour or re-proportion any element, and do not improve the outfit for the photograph.
+
+[ANATOMY & POSE]
+<insert the prompt_core of the chosen pose from §2.2.1a, or the Mode A / Mode B block, plus the shared stance clause>
+Head turned gently back toward the camera on the neck so the face stays readable while the torso keeps its angle; chin level, eyes to the lens or just beside it.
 
 [HEIGHT & PROPORTION OPTIMIZATION]
-Body Proportion: preserve the model's original anatomical identity, body structure and natural physical proportions from Image 1. Anchor that body to a realistic adult reference: slim build, seven-and-a-half head-to-body ratio, small head, long neck, long unbroken leg line, natural anatomical proportions. Create a naturally tall, elegant fashion-model silhouette through upright posture, clear leg visibility, balanced body positioning and photographic perspective. Emphasize the visual length of the legs relative to the torso while maintaining a naturally balanced leg-to-torso ratio. Maintain a naturally defined waistline, realistic hip proportions and a continuous visual line from the hips through the knees to the ankles. Enhance the perception of height through posture, pose and camera perspective rather than artificially modifying the model's anatomy. Do not lengthen the legs, shorten the torso, narrow the waist or widen the shoulders.
-Camera Perspective: full-body fashion photography with the camera positioned at waist level with a three-degree upward tilt. Use a subtle low-angle perspective to emphasize the vertical silhouette and natural leg proportions. Keep the camera orientation stable and the horizon level. Avoid steep low-angle perspectives, excessive upward tilting, high-angle shots, downward tilting and strong foreshortening.
-Lens: 50mm equivalent fashion-editorial perspective, realistic depth, natural perspective compression and authentic photographic rendering. Avoid wide-angle distortion, oversized foreground elements, disproportionately large feet and shortened-looking legs.
-Composition: clean vertical full-body fashion-editorial composition. The figure fills 76 percent of the frame height: crown of the head 12 percent below the top edge, soles of the shoes 12 percent above the bottom edge. Show the complete model from the top of the head to the bottom of both shoes. Both feet remain completely visible and grounded. Keep the model centered along the vertical axis of the frame, and keep the subject scale identical across every image in the same set.
-Posture: upright spine, relaxed shoulders, naturally elongated neck and balanced pelvis alignment. Avoid excessive shoulder elevation, torso compression or exaggerated body curvature. The posture feels effortless, graceful and anatomically realistic.
-Visual Silhouette: one clean continuous vertical line from the shoulders through the waist, hips, knees and ankles, with the thighs, knees, calves and ankles clearly distinguishable and the two legs never merging into a single mass. No visual compression between torso and hips, no horizontal compression caused by awkward garment positioning or body posture. The outfit retains its original design, cut, fit, drape, fabric structure and styling.
-Anatomical Integrity: maintain realistic human anatomy, natural joint positions, consistent limb lengths and the original body structure. No artificial body stretching, disproportionate limbs, distorted feet, distorted joints or exaggerated anatomical modifications.
+Body Proportion: preserve the exact head-to-body ratio, leg-to-torso ratio and limb lengths visible in Image 1; that body is the only proportion reference. Convey height through upright posture, clear leg separation, framing and camera distance, never through redrawn proportions. Do not lengthen the legs, shorten the torso, narrow the waist, widen the shoulders or stretch the neck.
+Camera Perspective: full-body fashion photography, camera at waist level with a three-degree upward tilt, horizon level, and the same subject-to-camera distance across every image in the set. Perspective is set by that distance: stand back far enough that the whole figure fits a 50mm-equivalent frame with natural scale from crown to sole. Avoid steep low angles, high angles, downward tilt and strong foreshortening.
+Lens: 50mm equivalent field of view as the aesthetic target; focal length alone does not compress or elongate anything, so keep the camera distance constant and the feet never read oversized while the legs never read shortened. No wide-angle distortion.
+Composition: clean vertical full-body editorial composition. Crown of the head 12 percent below the top edge, soles of the shoes 12 percent above the bottom edge, figure filling 76 percent of the frame height. Both feet fully visible and grounded, model centred on the vertical axis of the frame, subject scale identical across every image in the same set.
+Posture: upright spine, relaxed shoulders, neck lengthened by posture rather than anatomy, balanced pelvis. No forced shoulder elevation, torso compression or exaggerated body curvature.
+Visual Silhouette: one continuous vertical line from the shoulders through the waist, hips, knees and ankles, with thighs, knees, calves and ankles individually distinguishable and the two legs never merging into one mass. No horizontal band from hem, sock line or waistband cuts the figure in half. The outfit keeps its own design, cut, fit, drape and styling.
+Anatomical Integrity: realistic joints, consistent limb lengths and the original body structure from Image 1. No artificial body stretching, disproportionate limbs, distorted feet or distorted joints.
 [END HEIGHT & PROPORTION OPTIMIZATION]
 
-[ENVIRONMENT & PHOTOGRAPHY STYLE]
-<Background and lighting from Image 3, or from Image 2 if Image 3 is absent>. Neutral minimalist studio setting, soft directional natural lighting, balanced ambient illumination, realistic shadow transitions and authentic light falloff. Raw candid fashion photography, natural lifestyle editorial aesthetic, realistic skin texture, authentic fabric weave, subtle film grain and natural photographic imperfections. No artificial studio gloss, no excessive retouching, no overly smooth AI-generated texture.
+[ENVIRONMENT & LIGHTING]
+If Image 3 is provided: take only the space, surfaces, ambient light and shadow behaviour from it — never the person or the garment from Image 3. If Image 3 is not provided: clean minimalist studio with a curved white cyclorama wall and floor, bright soft directional window-pane daylight casting gentle diagonal shadows across the wall and floor plane, realistic light falloff.
 
-Negative: no text, no letters, no words, no numbers, no typography, no logo, no watermark, no UI, no interface, no sidebar, no white card, no label, no price tag, no collage, no moodboard, no split screen, no two panels, no grid, no infographic, no border, no frame, no mockup, no crossed legs, no overlapping thighs, no legs merging into one mass, no wide-legged stance, no excessive lateral leg separation, no deeply bent knees, no hidden legs, no obscured ankles, no excessive hip shifting, no exaggerated contrapposto, no high-angle perspective, no overhead camera, no downward camera tilt, no steep low-angle distortion, no strong foreshortening, no wide-angle distortion, no oversized feet, no disproportionately large feet, no shortened-looking legs, no disproportionate limbs, no artificial body stretching, no altered anatomy, no shortened torso, no distorted joints, no cropped feet, no cropped head, no varying subject scale, no zoomed-in torso, no excessive empty space, no zero floor space, no ankle-cutting boots, no skewed horizon, no heavy horizontal shadows across the calves, no symmetric arms-at-sides stance, no both feet flat and parallel, no feet shoulder-width apart, no elongated legs, no longer legs, no slimmer waist, no tall and slim, no 8 heads tall, no widened hips, no garment redesign, no altered facial identity, no changed hairstyle, no altered outfit colors, no missing clothing elements.
+[PHOTOGRAPHY AESTHETICS]
+Raw candid fashion photography, natural lifestyle editorial aesthetic, realistic skin texture with visible pores and fine facial hair, authentic fabric weave, subtle film grain, natural photographic imperfections. No plastic skin, no HDR glow, no over-sharpening, no AI-smooth texture.
+
+Negative: no altered facial identity, no changed hairstyle, no different face, no plastic or airbrushed skin; no garment redesign, no simplified, recoloured or re-proportioned garment, no missing or added clothing elements, no floating or merged fabric layers, no branding beyond what the reference garment actually carries; no elongated legs, no longer legs, no stretched limbs, no artificial body stretching, no slimmed waist, no widened shoulders, no distorted joints, no distorted or extra feet, no crossed legs, no overlapping thighs, no legs merging into one mass; no high-angle or overhead framing, no steep low-angle distortion, no wide-angle distortion, no oversized feet, no cropped head, no cropped feet, no tilted horizon, no inconsistent subject scale, no zoomed-in torso; no text, no letters, no numbers, no added logos, no watermark, no UI, no card, no label, no price tag, no collage, no split screen, no grid, no border, no frame.
 ```
 
-> Hai cụm dễ nhầm: `Raw candid fashion photography` (không kèm số mm) là **tên phong cách** trong khối
-> Environment; còn `50mm` trong khối Height là **tiêu cự chụp**. Đừng gộp hai thứ này thành
+> Ba chỗ điền trong template:
+>
+> - `<name each visible garment ...>` — agent đọc Ảnh 2 rồi liệt kê **món nhìn thấy được** (áo, váy,
+>   tất, giày). Không suy diễn lớp bên trong bị che, không tự thêm chi tiết cho đẹp.
+> - `<insert the prompt_core ...>` — pose thật từ §2.2.1a, hoặc block Mode A/B nếu không dùng thư viện.
+> - `Image 3` — nếu node chỉ nối hai ảnh, bỏ hẳn câu "If Image 3 is provided" và giữ câu studio.
+>   Câu về Ảnh 3 chỉ được nói **môi trường**, không được nói người hay trang phục.
+
+> Hai cụm dễ nhầm: `Raw candid fashion photography` (không kèm số mm) là **tên phong cách** trong
+> module Aesthetics; còn `50mm` trong khối Height là **tiêu cự chụp**. Đừng gộp hai thứ này thành
 > `raw candid 35mm` — 35mm là góc rộng, đúng thứ khối Height đang cấm. Bộ modifier cũ
 > `Raw candid 35mm photography` đã được thay bằng `Raw candid fashion photography` để hết mâu thuẫn.
+>
+> **Logo:** Negative cấm `added logos` — tức logo bịa thêm — chứ không cấm logo **có thật trên trang
+> phục tham chiếu**. V1 cấm tuyệt đối `no logo`, trong khi module Garment lại đòi chép đúng mọi chi
+> tiết; nếu đôi giày trong Ảnh 2 có logo đặc trưng thì hai mệnh lệnh đá nhau và model tự bỏ logo.
+> Cùng lý do, `no ankle-cutting boots` đã bị bỏ: giày nào là do Ảnh 2 quyết định, không phải prompt.
 
 Không chèn `[POLICY COMPLIANCE]` vào prompt ảnh. Nếu ảnh bị bộ lọc Prominent People chặn, sửa mô tả
 (bỏ so sánh với người thật, bỏ tên riêng), **không** thêm lại dòng này.
@@ -334,28 +388,51 @@ Không chèn `[POLICY COMPLIANCE]` vào prompt ảnh. Nếu ảnh bị bộ lọ
 ### 2.3 Cấm trong prompt ảnh try-on
 
 ```text
-text, letters, words, numbers, typography, logo, watermark, UI, interface, sidebar,
-white card, label, price tag, collage, moodboard, split screen, two panels, grid,
-infographic, border, frame, mockup, high camera angle, overhead perspective,
+text, letters, words, numbers, typography, added logo, invented branding, watermark, UI,
+interface, sidebar, white card, label, price tag, collage, moodboard, split screen,
+two panels, grid, infographic, border, frame, mockup, high camera angle, overhead perspective,
 downward camera tilt, foreshortening, cropped feet, shoes touching bottom border,
-zero floor space, ankle-cutting boots, squat proportions, bent knees, heavy horizontal shadows across calves,
+squat proportions, bent knees, heavy horizontal shadows across calves,
 perfectly square-on frontal pose, zero-degree body rotation, both feet flat and parallel,
 crossed legs, overlapping thighs, legs merging into one mass, one leg in front of the other,
 symmetric arms-at-sides stance, feet shoulder-width apart, elongated legs, longer legs, slimmer waist,
-tall and slim, 8 heads tall, overly long legs, altered body proportions, stretched limbs, widened hips
+tall and slim, 8 heads tall, seven-and-a-half head-to-body ratio, overly long legs,
+altered body proportions, stretched limbs, widened hips
 ```
 
-Ba nhóm khác bản chất:
+Bốn nhóm khác bản chất:
 
 - **`perfectly square-on frontal pose`, `zero-degree body rotation`** — trực diện **tuyệt đối** (0°),
   silhouette rộng nhất. CẤM ở cả hai mode. Mode B dùng `5–10°`, không phải `0°` — khác nhau, và
   chênh lệch nhỏ đó vẫn tạo được một chút chiều sâu mà không mất chi tiết mặt trước trang phục.
 - **`crossed legs`, `overlapping thighs`, `legs merging`** — hai chân dính/chồng thành một khối.
   Mắt không tìm thấy điểm kết thúc của đường chân ⇒ mẫu đọc ra lùn, mạnh ngang một góc máy sai.
-- **`elongated legs`, `slimmer waist`** — bắt model **vẽ lại giải phẫu**, tức là đổi vóc dáng người
-  thật so với Ảnh 1.
+- **`elongated legs`, `slimmer waist`, `seven-and-a-half head-to-body ratio`** — bắt model **vẽ lại
+  giải phẫu** hoặc áp một tỷ lệ không phải của người trong Ảnh 1. Tỷ lệ cố định chỉ dùng ở thư viện
+  pose (`poses_reference.md` §4), nơi người mẫu là nhân vật do mình định nghĩa — không dùng ở đây.
+- **`added logo`, `invented branding`** — chỉ cấm logo **bịa thêm**. Logo/thương hiệu có thật trên
+  trang phục trong Ảnh 2 phải được giữ, vì Garment Fidelity yêu cầu chép đúng mọi chi tiết.
 
-Cả ba đều hỏng — xem §2.2.1.
+Cả bốn đều hỏng — xem §2.2.1 và §2.2.2a.
+
+#### 2.3.2 Negative — 5 nhóm, không lặp lại module 1–6
+
+Negative chỉ để **chặn lỗi**, không phải nơi nhắc lại yêu cầu. Một lỗi chỉ nói một lần, và chỉ nói
+khi nó chưa được module 1–6 xử lý dứt điểm:
+
+| Nhóm | Nội dung | Ghi chú |
+| :--- | :--- | :--- |
+| 1. Identity | `no altered facial identity`, `no changed hairstyle`, `no plastic skin` | Chặn beautify, đổi mặt, đổi tóc |
+| 2. Garment | `no garment redesign`, `no recoloured garment`, `no missing or added elements`, `no branding beyond the reference` | Chặn thu gọn phom và bịa logo |
+| 3. Anatomy | `no elongated legs`, `no stretched limbs`, `no slimmed waist`, `no distorted joints`, `no extra feet`, `no crossed legs`, `no overlapping thighs`, `no legs merging` | Nhóm nặng nhất — chân là nơi lỗi đọc ra rõ nhất |
+| 4. Framing | `no high-angle or overhead framing`, `no wide-angle distortion`, `no cropped head/feet`, `no tilted horizon`, `no inconsistent subject scale` | Chặn lỗi bố cục giữa các ảnh trong bộ |
+| 5. Graphics | `no text`, `no UI`, `no card`, `no label`, `no collage`, `no border` | Điều kiện của kiến trúc tách lớp (§0) |
+
+Những cụm **đã bỏ khỏi Negative ở V2** vì trùng hoặc mâu thuẫn: `no tall and slim` (đá với mệnh
+lệnh "đọc ra cao"), `no logo` (đá với Garment Fidelity), `no ankle-cutting boots` (giày do Ảnh 2
+quyết định), `no zero floor space` (đã có `visible floor space` trong Composition), và toàn bộ biến
+thể lặp của cùng một lỗi chân (`no hidden legs`, `no obscured ankles`, `no lateral leg separation`,
+`no wide-legged stance`).
 
 #### 2.3.1 Bảng cấm → thay thế
 
@@ -365,11 +442,11 @@ Cột phải đều nói về **cách nhìn**, không đụng vào cơ thể.
 | KHÔNG dùng | Vì sao | Thay bằng |
 | :--- | :--- | :--- |
 | `make her look taller`, `make the model taller` | Ra lệnh kéo giãn toàn thân; model hiểu là chỉnh giải phẫu | `emphasize vertical proportions` |
-| `extremely tall body`, `very tall and slim` | Cường độ `extremely` đẩy model sang dáng siêu thực, sai Ảnh 1 | `naturally tall silhouette` |
+| `extremely tall body`, `very tall and slim` | Cường độ `extremely` đẩy model sang dáng siêu thực, sai Ảnh 1 | `read tall through posture, framing and camera distance` |
 | `very long legs`, `elongated legs`, `longer legs`, `overly long legs` | Kéo dài chân trực tiếp — đứt Identity Lock | `long unbroken leg line` / `balanced leg-to-torso ratio` |
 | `slimmer waist`, `tiny upper body` | Thu nhỏ thân trên để "ăn gian" chiều cao | `visible waist-to-hip transition`, `balanced leg-to-torso ratio` |
-| `stretch the entire body`, `stretched limbs` | Ra lệnh biến dạng hình học | `naturally elongated silhouette` (nói về đường nét, không phải cơ thể) |
-| `8 heads tall`, `model proportions` | Đặt tỷ lệ cứng bất kể người thật | giữ tỷ lệ Ảnh 1, cải thiện bằng bố cục |
+| `stretch the entire body`, `stretched limbs` | Ra lệnh biến dạng hình học | `one clean continuous vertical line` (nói về đường nét, không phải cơ thể) |
+| `8 heads tall`, `model proportions`, `seven-and-a-half head-to-body ratio` | Áp tỷ lệ cứng bất kể người thật | giữ đúng tỷ lệ Ảnh 1, cải thiện bằng bố cục và khoảng cách máy |
 | `extremely low camera angle`, `worm's-eye view` | Phóng đại bàn chân và cẳng chân dưới | `subtle low-angle perspective` |
 | `high angle shot`, `shot from above`, `overhead perspective` | Dìm chiều cao, đầu to hơn tương đối | `camera at waist level with a three-degree upward tilt` |
 | `24mm`, `28mm`, `35mm` như tiêu cự | Méo phối cảnh, chân gần to chân xa nhỏ | `50mm` |
@@ -384,20 +461,23 @@ phải việc kéo ngắn thân trên.
 
 ### 2.4 Kiểm tra sau khi sinh ảnh (30 giây, bằng mắt)
 
-Đặt ảnh ra cạnh Ảnh 1 và soi 6 mục. Trượt mục nào thì sửa prompt rồi sinh lại — **không** dùng công
-cụ kéo dài ảnh sau đó, vì kéo hậu kỳ chính là thứ làm biến dạng giải phẫu mà cả khối này tránh.
+Đặt ảnh ra cạnh Ảnh 1 (và Ảnh 2) và soi 8 mục. Trượt mục nào thì sửa prompt rồi sinh lại — **không**
+dùng công cụ kéo dài ảnh sau đó, vì kéo hậu kỳ chính là thứ làm biến dạng giải phẫu mà cả khối này tránh.
 
+- [ ] **Danh tính:** vẫn đúng người trong Ảnh 1 — không bị làm thon mặt, không đổi tóc, không trẻ hơn.
 - [ ] **Tỷ lệ:** chiều cao, bề ngang vai, độ dài chân khớp Ảnh 1. Nếu người mẫu *cao hơn thật rõ rệt*
       thì prompt đã lấn sang kéo giãn — sinh lại.
 - [ ] **Phối cảnh:** đường nằm ngang của mặt sàn và bậu cửa (nếu có) không bị nghiêng mạnh; bàn chân
       không bị phóng to bất thường.
 - [ ] **Bố cục:** thấy đủ đỉnh đầu lẫn hai bàn chân, có khoảng trống phía trên đầu.
+- [ ] **Hướng mặt:** thân ba phần tư nhưng mặt vẫn đọc được về phía máy — nếu mặt quay đi quá xa thì
+      tăng vế `head turned gently back toward the camera`, đừng xoay cả thân về trực diện.
 - [ ] **Tư thế:** đúng pose đã chọn ở §2.2.1a — chân tách rõ, không dính khối, không đùi chồng;
       nếu hai vai **song song hoàn toàn** với mặt phẳng ảnh mà pose yêu cầu ba phần tư thì đã trượt
       về 0°, sinh lại.
-- [ ] **Chân:** thấy rõ hai chân tách nhau, không dính thành một khối, không có đùi chồng.
 - [ ] **Đường silhouette:** không có khối ngang (gấu váy, tất, viền áo) cắt đứt hình thể ở giữa.
-- [ ] **Trang phục:** vẫn đúng thiết kế Ảnh 2 — không bị kéo dài gấu, không bị siết eo.
+- [ ] **Trang phục:** vẫn đúng thiết kế Ảnh 2 — không bị kéo dài gấu, không bị siết eo, **logo có
+      thật trên đồ vẫn còn**, không xuất hiện logo lạ.
 
 #### 2.5 Chế độ Plate — ảnh first frame cho video lookbook
 
@@ -409,7 +489,7 @@ video** (pipeline tách lớp Flow + HyperFrames), không phải ảnh thử đ�
 | Đầu vào | Ảnh 1 (identity) + Ảnh 2 (garment) + Ảnh 3 (tuỳ chọn) | **Chỉ 1 ảnh** — đã có người mẫu mặc đúng bộ đồ |
 | Bối cảnh | Kế thừa từ Ảnh 3, hoặc Ảnh 2 nếu thiếu | **Luôn thay** bằng studio trơn, không kế thừa |
 | Bố cục | Căn giữa trục dọc | Căn giữa — giữ nguyên, không cần lệch |
-| Negative | 4 nhóm: UI, phối cảnh, giải phẫu, chân | 4 nhóm + **nhóm nền sạch** |
+| Negative | 5 nhóm: identity, garment, anatomy, framing, graphics | 5 nhóm + **nhóm nền sạch** |
 
 Ba thứ còn lại (Identity Lock, khối `[HEIGHT & PROPORTION OPTIMIZATION]`, thư viện pose) **giữ nguyên
 văn** — đó là lý do không cần một skill riêng cho plate nữa.
@@ -422,13 +502,13 @@ văn** — đó là lý do không cần một skill riêng cho plate nữa.
 Photograph of the exact model from Image 1, wearing the exact outfit from Image 1.
 ```
 
-Có đúng **hai câu** phải thay. Khối `[IDENTITY & OUTFIT PRESERVATION]` giữ nguyên phần còn lại — nó
-không phụ thuộc số hiệu ảnh:
+Có đúng **hai câu** phải thay. Hai module `[IDENTITY LOCK]` và `[GARMENT FIDELITY]` giữ nguyên phần
+còn lại — chúng không phụ thuộc số hiệu ảnh:
 
 | Câu gốc (try-on) | Câu plate |
 | :--- | :--- |
-| `Reproduce the complete outfit from Image 2 exactly, ...` | `Reproduce the complete outfit from Image 1 exactly, ...` — giữ nguyên phần đuôi |
-| `<Background and lighting from Image 3, or from Image 2 if Image 3 is absent>.` | **xoá hẳn**, thay bằng câu studio ở §2.5.2 |
+| `[GARMENT FIDELITY] Reproduce the complete outfit from Image 2 exactly, ...` | `Reproduce the complete outfit from Image 1 exactly, ...` — giữ nguyên phần đuôi |
+| `If Image 3 is provided: take only the space ... If Image 3 is not provided: ...` | **xoá hẳn**, thay bằng câu studio ở §2.5.2 |
 
 Sau khi sửa, prompt plate **không được còn chuỗi `Image 2` hay `Image 3` nào** — node plate chỉ nối
 một ảnh, nhắc tới ảnh không tồn tại là agent đang tự bịa.
@@ -459,18 +539,15 @@ no signage, no overlay graphics, no button, no interface element.
 Nhóm này là điều kiện của kiến trúc tách lớp: pixel chỉ được chứa người mẫu. Chữ, card, thanh tiến
 trình do HyperFrames dựng — AI vẽ ra là méo và không sửa được sau render.
 
-**2.5.4 Giày — tuỳ chọn, chỉ khi gốc giày ngắn cổ**
+**2.5.4 Giày — không bao giờ đổi sản phẩm**
 
-Booties cổ lửng hoặc quai ngang to bản cắt đứt đường thẳng cẳng chân. Khi ảnh gốc đã có giày **và**
-giày đó đang cắt cổ chân, thêm một câu positive ngay sau dòng Posture:
+Giày thuộc Garment Fidelity: giữ đúng đôi giày trong ảnh. **Không** thay bằng kitten heels, sandal hay
+bất kỳ đôi nào khác để "đường chân dài hơn" — đó là redesign trang phục, đúng thứ module 2 cấm, và
+khách sẽ nhận được ảnh không còn đúng sản phẩm.
 
-```text
-Elongating footwear: open-ankle minimalist strappy kitten heels, exposing the ankle and instep to
-create an uninterrupted vertical line from knee to toe.
-```
-
-**Không bịa giày khác sản phẩm.** Nếu ảnh gốc không có giày hoặc giày vốn đã hở cổ chân, bỏ hẳn mục
-này — để nguyên chân trần hoặc sandal đúng như ảnh, không thêm câu nào.
+Nếu giày trong ảnh cắt ngang cổ chân và làm gãy đường chân, cách xử lý hợp lệ **chỉ** là bố cục:
+giữ nguyên giày, giữ đủ khoảng trống dưới đế (`12 percent` ở Composition), và chọn pose có chân tách
+rõ. Không sửa sản phẩm để bù cho một tư thế xấu.
 
 **2.5.5 Checklist bổ sung cho plate**
 
