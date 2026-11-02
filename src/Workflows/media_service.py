@@ -52,6 +52,26 @@ from .flow_models import GenerationResult, ReferenceTemplate, parse_project_ref
 from .limits import load_limits
 from .media_probe import probe_video
 from .watermark_remover import remove_video_watermark
+from .flow_catalog import (
+    COUNTS,
+    IMAGE_ASPECT_ENUM,
+    IMAGE_ASPECT_ORDER,
+    VIDEO_ASPECT_ORDER,
+    VIDEO_SUB_MODES,
+    CatalogError,
+    MediaModel,
+    agent_mode_catalog,
+    capture_resolution,
+    image_catalog,
+    image_model_key,
+    normalize_count,
+    resolve_image_model,
+    resolve_video_model,
+    video_catalog,
+    video_durations,
+    video_model_key,
+    video_resolutions,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_NODE_OUT = ROOT / "out" / "nodes"
@@ -61,7 +81,9 @@ IMAGE_ASPECT_CONFIG = ROOT / "configs" / "image_aspect_enums.json"
 #: ``docs/api_specs/flow_create_image.md`` §2: ``spec[4] = 3`` (16:9).
 #: 9:16 = 2 captured from the app's own blocked request (0 credit), 2026-10-28,
 #: via discovery/capture_image_aspects.py (traces/image_aspects_20261028T165133.json).
-VERIFIED_IMAGE_ASPECTS: dict[str, int] = {"16:9": 3, "9:16": 2}
+#: 4:3 = 5, 1:1 = 1, 3:4 = 4 captured 0-credit on 2026-11-03 (discovery/probe_count_res.py).
+#: Kept in sync with :mod:`src.Workflows.flow_catalog` (single source of truth).
+VERIFIED_IMAGE_ASPECTS: dict[str, int] = dict(IMAGE_ASPECT_ENUM)
 
 #: Free-form aliases accepted by :func:`resolve_image_aspect`.
 RATIO_ALIASES: dict[str, str] = {
@@ -73,9 +95,10 @@ RATIO_ALIASES: dict[str, str] = {
     "square": "1:1",
 }
 
-VIDEO_RATIOS: tuple[str, ...] = ("9:16", "16:9")
-VIDEO_RESOLUTIONS: tuple[str, ...] = ("1080p", "720p")
-VIDEO_DURATION_S = 8  # model key `abra_i2v_8s` is fixed-length
+VIDEO_RATIOS: tuple[str, ...] = VIDEO_ASPECT_ORDER
+VIDEO_RESOLUTIONS: tuple[str, ...] = ("360p", "720p", "1080p")
+VIDEO_DURATIONS_S: tuple[int, ...] = (4, 6, 8, 10)
+VIDEO_DURATION_S = 8  # legacy default (Omni 8s); per-model options live in flow_catalog
 
 
 class AspectNotVerifiedError(ValueError):
@@ -171,28 +194,50 @@ def normalize_video_ratio(value: Optional[str]) -> str:
     return label
 
 
-def normalize_video_resolution(value: Optional[str]) -> str:
-    v = str(value or "1080p").strip().lower()
+def normalize_video_resolution(value: Optional[str], *, model: Optional[str] = None) -> str:
+    """Normalize a resolution label; with ``model`` also check Flow offers it."""
+    v = str(value or "720p").strip().lower()
     if v in ("720", "720p", "hd"):
-        return "720p"
-    if v in ("1080", "1080p", "fullhd", "full-hd"):
-        return "1080p"
-    raise UnsupportedOptionError(f"Độ phân giải video chỉ hỗ trợ 1080p/720p (nhận {value!r}).")
-
-
-def validate_video_duration(duration_s: int) -> int:
-    d = int(duration_s)
-    if d != VIDEO_DURATION_S:
+        label = "720p"
+    elif v in ("1080", "1080p", "fullhd", "full-hd"):
+        label = "1080p"
+    elif v in ("360", "360p"):
+        label = "360p"
+    else:
         raise UnsupportedOptionError(
-            f"Video Flow hiện cố định {VIDEO_DURATION_S}s (model abra_i2v_8s); "
-            f"muốn video dài hơn hãy nối nhiều node video (nhận {duration_s}s)."
+            f"Độ phân giải video chỉ hỗ trợ 360p/720p/1080p (nhận {value!r})."
         )
+    if model:
+        m = resolve_video_model(model)
+        if label not in video_resolutions(m):
+            raise UnsupportedOptionError(
+                f"{m.label} không hỗ trợ {label}. Chọn: {', '.join(video_resolutions(m))}."
+            )
+    return label
+
+
+def validate_video_duration(duration_s: int, *, model: Optional[str] = None) -> int:
+    """Normalize a duration; with ``model`` also check Flow offers it."""
+    d = int(duration_s)
+    allowed = video_durations(model) if model else VIDEO_DURATIONS_S
+    if d not in allowed:
+        hint = (
+            f"{resolve_video_model(model).label} cố định {allowed[0]}s."
+            if len(allowed) == 1
+            else f"Chọn: {', '.join(f'{x}s' for x in allowed)}."
+        )
+        raise UnsupportedOptionError(f"Video không hỗ trợ {d}s. {hint}")
     return d
 
 
 def node_options(config_path: Optional[Path | str] = None) -> dict:
-    """Machine-readable option list for building canvas node UIs."""
-    image_ratios = load_image_aspects(config_path)
+    """Machine-readable option list for building canvas node UIs.
+
+    ``config_path`` is kept for backwards compatibility: the image aspect enums now
+    come from :mod:`src.Workflows.flow_catalog` (captured, not from a mutable file),
+    so the parameter no longer changes the result.
+    """
+    _ = config_path
 
     # Danh sách clip của kịch bản mặc định: node video cần `clip_id` để agent biết đang viết clip
     # nào (`role`, `shots`, `chain_from`, beats). Trước đây FE không có nguồn nào để chọn, và
@@ -229,26 +274,13 @@ def node_options(config_path: Optional[Path | str] = None) -> dict:
         #: hard-coding its own numbers (see ``src/Workflows/limits.py``).
         "limits": load_limits().as_dict(),
         "script": script_info,
-        "image": {
-            "aspect_ratios": image_ratios,
-            "verified_aspect_ratios": sorted(VERIFIED_IMAGE_ASPECTS),
-            "default_aspect_ratio": next(iter(VERIFIED_IMAGE_ASPECTS)),
-            "supports_reference_image": True,
-            "supports_seed": True,
-            "supports_watermark_removal": True,
-        },
-        "video": {
-            "aspect_ratios": list(VIDEO_RATIOS),
-            "default_aspect_ratio": "9:16",
-            "durations_s": [VIDEO_DURATION_S],
-            "resolutions": list(VIDEO_RESOLUTIONS),
-            "default_resolution": "1080p",
-            "supports_starting_frame": True,
-            "supports_text_to_video": False,
-            "auto_image_chain": True,
-            "supports_seed": True,
-            "supports_watermark_removal": True,
-        },
+        #: Everything below is Observed Evidence from the real composer
+        #: (``src/Workflows/flow_catalog.py``, capture notes in
+        #: ``.turbo/node-config-parity/matrix.md``). The UI reads these lists —
+        #: it must never hard-code ratios/models/counts on its own.
+        "image": image_catalog(),
+        "video": video_catalog(),
+        "agent": agent_mode_catalog(),
     }
 
 
@@ -350,6 +382,12 @@ class NodeImageResult:
     media_id: Optional[str] = None
     reference_sha256: Optional[str] = None
     reference_media_id: Optional[str] = None
+    #: Composer model actually used (catalog id) and how many images were requested.
+    model: str = "nano_banana_2_1"
+    model_label: str = "Nano Banana 2.1"
+    count: int = 1
+    #: True when the composer was in "Tác nhân" mode (config hidden, defaults used).
+    agent_mode: bool = False
     dry_run: bool = False
     elapsed_s: float = 0.0
     reason: Optional[str] = None
@@ -372,6 +410,14 @@ class NodeVideoResult:
     video_path: Optional[str] = None
     video_bytes: Optional[int] = None
     resolution: str = "1080p"
+    #: Composer config actually used (see ``src/Workflows/flow_catalog.py``).
+    model: str = "omni_1_1_flash"
+    model_label: str = "Omni 1.1 Flash"
+    model_key: Optional[str] = None
+    sub_mode: str = "frames"
+    count: int = 1
+    #: True when the composer was in "Tác nhân" mode (config hidden, defaults used).
+    agent_mode: bool = False
     #: Tham số YÊU CẦU 8s. Số đo thật nằm ở `measured_*` bên dưới — đừng dùng field này
     #: để đặt thời lượng trên timeline dựng phim.
     duration_s: int = VIDEO_DURATION_S
@@ -523,11 +569,35 @@ class MediaService:
         project_id: Optional[str] = None,
         dry_run: bool = False,
         remove_watermark: bool = True,
+        model: Optional[str] = None,
+        count: int = 1,
+        agent_mode: bool = False,
         on_event: Optional[Callable[..., None]] = None,
     ) -> NodeImageResult:
-        """Generate exactly one image node output (~1 credit if accepted, 0 if rejected)."""
+        """Generate ``count`` images for one node (~1 credit each if accepted).
+
+        ``model`` accepts a catalog id (``nano_banana_pro``) or the composer label
+        (``Nano Banana Pro``); ``count`` mirrors the composer's ``x1..x4``.
+
+        ``agent_mode`` mirrors the composer's "Tác nhân" chip: Flow hides the
+        model/aspect/count controls entirely, so user values are ignored and the
+        catalog defaults are used. The result records both facts.
+        """
         t0 = time.time()
+        if agent_mode:
+            # Flow hides model/aspect/count while "Tác nhân" is on; use the catalog defaults
+            # and say so instead of applying values the composer would ignore.
+            model, aspect_ratio, aspect, count = None, None, None, 1
+            default_model = resolve_image_model(None)
+            self._emit(
+                on_event,
+                "info",
+                f"Tác nhân bật: dùng mặc định {default_model.label} · 16:9 · x1 "
+                "(Flow ẩn cấu hình model/tỷ lệ/số lượng).",
+            )
         label, enum = resolve_image_aspect(aspect_ratio, aspect)
+        model_info = resolve_image_model(model)
+        n = normalize_count(count)
         prompt = (prompt or "").strip()
         if not prompt:
             raise ValueError("prompt rỗng")
@@ -564,6 +634,12 @@ class MediaService:
                 supports_ref_paths = "reference_path" in sig.parameters or "reference_paths" in sig.parameters
                 if "aspect_ratio" in sig.parameters:
                     gen_kwargs["aspect_ratio"] = label
+                if "model_key" in sig.parameters:
+                    gen_kwargs["model_key"] = image_model_key(model_info)
+                if "model_label" in sig.parameters:
+                    gen_kwargs["model_label"] = model_info.label
+                if "count" in sig.parameters:
+                    gen_kwargs["count"] = n
             except Exception:
                 supports_ref_paths = True
                 gen_kwargs["aspect_ratio"] = label
@@ -582,7 +658,9 @@ class MediaService:
                 prompt,
                 **gen_kwargs,
             )
-        return self._image_result(res, prompt, label, enum, project, sha, tpl, t0)
+        return self._image_result(
+            res, prompt, label, enum, project, sha, tpl, t0, model_info, n, agent_mode
+        )
 
     @staticmethod
     def _image_result(
@@ -594,6 +672,9 @@ class MediaService:
         reference_sha: Optional[str],
         tpl: Optional[ReferenceTemplate],
         t0: float,
+        model_info: Optional[MediaModel] = None,
+        count: int = 1,
+        agent_mode: bool = False,
     ) -> NodeImageResult:
         img = res.image
         run_dir = Path(res.run_dir) if res.run_dir else None
@@ -615,6 +696,10 @@ class MediaService:
             media_id=img.media_id if img else None,
             reference_sha256=reference_sha or (tpl.sha256 if tpl else None),
             reference_media_id=(tpl.media_id if tpl else None),
+            model=(model_info.id if model_info else "nano_banana_2_1"),
+            model_label=(model_info.label if model_info else "Nano Banana 2.1"),
+            count=count,
+            agent_mode=agent_mode,
             dry_run=res.status == "dry_run",
             elapsed_s=res.elapsed_s or round(time.time() - t0, 2),
             reason=res.reason,
@@ -636,6 +721,8 @@ class MediaService:
         duration_s: int = VIDEO_DURATION_S,
         project_id: Optional[str] = None,
         timeout_s: float = 300.0,
+        model: Optional[str] = None,
+        count: int = 1,
         on_event: Optional[Callable[..., None]] = None,
     ) -> Path:
         """Bridge-level image→video call (no run dir, no watermark) under the tab lock.
@@ -644,8 +731,11 @@ class MediaService:
         that own their output paths and post-processing.
         """
         ratio = normalize_video_ratio(aspect_ratio)
-        res_label = normalize_video_resolution(resolution)
-        duration = validate_video_duration(duration_s)
+        model_info = resolve_video_model(model)
+        res_label = normalize_video_resolution(resolution, model=model_info.id)
+        duration = validate_video_duration(duration_s, model=model_info.id)
+        n = normalize_count(count)
+        capture_res = capture_resolution(model_info, res_label)
         prompt = (prompt or "").strip()
         if not prompt:
             raise ValueError("prompt rỗng")
@@ -653,6 +743,10 @@ class MediaService:
         if not frame.is_file():
             raise FileNotFoundError(f"Không tìm thấy ảnh đính kèm: {frame_path}")
         dest = Path(dest_path)
+        key = video_model_key(
+            model_info, sub_mode="frames", duration_s=duration,
+            resolution=capture_res, aspect_ratio=ratio,
+        )
         with self._lock:
             project = self.resolve_project(project_id, on_event=on_event)
             self.video.generate_video_flow(
@@ -665,6 +759,62 @@ class MediaService:
                 aspect_ratio=ratio,
                 seed=seed,
                 resolution=res_label,
+                model_key=key,
+                model_label=model_info.label,
+                count=n,
+                offer_resolution=model_info.has_resolution,
+                offer_duration=model_info.has_duration,
+                capture_resolution=capture_res,
+            )
+        return dest
+
+    def generate_text_video(
+        self,
+        *,
+        prompt: str,
+        dest_path: Path | str,
+        aspect_ratio: str = "9:16",
+        seed: Optional[int] = None,
+        resolution: str = "1080p",
+        duration_s: int = VIDEO_DURATION_S,
+        project_id: Optional[str] = None,
+        timeout_s: float = 300.0,
+        model: Optional[str] = None,
+        count: int = 1,
+        on_event: Optional[Callable[..., None]] = None,
+    ) -> Path:
+        """Bridge-level text→video call (``YhhmEf``, sub-mode "Thành phần") under the lock."""
+        ratio = normalize_video_ratio(aspect_ratio)
+        model_info = resolve_video_model(model)
+        res_label = normalize_video_resolution(resolution, model=model_info.id)
+        duration = validate_video_duration(duration_s, model=model_info.id)
+        n = normalize_count(count)
+        capture_res = capture_resolution(model_info, res_label)
+        prompt = (prompt or "").strip()
+        if not prompt:
+            raise ValueError("prompt rỗng")
+        dest = Path(dest_path)
+        key = video_model_key(
+            model_info, sub_mode="ingredients", duration_s=duration,
+            resolution=capture_res, aspect_ratio=ratio,
+        )
+        with self._lock:
+            project = self.resolve_project(project_id, on_event=on_event)
+            self.video.generate_text_video_flow(
+                prompt_text=prompt,
+                dest_path=dest,
+                duration_s=duration,
+                timeout_s=timeout_s,
+                project_id=project,
+                aspect_ratio=ratio,
+                seed=seed,
+                resolution=res_label,
+                model_key=key,
+                model_label=model_info.label,
+                count=n,
+                offer_resolution=model_info.has_resolution,
+                offer_duration=model_info.has_duration,
+                capture_resolution=capture_res,
             )
         return dest
 
@@ -684,18 +834,53 @@ class MediaService:
         auto_image: bool = True,
         image_prompt: Optional[str] = None,
         image_aspect_ratio: str = "16:9",
+        model: Optional[str] = None,
+        sub_mode: str = "frames",
+        count: int = 1,
+        agent_mode: bool = False,
         on_event: Optional[Callable[..., None]] = None,
     ) -> NodeVideoResult:
-        """Generate one 8s video node output from a starting frame (or a generated one).
+        """Generate ``count`` videos for one node, mirroring the Flow composer.
 
-        ``frame_path`` is the attached image; when omitted and ``auto_image`` is
-        true, an image is generated first (image→video chain) because Flow's
-        protocol only exposes ``abra_i2v_8s`` (no text-to-video RPC).
+        Two sub-modes, both captured 0-credit (see ``src/Workflows/flow_catalog.py``):
+
+        * ``sub_mode="frames"`` (Khung hình / image→video, ``eb1hJf``): needs a starting
+          frame; when ``frame_path`` is omitted and ``auto_image`` is true an image is
+          generated first.
+        * ``sub_mode="ingredients"`` (Thành phần / text→video, ``YhhmEf``): the prompt is
+          enough, no frame is uploaded.
+
+        ``agent_mode`` mirrors the composer's "Tác nhân" chip: Flow hides the
+        model/sub-mode/aspect/resolution/duration/count controls, so the catalog
+        defaults are used and the result says so.
         """
         t0 = time.time()
+        if agent_mode:
+            model, aspect_ratio, resolution, duration_s, count = (
+                None, "9:16", "1080p", VIDEO_DURATION_S, 1,
+            )
+            default_model = resolve_video_model(None)
+            self._emit(
+                on_event,
+                "info",
+                f"Tác nhân bật: dùng mặc định {default_model.label} · {default_model.fixed_resolution} · "
+                f"{default_model.fixed_duration_s}s · 9:16 · x1 (Flow ẩn cấu hình).",
+            )
         ratio = normalize_video_ratio(aspect_ratio)
-        res_label = normalize_video_resolution(resolution)
-        duration = validate_video_duration(duration_s)
+        model_info = resolve_video_model(model)
+        sub = str(sub_mode or "frames").strip().lower()
+        if sub not in VIDEO_SUB_MODES:
+            raise UnsupportedOptionError(
+                f"Sub-mode video {sub_mode!r} không hợp lệ. Chọn: {', '.join(VIDEO_SUB_MODES)}."
+            )
+        res_label = normalize_video_resolution(resolution, model=model_info.id)
+        duration = validate_video_duration(duration_s, model=model_info.id)
+        n = normalize_count(count)
+        capture_res = capture_resolution(model_info, res_label)
+        model_key = video_model_key(
+            model_info, sub_mode=sub, duration_s=duration,
+            resolution=capture_res, aspect_ratio=ratio,
+        )
         prompt = (prompt or "").strip()
         if not prompt:
             raise ValueError("prompt rỗng")
@@ -708,7 +893,16 @@ class MediaService:
             planned_image_prompt: Optional[str] = None
             image_status: Optional[str] = None
 
-            if frame_path:
+            # "Thành phần" (ingredients) is a real text→video submit (`YhhmEf`): the prompt
+            # alone is enough, so no frame is prepared and no auto-image chain runs.
+            if sub == "ingredients":
+                if frame_path:
+                    self._emit(
+                        on_event,
+                        "info",
+                        "Sub-mode 'Thành phần' không dùng ảnh — bỏ qua ảnh đính kèm.",
+                    )
+            elif frame_path:
                 src = resolve_input_path(frame_path)
                 if not src.is_file():
                     raise FileNotFoundError(f"Không tìm thấy ảnh đính kèm: {frame_path}")
@@ -739,8 +933,9 @@ class MediaService:
                     )
             else:
                 raise UnsupportedOptionError(
-                    "Flow chỉ hỗ trợ image-to-video (abra_i2v_8s): cần ảnh đính kèm "
-                    "(frame_path) hoặc bật auto_image=True để tạo ảnh trước."
+                    "Sub-mode 'Khung hình' (image→video) cần ảnh đính kèm (frame_path) hoặc "
+                    "bật auto_image=True để tạo ảnh trước; dùng sub_mode='ingredients' nếu "
+                    "chỉ muốn text→video từ câu lệnh."
                 )
 
             result = NodeVideoResult(
@@ -757,37 +952,72 @@ class MediaService:
                 frame_source=frame_source,
                 image_prompt=planned_image_prompt,
                 dry_run=dry_run,
+                model=model_info.id,
+                model_label=model_info.label,
+                model_key=model_key,
+                sub_mode=sub,
+                count=n,
+                agent_mode=agent_mode,
             )
 
             if dry_run:
                 if image_status:
                     result.hint = f"Chuỗi image→video: ảnh dự kiến status={image_status} (dry-run, không tạo file)."
-                self._emit(on_event, "info", "[DRY-RUN] Không gọi bridge video, không tạo file.")
+                self._emit(
+                    on_event,
+                    "info",
+                    f"[DRY-RUN] Không gọi bridge video, không tạo file. "
+                    f"model={model_info.label} ({model_key}), sub_mode={sub}, x{n}, "
+                    f"{ratio} {res_label} {duration}s",
+                )
                 result.elapsed_s = round(time.time() - t0, 2)
                 self._write_manifest(result)
                 return result
 
-            if frame is None:
-                raise RuntimeError("Thiếu starting frame sau bước chuẩn bị ảnh.")
-
             video_path = run_dir / "video.mp4"
-            self._emit(
-                on_event,
-                "step",
-                f"Tạo video {ratio} {res_label} {duration}s từ {frame_source or '?'} frame",
-            )
-            self.animate_frame(
-                frame_path=frame,
-                prompt=prompt,
-                dest_path=video_path,
-                aspect_ratio=ratio,
-                seed=seed,
-                resolution=res_label,
-                duration_s=duration,
-                project_id=project,
-                timeout_s=timeout_s,
-                on_event=on_event,
-            )
+            if sub == "ingredients":
+                self._emit(
+                    on_event,
+                    "step",
+                    f"Tạo video text→video {ratio} {res_label} {duration}s "
+                    f"({model_info.label} · {model_key} · x{n}) — không cần frame",
+                )
+                self.generate_text_video(
+                    prompt=prompt,
+                    dest_path=video_path,
+                    aspect_ratio=ratio,
+                    seed=seed,
+                    resolution=res_label,
+                    duration_s=duration,
+                    project_id=project,
+                    timeout_s=timeout_s,
+                    model=model_info.id,
+                    count=n,
+                    on_event=on_event,
+                )
+            else:
+                if frame is None:
+                    raise RuntimeError("Thiếu starting frame sau bước chuẩn bị ảnh.")
+                self._emit(
+                    on_event,
+                    "step",
+                    f"Tạo video {ratio} {res_label} {duration}s từ {frame_source or '?'} frame "
+                    f"({model_info.label} · {model_key} · x{n})",
+                )
+                self.animate_frame(
+                    frame_path=frame,
+                    prompt=prompt,
+                    dest_path=video_path,
+                    aspect_ratio=ratio,
+                    seed=seed,
+                    resolution=res_label,
+                    duration_s=duration,
+                    project_id=project,
+                    timeout_s=timeout_s,
+                    model=model_info.id,
+                    count=n,
+                    on_event=on_event,
+                )
             result.video_path = str(video_path) if video_path.is_file() else None
             result.video_bytes = video_path.stat().st_size if video_path.is_file() else None
 
