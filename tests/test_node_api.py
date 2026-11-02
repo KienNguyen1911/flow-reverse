@@ -73,6 +73,22 @@ def test_node_video_requires_confirm(client: TestClient):
     assert "confirm" in r.json()["detail"]
 
 
+def test_node_prompt_limit_is_7200(client: TestClient):
+    """Prompt dài (>5.000 ký tự) phải qua được validate; chỉ chặn khi vượt 7.200."""
+    ok = client.post(
+        "/api/node/image",
+        json={"prompt": "a" * 7200, "aspect_ratio": "16:9", "dry_run": True},
+    )
+    assert ok.status_code == 200, ok.text
+
+    too_long = client.post(
+        "/api/node/image",
+        json={"prompt": "a" * 7201, "aspect_ratio": "16:9", "dry_run": True},
+    )
+    assert too_long.status_code == 422
+    assert "7200" in too_long.json()["detail"]
+
+
 def test_node_files_blocks_traversal(client: TestClient, tmp_path: Path):
     r = client.get("/api/node/files/..%2F..%2Fconfigs%2Faccounts_pool.json")
     assert r.status_code == 404

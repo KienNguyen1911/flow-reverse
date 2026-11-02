@@ -152,7 +152,7 @@ export function GuideModal({ open, onClose }: Props) {
                 <ul className="mt-2 space-y-1.5 list-disc list-inside text-dim">
                   <li>Mỗi dòng văn bản tương ứng với <strong className="text-fg">1 ảnh độc lập</strong>. Dòng trống được tự động bỏ qua.</li>
                   <li>Hỗ trợ tối đa <strong className="text-fg">300 ảnh/batch</strong> trong một lượt chạy.</li>
-                  <li>Mỗi dòng có độ dài tối đa 2000 ký tự.</li>
+                  <li>Mỗi dòng có độ dài tối đa 7200 ký tự.</li>
                 </ul>
               </div>
 

@@ -205,7 +205,7 @@ const GROUPS: Group[] = [
         notes: [
           "Bắt buộc có items hoặc storyboard_path, ít nhất một trong hai.",
           "project_id tùy chọn, bỏ trống thì từng account tự chọn project đang mở.",
-          "Mỗi shot tối đa 2000 ký tự, một batch tối đa 300 ảnh.",
+          "Mỗi shot tối đa 7200 ký tự, một batch tối đa 300 ảnh.",
           "mode bỏ trống sẽ tự suy luận t2i hoặc i2i, i2i cần reference_image_path.",
           "depends_on_shot_id để shot sau chờ shot trước, nếu shot gốc lỗi thì shot phụ bị skipped.",
         ],

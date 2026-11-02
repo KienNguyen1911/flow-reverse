@@ -56,6 +56,8 @@ const BATCH_KEY = "fb_batch_prompts";
 const BATCH_REF_KEY = "fb_batch_ref";
 const RM_WM_KEY = "fb_remove_watermark";
 const MAX_BATCH = 300;
+//: Khớp giới hạn backend (`MAX_PROMPT_CHARS` trong `src/Workflows/flow_client.py`)
+const MAX_PROMPT = 7200;
 
 export function ComposePanel(p: Props) {
   const [prompt, setPrompt] = useState(() => localStorage.getItem(PROMPT_KEY) ?? "");
@@ -185,8 +187,8 @@ export function ComposePanel(p: Props) {
       setFormErr(`Batch toi da ${MAX_BATCH} anh. Chia thanh nhieu lan chay.`);
       return null;
     }
-    if (batchLines.some((l) => l.length > 2000)) {
-      setFormErr("Có dòng dài quá 2000 ký tự.");
+    if (batchLines.some((l) => l.length > MAX_PROMPT)) {
+      setFormErr(`Có dòng dài quá ${MAX_PROMPT} ký tự.`);
       return null;
     }
     const ref = batchRef.trim() || null;
@@ -495,13 +497,13 @@ export function ComposePanel(p: Props) {
             htmlFor="fb-prompt"
             info="Mô tả chi tiết hình ảnh bạn muốn tạo. Nhấn Ctrl+Enter để chạy nhanh."
             right={
-              <span className="font-mono text-[11px] text-mut">{prompt.length}/2000</span>
+              <span className="font-mono text-[11px] text-mut">{prompt.length}/{MAX_PROMPT}</span>
             }
           >
             <textarea
               id="fb-prompt"
               rows={5}
-              maxLength={2000}
+              maxLength={MAX_PROMPT}
               className="w-full resize-y rounded-ctl border border-line2 bg-panel2 px-3 py-2.5 text-[13.5px] leading-relaxed text-fg outline-none placeholder:text-mut focus-visible:border-acc/60 slim-scroll"
               placeholder="Mô tả ảnh bạn muốn tạo. Ví dụ: một con vịt vàng bơi trên mặt hồ phẳng lặng, nắng sớm, góc máy ngang tầm nước."
               value={prompt}

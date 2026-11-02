@@ -94,7 +94,7 @@ DEFAULT_WEB_DIST = ROOT / "web" / "dist"
 
 class GenerateBody(BaseModel):
     project_id: str
-    prompt: str = Field(min_length=1, max_length=5000)
+    prompt: str = Field(min_length=1, max_length=7200)
     aspect: int = 3
     seed: Optional[int] = None
     dry_run: bool = False
@@ -106,7 +106,7 @@ class GenerateBody(BaseModel):
 class NodeImageBody(BaseModel):
     """One canvas image node: prompt + ratio + optional attached reference image(s)."""
 
-    prompt: str = Field(min_length=1, max_length=5000)
+    prompt: str = Field(min_length=1, max_length=7200)
     aspect_ratio: Optional[str] = None      # "16:9" (verified), other ratios need capture
     aspect: Optional[int] = None            # raw enum escape hatch (wins over aspect_ratio)
     seed: Optional[int] = None
@@ -127,7 +127,7 @@ class NodeImageBody(BaseModel):
 class NodeVideoBody(BaseModel):
     """One canvas video node: prompt + ratio + attached frame (or auto image→video chain)."""
 
-    prompt: str = Field(min_length=1, max_length=5000)
+    prompt: str = Field(min_length=1, max_length=7200)
     aspect_ratio: str = "9:16"
     frame_path: Optional[str] = None        # attached image (path or /api/... URL)
     image_prompt: Optional[str] = None      # used only when auto_image generates the frame
@@ -215,7 +215,7 @@ class AddProjectBody(BaseModel):
 
 
 class BatchItemBody(BaseModel):
-    prompt: str = Field(min_length=1, max_length=2000)
+    prompt: str = Field(min_length=1, max_length=7200)
     seed: Optional[int] = None
     mode: Optional[str] = None                     # t2i | i2i (auto if omitted)
     reference_image_path: Optional[str] = None

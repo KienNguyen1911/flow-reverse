@@ -81,6 +81,10 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUT = ROOT / "out" / "playground"
 DEFAULT_BREAKER = ROOT / "out" / "bridge_state.json"
 
+#: Giới hạn độ dài prompt do app áp đặt (Google Flow không công bố giới hạn cứng;
+#: 7.200 ký tự là mức an toàn cho prompt lookbook dài + mô tả trang phục chi tiết).
+MAX_PROMPT_CHARS = 7200
+
 EventFn = Callable[[str, str, Optional[dict]], None]
 
 
@@ -440,8 +444,8 @@ class FlowClient:
         prompt = (prompt or "").strip()
         if not prompt:
             raise ValueError("prompt rỗng")
-        if len(prompt) > 5000:
-            raise ValueError("prompt quá dài (tối đa 5000 ký tự)")
+        if len(prompt) > MAX_PROMPT_CHARS:
+            raise ValueError(f"prompt quá dài (tối đa {MAX_PROMPT_CHARS} ký tự)")
         seed_v = validate_seed(seed if seed is not None else generate_seed())
         if not dry_run:
             self.breaker.check()

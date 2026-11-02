@@ -189,9 +189,9 @@ function diagnoseError(reason: string | null | undefined): ErrorDiagnosis {
       code: "VALIDATION_ERROR",
       title: "Tham số đầu vào không hợp lệ",
       explanation:
-        "Dữ liệu gửi lên server không đúng định dạng hoặc vượt quá giới hạn cho phép (prompt rỗng, quá 5.000 ký tự, tỷ lệ khung hình, seed,...). Lỗi này phát sinh ngay tại app, chưa gửi gì lên Google Flow nên không mất credit.",
+        "Dữ liệu gửi lên server không đúng định dạng hoặc vượt quá giới hạn cho phép (prompt rỗng, quá 7.200 ký tự, tỷ lệ khung hình, seed,...). Lỗi này phát sinh ngay tại app, chưa gửi gì lên Google Flow nên không mất credit.",
       fixHint:
-        "1. Prompt rỗng là nguyên nhân phổ biến nhất — nhập prompt hoặc bấm AI Prompt trên node rồi chạy lại.\n2. Prompt tối đa 5.000 ký tự; chọn tỷ lệ khung hình đã được xác thực.",
+        "1. Prompt rỗng là nguyên nhân phổ biến nhất — nhập prompt hoặc bấm AI Prompt trên node rồi chạy lại.\n2. Prompt tối đa 7.200 ký tự; chọn tỷ lệ khung hình đã được xác thực.",
     };
   }
 
