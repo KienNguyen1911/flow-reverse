@@ -13,7 +13,35 @@
       "source": "video_node",
       "camera": "push_in_slow",
       "duration_s": 8,
-      "motion_prompt": "Camera pushes in slowly at natural real-time speed. For the first three seconds the model stands square to the lens and holds steady eye contact, one hand brushing the halter neckline, natural blinks and quiet breathing. The model then turns a full 360 degrees in place, hem lifting with the turn, hair settling as the front silhouette returns."
+      "goal": "Giữ chân người xem: đứng yên nhìn thẳng ống kính 2 giây đầu để người lướt dừng lại đọc hook, rồi mới khoe lưng trần bằng một vòng xoay trọn.",
+      "beats": [
+        {
+          "at_s": 0,
+          "duration_s": 2,
+          "action": "Stands square to the lens with feet planted, holds steady eye contact, one hand resting on the strap, quiet breathing.",
+          "holds_gaze": true,
+          "must_not": ["turn away from the lens", "step out of frame", "start the spin early"]
+        },
+        {
+          "at_s": 2,
+          "duration_s": 3,
+          "action": "Turns a full 360 degrees in place at an even pace, hem lifting with the turn and hair settling as the back comes into view.",
+          "holds_gaze": false,
+          "must_not": ["spin faster than real time", "cut to another camera"]
+        },
+        {
+          "at_s": 5,
+          "duration_s": 3,
+          "action": "Completes the turn and settles back into the opening stance, returning to the lens so the clip loops.",
+          "holds_gaze": true,
+          "must_not": ["stop mid-turn", "end with the back to the lens"]
+        }
+      ],
+      "negative": [
+        "One continuous shot, staying inside the frame, with no cut",
+        "no added lettering or printed graphics"
+      ],
+      "motion_prompt": "Camera pushes in slowly at natural real-time speed. For the first two seconds the model stands square to the lens with feet planted, holds steady eye contact, one hand resting on the strap, natural blinks and quiet breathing. From the second to the fifth second the model turns a full 360 degrees in place at an even pace, hem lifting with the turn and hair settling as the back comes into view. In the final three seconds the model, holding steady eye contact with the lens, completes the turn and settles back into the opening stance, returning to the lens so the clip loops. One continuous shot, staying inside the frame, with no cut. No added lettering or printed graphics."
     },
     {
       "id": "clip2",
@@ -22,7 +50,34 @@
       "chain_from": "clip1.last_frame",
       "camera": "drift_same_axis",
       "duration_s": 8,
-      "motion_prompt": "Continuing from that pose, the model angles forty-five degrees, lifts the light cardi higher on the shoulder, eyes settling downward once, then returns to the lens. Camera drifts closer on the same axis. A soft breeze lifts the hair as the model settles back into the opening stance so the clip loops."
+      "goal": "Khoe phom set đồ ở góc nghiêng: cho cardigan rơi mở ra để lộ lớp voan của áo hai dây, rồi kết đúng tư thế mở đầu để 16 giây phát lặp không giật.",
+      "beats": [
+        {
+          "at_s": 0,
+          "duration_s": 3,
+          "action": "Angles forty-five degrees to one side and lifts the sheer cardigan higher on the shoulder, eyes settling downward once toward the sleeve.",
+          "holds_gaze": false,
+          "must_not": ["reset the pose", "step toward the lens"]
+        },
+        {
+          "at_s": 3,
+          "duration_s": 3,
+          "action": "Rolls the shoulders softly and shifts weight between the feet, letting the cardigan fall open over the camisole.",
+          "holds_gaze": false,
+          "must_not": ["pull the cardigan closed again", "change the camera framing"]
+        },
+        {
+          "at_s": 6,
+          "duration_s": 2,
+          "action": "Returns to the lens and settles into the opening stance of the previous clip so the sequence loops.",
+          "holds_gaze": true,
+          "must_not": ["end on a different stance than clip1 frame one"]
+        }
+      ],
+      "negative": [
+        "One continuous shot, staying inside the frame"
+      ],
+      "motion_prompt": "Continuing from that pose, camera drifts closer on the same axis. For the first three seconds the model angles forty-five degrees to one side and lifts the sheer cardigan higher on the shoulder, eyes settling downward once toward the sleeve. From the third to the sixth second the model rolls the shoulders softly and shifts weight between the feet, letting the cardigan fall open over the camisole. In the last two seconds the model returns to the lens and settles into the opening stance of the previous clip so the sequence loops. One continuous shot, staying inside the frame."
     }
   ],
   "shots": [

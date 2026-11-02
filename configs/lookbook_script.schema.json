@@ -50,7 +50,43 @@
           },
           "motion_prompt": {
             "type": "string",
-            "description": "Prompt chuyển động (motion-only). Agent được phép viết lại theo skill."
+            "description": "Bản nháp văn xuôi của người viết kịch bản. Khi clip có `beats`, prompt gửi Flow do `motion_prompt.beats_to_prompt()` render từ beats — field này chỉ còn là nguồn đọc cho người."
+          },
+          "goal": {
+            "type": "string",
+            "description": "Một câu: clip này tồn tại để làm gì (giữ chân / khoe phom / chi tiết). Cho người đọc và cho agent, KHÔNG đưa vào prompt."
+          },
+          "beats": {
+            "type": "array",
+            "description": "Nhịp trong clip, tính bằng giây trong clip. Nguồn duy nhất sinh ra văn xuôi prompt + mốc neo timeline/QA. Bỏ trống thì agent tự viết theo skill.",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["at_s", "duration_s", "action"],
+              "additionalProperties": false,
+              "properties": {
+                "at_s": { "type": "number", "minimum": 0 },
+                "duration_s": { "type": "number", "exclusiveMinimum": 0 },
+                "action": {
+                  "type": "string",
+                  "description": "Chuyển động cơ thể/camera, dùng từ vựng đóng của skill video §3."
+                },
+                "holds_gaze": {
+                  "type": "boolean",
+                  "description": "true = bắt buộc có eye contact với ống kính trong beat này (hook 3s đầu)."
+                },
+                "must_not": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Điều KHÔNG được xảy ra. Payload Flow không có negative prompt nên renderer phải diễn đạt thành mệnh đề phủ định trong câu."
+                }
+              }
+            }
+          },
+          "negative": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Mệnh đề phủ định nối cuối prompt, ví dụ 'staying inside the frame, with no cut'. Tránh từ vựng UI (banner/caption/card) — linter sẽ bắt."
           },
           "camera": {
             "enum": ["locked", "push_in_slow", "drift_same_axis", "pan_down", "handheld_subtle", null]

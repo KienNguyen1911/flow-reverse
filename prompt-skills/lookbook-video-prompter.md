@@ -112,50 +112,104 @@ downward toward the bag`.
 
 ## 4. Ngân sách độ dài
 
-- Mỗi prompt: **25–60 từ**. Tuyệt đối không vượt 80.
-- Một prompt = 1 câu camera + 2 câu chuyển động cơ thể. Hết.
+- Mỗi prompt: **70–115 từ**. Trần cứng **120** (`prompt_lint.VIDEO_MAX_WORDS`).
+- Một prompt = **1 câu camera + N câu beat + câu phủ định**. Với clip 8s chia 3 beat là 5 câu.
 - Nếu thấy mình đang tả lại ảnh → cắt bỏ ngay.
 
-## 5. Cấu trúc 2 clip nối tiếp
+Vì sao 70–115 chứ không phải 25–60 như trước: prompt phải mang được nhịp trong 8s (0–2s làm gì,
+2–5s làm gì, 5–8s làm gì) và phải nói rõ điều **không** được xảy ra. Đo thật trên script mẫu: 99–110
+từ đi qua `sanitize_video_prompt(aggressive=False)` **nguyên văn**. Dưới 70 từ thì không đủ chỗ cho
+3 mốc giây.
 
-### Clip 1 (0–8s) — Hook: giữ eye-contact trước, xoay sau
+## 5. Nhịp trong 8s: `beats` là nguồn, không phải văn xuôi
 
-Thứ tự bắt buộc, nếu đảo thì mất 3 giây hook:
+Nhịp sống ở `configs/lookbook_script.json → clips[].beats[]`, **không** sống trong prompt:
 
-1. **0–3s:** đứng gần như tĩnh, `holds steady eye contact with the lens`, một tay chạm nhẹ cổ áo.
-   Đây là phần giữ người xem lại đọc hook banner.
-2. **3–8s:** xoay trọn 360 độ tại chỗ để lộ lưng trần và dây buộc nơ, rồi trở về mặt trước.
+```jsonc
+"beats": [
+  { "at_s": 0, "duration_s": 2, "action": "Stands square to the lens, holds steady eye contact.",
+    "holds_gaze": true, "must_not": ["turn away from the lens"] },
+  { "at_s": 2, "duration_s": 3, "action": "Turns a full 360 degrees in place at an even pace." },
+  { "at_s": 5, "duration_s": 3, "action": "Completes the turn and settles into the opening stance." }
+]
+```
 
-Không cho người mẫu quay lưng trong 3 giây đầu — đó là lỗi của clip hiện tại.
+`src/Workflows/motion_prompt.py::beats_to_prompt()` đổi beats thành prompt theo đúng một khuôn:
 
-### Clip 2 (8–16s) — Chi tiết & kết vòng lặp
+| Beat | Câu sinh ra |
+| :--- | :--- |
+| beat đầu | `For the first two seconds the model …` |
+| beat giữa | `From the second to the fifth second the model …` |
+| beat cuối | `In the final three seconds the model …` |
 
-1. **0–4s:** nghiêng 45 độ, nâng túi lên vai, mắt liếc xuống túi một lần rồi quay lại ống kính.
-2. **4–8s:** thả dáng tự nhiên, gió làm tóc bay nhẹ, và **kết thúc ở đúng tư thế mở đầu của clip 1**.
+**Agent KHÔNG được viết lại câu beat.** Renderer tất định; agent chỉ được thêm `custom_hint` vào phần
+không phải beat. Lý do: gate round-trip sanitizer chỉ có giá trị khi đầu vào không đổi giữa các lần
+chạy.
 
-Yêu cầu cuối clip là mấu chốt: nếu last frame trùng tư thế first frame thì khi phát lặp 16s → 0s sẽ
-không giật. Viết rõ: `settles back into the opening stance so the clip loops`.
+### Vì sao không dùng nhãn giây
 
-### Template
+| Kiểu viết | Qua `sanitize_video_prompt` |
+| :--- | :--- |
+| `0s-2s: …` | mốc **bị xoá** |
+| `0-2s: …` | mốc **bị xoá** |
+| `[0-2s] …` | mốc **bị xoá** |
+| `(0s-2s) …` | **sót rác** `(0s-2s)` vào prompt gửi Flow |
+| `For the first two seconds …` | **nguyên văn** ✅ |
+
+## 6. Clip 1 và clip 2 khác nhau ở đâu
+
+Mục tiêu từng clip khai ở `clips[].goal` (một câu, cho người đọc; **không** đưa vào prompt — model
+không dùng được mục tiêu trừu tượng).
+
+### Clip 1 — `role: hook`
+
+Mục tiêu: giữ người lướt lại đủ lâu để đọc hook.
+
+1. **0–2s:** đứng yên, `holds steady eye contact with the lens`, một tay chạm nhẹ dây áo.
+   `holds_gaze: true`. Đây là cử chỉ hook — **mắt khoá ống kính**, không phải cười hay vẫy tay.
+2. **2–5s:** xoay trọn 360° tại chỗ, `hem lifting with the turn`.
+3. **5–8s:** kết thúc vòng xoay, trả về đúng tư thế mở đầu để clip tự lặp.
+
+### Clip 2 — `role: showcase`
+
+Mục tiêu: khoe phom ở góc nghiêng rồi nối về tư thế mở đầu clip 1.
+
+1. **0–3s:** nghiêng 45°, nâng lớp ngoài (cardigan/khoác) cao hơn trên vai.
+2. **3–6s:** thả vai, để lớp ngoài rơi mở ra.
+3. **6–8s:** trở về ống kính, kết đúng tư thế mở đầu clip 1 (`so the sequence loops`).
+
+### Câu phủ định (bắt buộc)
+
+Payload Flow **không có trường negative prompt**. Muốn cấm gì thì phải viết thành mệnh đề trong câu,
+đặt ở `clips[].negative[]` và renderer nối vào cuối prompt:
 
 ```text
-Camera pushes in slowly at natural real-time speed. For the first three seconds the model stands
-square to the lens and holds steady eye contact, one hand brushing the halter neckline, natural
-blinks and quiet breathing. The model then turns a full 360 degrees in place, hem lifting with the
-turn, hair settling as the front silhouette returns.
+One continuous shot, staying inside the frame, with no cut. No added lettering or printed graphics.
+```
+
+Đừng viết `no banner / no caption / no card` — linter coi đó là từ vựng UI. Viết
+`no added lettering or printed graphics`.
+
+### Ví dụ đầy đủ (sinh từ script mẫu, không viết tay)
+
+Đây là output thật của `beats_to_prompt()` trên `configs/lookbook_script.json`. Test
+`test_skill_example_matches_renderer` khoá hai bên khớp nhau — sửa script mà quên sửa skill thì test đỏ.
+
+```text
+Camera pushes in slowly at natural real-time speed. For the first two seconds the model stands square to the lens with feet planted, holds steady eye contact, one hand resting on the strap, quiet breathing. From the second to the fifth second the model turns a full 360 degrees in place at an even pace, hem lifting with the turn and hair settling as the back comes into view. In the final three seconds the model completes the turn and settles back into the opening stance, returning to the lens so the clip loops. One continuous shot, staying inside the frame, with no cut. No added lettering or printed graphics.
 ```
 
 ```text
-Continuing from that pose, the model angles forty-five degrees, lifts the woven tote higher on the
-shoulder, eyes settling downward toward the bag once, then returns to the lens with a small smile.
-Camera drifts closer on the same axis. A soft breeze lifts the hair as the model settles back into
-the opening stance so the clip loops.
+Continuing from that pose, camera drifts closer on the same axis. For the first three seconds the model angles forty-five degrees to one side and lifts the sheer cardigan higher on the shoulder, eyes settling downward once toward the sleeve. From the third to the sixth second the model rolls the shoulders softly and shifts weight between the feet, letting the cardigan fall open over the camisole. In the final two seconds the model returns to the lens and settles into the opening stance of the previous clip so the sequence loops. One continuous shot, staying inside the frame.
 ```
 
-## 6. Không được nhờ AI vẽ UI
+## 7. Không được nhờ AI vẽ UI
 
 Prompt video **không được** chứa: `card`, `sidebar`, `column`, `label`, `text`, `banner`,
 `progress bar`, `split screen`, `collage`, `HALTER TOP / DENIM JEANS / TOTE BAG` viết hoa.
+
+Ngoại lệ duy nhất: các cụm trong `clips[].negative[]` (mệnh đề cấm). Linter dùng phạm vi clause nên
+`no added lettering` không bị phạt, còn `turns with a banner` thì vẫn bị.
 
 Nếu cần cột item xuất hiện trong video, đó là việc của lớp dựng (HyperFrames/Remotion/editor), không
 phải của Veo. Đưa UI vào prompt = chữ méo + mất 1/3 khung hình.
@@ -195,10 +249,12 @@ Không giải thích ngoài khối, không header `[Video Prompt N]` (parser s�
 
 ## 9. Checklist trước khi trả prompt
 
-- [ ] 25–60 từ (trần cứng 80).
+- [ ] 70–115 từ (trần cứng 120).
+- [ ] Có đủ 3 mốc: `For the first … seconds` / `From the … to the … second` / `In the final … seconds`.
 - [ ] Không header mốc thời gian nào: `0-3s:`, `[2s-5s]`, `Timeline:`, `Camera & Realism:`.
 - [ ] Không có `she`, `her`, `the woman`, `the girl`, `the lady` — gọi `the model`.
 - [ ] Không có `looks at the camera`, `facing the camera`, `glances over her shoulder`, `slow motion`.
-- [ ] Không có từ vựng UI (mục 6).
+- [ ] Không có từ vựng UI (mục 7), trừ mệnh đề trong `clips[].negative[]`.
 - [ ] Không mô tả lại khuôn mặt, trang phục, ánh sáng, bối cảnh.
-- [ ] Có đúng 1 câu camera + 2 câu chuyển động cơ thể.
+- [ ] Có đúng 1 câu camera + N câu beat + câu phủ định.
+- [ ] `sanitize_video_prompt(prompt, aggressive=False) == prompt.strip()` (test tự kiểm).

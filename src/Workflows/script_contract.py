@@ -14,7 +14,7 @@ Không dùng pydantic: schema JSON là nguồn khai báo, module này chỉ bọ
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
@@ -35,6 +35,26 @@ class ScriptError(ValueError):
 
 
 @dataclass
+class BeatSpec:
+    """Một nhịp chuyển động trong clip, tính bằng giây **trong clip**.
+
+    Prompt video không mang được mốc giây (sanitizer xoá mọi nhãn thời gian, payload Flow không có
+    trường timeline), nên beat là nơi duy nhất khai báo nhịp. `motion_prompt.beats_to_prompt()` đổi
+    beat thành văn xuôi thứ tự; timeline/QA đọc lại chính beat để biết kỳ vọng.
+    """
+
+    at_s: float
+    duration_s: float
+    action: str
+    holds_gaze: bool = False
+    must_not: list[str] = field(default_factory=list)
+
+    @property
+    def end_s(self) -> float:
+        return round(self.at_s + self.duration_s, 3)
+
+
+@dataclass
 class ClipSpec:
     id: str
     role: str
@@ -43,6 +63,9 @@ class ClipSpec:
     camera: Optional[str] = None
     chain_from: Optional[str] = None
     source: str = "video_node"
+    goal: str = ""
+    beats: list[BeatSpec] = field(default_factory=list)
+    negative: list[str] = field(default_factory=list)
 
     @property
     def chain_source_clip(self) -> Optional[str]:
@@ -50,6 +73,10 @@ class ClipSpec:
         if not self.chain_from:
             return None
         return self.chain_from.split(".", 1)[0] or None
+
+    @property
+    def has_beats(self) -> bool:
+        return bool(self.beats)
 
 
 @dataclass
@@ -130,6 +157,17 @@ class LookbookScript:
                     "duration_s": c.duration_s,
                     "camera": c.camera,
                     "chain_from": c.chain_from,
+                    "goal": c.goal,
+                    "beats": [
+                        {
+                            "at_s": b.at_s,
+                            "duration_s": b.duration_s,
+                            "action": b.action,
+                            "holds_gaze": b.holds_gaze,
+                            "must_not": b.must_not,
+                        }
+                        for b in c.beats
+                    ],
                 }
                 for c in self.clips
             ],
@@ -178,6 +216,18 @@ def load_script(source: str | Path | dict) -> LookbookScript:
             camera=c.get("camera"),
             chain_from=c.get("chain_from"),
             source=str(c.get("source") or "video_node"),
+            goal=str(c.get("goal") or ""),
+            beats=[
+                BeatSpec(
+                    at_s=_as_float(b.get("at_s"), 0.0),
+                    duration_s=_as_float(b.get("duration_s"), 0.0),
+                    action=str(b.get("action") or ""),
+                    holds_gaze=bool(b.get("holds_gaze")),
+                    must_not=[str(x) for x in (b.get("must_not") or [])],
+                )
+                for b in (c.get("beats") or [])
+            ],
+            negative=[str(x) for x in (c.get("negative") or [])],
         )
         for i, c in enumerate(raw.get("clips") or [])
     ]
@@ -232,6 +282,51 @@ def load_script(source: str | Path | dict) -> LookbookScript:
     return script
 
 
+def _validate_beats(clip: ClipSpec) -> None:
+    """Beats phải phủ kín clip: bắt đầu 0, liền mạch, tổng bằng `duration_s`.
+
+    Lý do chặt: beat là mốc neo duy nhất cho cả prompt lẫn QA. Beat hở hay chồng lấn nghĩa là
+    không ai biết giây thứ 4.5 người mẫu làm gì, và gate `hook_still` sẽ so sai khoảng.
+    """
+    if not clip.beats:
+        return
+
+    prev_end = 0.0
+    for idx, beat in enumerate(clip.beats):
+        label = f"clip '{clip.id}' beat #{idx + 1}"
+        if beat.duration_s <= 0:
+            raise ScriptError(f"{label} có duration_s={beat.duration_s} — phải > 0")
+        if not beat.action.strip():
+            raise ScriptError(f"{label} thiếu `action`")
+        if idx == 0:
+            if beat.at_s != 0:
+                raise ScriptError(
+                    f"{label} bắt đầu ở {beat.at_s}s — beat đầu phải ở 0s, nếu không phần "
+                    f"0–{beat.at_s}s của clip không ai điều khiển."
+                )
+        elif beat.at_s < prev_end - 1e-6:
+            raise ScriptError(
+                f"{label} bắt đầu ở {beat.at_s}s nhưng beat trước kết thúc ở {prev_end}s — chồng lấn."
+            )
+        elif beat.at_s > prev_end + 1e-6:
+            raise ScriptError(
+                f"{label} bắt đầu ở {beat.at_s}s, hở {round(beat.at_s - prev_end, 3)}s so với beat "
+                f"trước ({prev_end}s)."
+            )
+        if beat.holds_gaze and not beat.must_not:
+            raise ScriptError(
+                f"{label} có holds_gaze=true nhưng `must_not` rỗng — beat giữ mắt phải khai báo điều "
+                "cấm (ví dụ 'turn away'), nếu không không có gì khoá được hành vi."
+            )
+        prev_end = beat.end_s
+
+    expected = round(clip.duration_s, 3)
+    if abs(prev_end - expected) > 1e-6:
+        raise ScriptError(
+            f"clip '{clip.id}' beats phủ {prev_end}s nhưng clip dài {expected}s — phải bằng nhau."
+        )
+
+
 def validate_script(script: LookbookScript) -> None:
     """Kiểm tra ràng buộc nghiệp vụ mà JSON Schema không diễn đạt được."""
     if script.fps not in (24, 30):
@@ -255,6 +350,7 @@ def validate_script(script: LookbookScript) -> None:
                 raise ScriptError(f"clip '{c.id}' nối từ '{c.chain_from}' nhưng không có clip '{src}'")
             if src == c.id:
                 raise ScriptError(f"clip '{c.id}' không thể nối từ chính nó")
+        _validate_beats(c)
 
     item_ids = {it.id for it in script.items}
     if len(item_ids) != len(script.items):
@@ -284,6 +380,7 @@ __all__ = [
     "CLIP_MAX_S",
     "DEFAULT_CANVAS",
     "DEFAULT_FPS",
+    "BeatSpec",
     "ClipSpec",
     "ItemSpec",
     "LookbookScript",

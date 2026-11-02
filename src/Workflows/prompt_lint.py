@@ -121,8 +121,12 @@ IMAGE_RESTATE_TERMS = (
     "slow motion", "slow-motion",
 )
 
-VIDEO_MAX_WORDS = 80
-VIDEO_MIN_WORDS = 10
+#: Ngân sách từ cho prompt video. Trước đây là 80 vì skill chỉ cho phép 1 câu camera + 2 câu cơ thể.
+#: Khi prompt phải mang 3 beat có mốc thời gian (xem `motion_prompt.beats_to_prompt`), 80 không đủ
+#: để vừa diễn đạt nhịp vừa nói điều KHÔNG được xảy ra. Đo trên script mẫu: 99–110 từ đi qua
+#: `sanitize_video_prompt(aggressive=False)` nguyên văn, nên trần 120 vẫn an toàn.
+VIDEO_MAX_WORDS = 120
+VIDEO_MIN_WORDS = 40
 
 
 def _word_count(text: str) -> int:
@@ -141,7 +145,11 @@ def _find_terms(text: str, terms: tuple[str, ...]) -> list[str]:
 #: Phủ định đứng ngay trước cụm thì cụm đó là *cấm*, không phải *yêu cầu*.
 #: `no wide-angle distortion` trong negative prompt không được báo lỗi như
 #: `wide-angle distortion` trong prompt khẳng định.
-_NEGATION_RE_TMPL = r"(?:no|not|never|without|avoid|avoiding|avoid distortions like)\s+$"
+_NEGATION_RE_TMPL = (
+    r"(?:no|not|never|without|avoid|avoiding|avoid distortions like"
+    r"|with no|and no|or no|nor"
+    r"|no added|no extra|no any|without any|without added)\s+$"
+)
 
 
 def _find_affirmed_terms(text: str, terms: tuple[str, ...]) -> list[str]:
@@ -152,6 +160,50 @@ def _find_affirmed_terms(text: str, terms: tuple[str, ...]) -> list[str]:
         for m in pattern.finditer(text):
             before = text[: m.start()]
             if re.search(_NEGATION_RE_TMPL, before, re.IGNORECASE):
+                continue
+            hits.append(t)
+            break
+    return hits
+
+
+#: Dấu phân cách clause. Phủ định có phạm vi **trong một clause**: câu
+#: "staying inside the frame, with no cut, no added banner or caption" là một clause phủ định trọn
+#: vẹn, trong khi "turns with a banner or caption" không có phủ định nào.
+_CLAUSE_SPLIT_RE = re.compile(r"(?:[,;.!?]\s+|\n)")
+
+#: Dấu hiệu mở đầu một clause phủ định.
+_CLAUSE_NEGATION_RE = re.compile(
+    r"^(?:no|not|never|without|avoid|avoiding|nor|with no|and no|or no|"
+    r"no added|no extra|without any|without added|staying inside)\b",
+    re.IGNORECASE,
+)
+
+
+def _in_negative_clause(text: str, pos: int) -> bool:
+    """Lần khớp tại `pos` có nằm trong một clause phủ định không."""
+    start = 0
+    for sep in _CLAUSE_SPLIT_RE.finditer(text):
+        if sep.end() > pos:
+            break
+        start = sep.end()
+    clause = text[start:pos]
+    # Bỏ liên từ nối đầu clause: "..., and no added lettering" → "no added lettering".
+    clause = re.sub(r"^(?:and|or|but|then|with)\s+", "", clause.strip(), flags=re.IGNORECASE)
+    return bool(_CLAUSE_NEGATION_RE.match(clause))
+
+
+def _find_affirmed_in_clause(text: str, terms: tuple[str, ...]) -> list[str]:
+    """Như `_find_affirmed_terms` nhưng dùng phạm vi clause.
+
+    Dùng cho từ vựng UI: prompt video **buộc** phải nói điều không được xảy ra, và payload Flow
+    không có trường negative riêng. Nếu linter phạt cả mệnh đề cấm thì nó đang phạt đúng câu mà
+    skill yêu cầu viết.
+    """
+    hits: list[str] = []
+    for t in terms:
+        pattern = re.compile(rf"(?<![\w-]){re.escape(t)}(?![\w-])", re.IGNORECASE)
+        for m in pattern.finditer(text):
+            if _in_negative_clause(text, m.start()):
                 continue
             hits.append(t)
             break
@@ -179,7 +231,11 @@ def lint_video_prompt(prompt: str) -> LintResult:
             f"Prompt chỉ {words} từ — có thể thiếu mô tả chuyển động camera/cơ thể.",
         ))
 
-    for term in _find_terms(text, UI_TERMS):
+    for term in _find_affirmed_in_clause(text, UI_TERMS):
+        # `_find_affirmed_terms` chứ không `_find_terms`: skill video yêu cầu prompt nói rõ điều KHÔNG
+        # được xảy ra ("staying inside the frame, with no cut", "no added lettering or printed
+        # graphics"). Trước đây "no added banner" bị coi là dùng từ vựng UI, tức linter phạt đúng câu
+        # mà skill bảo phải viết.
         warnings.append(PromptWarning(
             "ui_vocabulary", "error",
             f"Prompt chứa từ vựng UI '{term}'. Lớp dựng (HyperFrames/editor) lo phần này, "

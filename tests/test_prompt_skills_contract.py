@@ -139,11 +139,20 @@ def test_cutout_skill_rejects_human_seg():
     assert "no person" in text.lower()
 
 
-def test_video_skill_templates_survive_sanitizer():
-    """Hai prompt mẫu trong skill phải đi qua sanitize ở cả 2 chế độ mà không bị xoá nội dung."""
+def _skill_example_prompts() -> list[str]:
+    """Prompt mẫu trong skill, đọc từ khối ```text bắt đầu bằng câu camera.
+
+    Nguồn sự thật của prompt là `motion_prompt.beats_to_prompt()`; khối trong skill là **bản sao**
+    để người đọc thấy kết quả. `test_skill_example_matches_renderer` khoá hai bên khớp nhau.
+    """
     text = (SKILLS / "lookbook-video-prompter.md").read_text(encoding="utf-8")
     blocks = re.findall(r"```text\n(.*?)\n```", text, re.DOTALL)
-    prompts = [b.strip() for b in blocks if b.strip().startswith(("Camera", "Continuing"))]
+    return [b.strip() for b in blocks if b.strip().startswith(("Camera", "Continuing"))]
+
+
+def test_video_skill_templates_survive_sanitizer():
+    """Prompt mẫu trong skill phải đi qua sanitize ở cả 2 chế độ mà không bị xoá nội dung."""
+    prompts = _skill_example_prompts()
     assert len(prompts) == 2, f"expected 2 clip prompts, got {len(prompts)}"
 
     for p in prompts:
@@ -154,8 +163,38 @@ def test_video_skill_templates_survive_sanitizer():
             assert len(out) > len(p) * 0.85, f"mất nội dung (aggressive={mode}): {out!r}"
             # Chuyển động cốt lõi phải còn
             assert "camera" in out.lower()
-        # Không vượt ngân sách 80 từ
-        assert len(p.split()) <= 80, len(p.split())
+        # Không vượt ngân sách của skill (`prompt_lint.VIDEO_MAX_WORDS`)
+        from src.Workflows.prompt_lint import VIDEO_MAX_WORDS
+
+        assert len(p.split()) <= VIDEO_MAX_WORDS, len(p.split())
+
+
+def test_skill_example_matches_renderer():
+    """Khối mẫu trong skill phải **bằng đúng** output của renderer trên script mẫu.
+
+    Trước đây skill chứa template viết tay (`lifts the woven tote`, `halter neckline`) trỏ vào một bộ
+    đồ khác hoàn toàn, và không ai phát hiện vì agent không thấy script. Giữ hai bên khớp bằng test
+    để lần lệch sau bị bắt ngay.
+    """
+    from src.Workflows.motion_prompt import beats_to_prompt
+    from src.Workflows.script_contract import load_default_script
+
+    script = load_default_script()
+    assert script is not None
+    expected = [beats_to_prompt(clip) for clip in script.clips]
+    assert _skill_example_prompts() == expected
+
+
+def test_video_skill_avoids_filtered_phrases():
+    """Skill phải dạy tránh đúng những cụm bị bộ lọc viết lại — kiểm tra ở phần template,
+    không kiểm tra ở phần bảng cảnh báo (bảng có nhắc tới chúng để dẫn tránh)."""
+    templates = _skill_example_prompts()
+    assert templates
+    for tpl in templates:
+        for bad in FORBIDDEN_VIDEO_PHRASES:
+            assert bad not in tpl.lower(), f"template chứa cụm bị lọc: {bad}"
+        for hdr in FORBIDDEN_VIDEO_HEADERS:
+            assert hdr not in tpl, f"template chứa header bị cắt: {hdr}"
 
 
 def test_video_skill_avoids_filtered_phrases():
@@ -489,6 +528,33 @@ def test_linter_word_boundary_does_not_match_cardigan():
     )
     result = lint_video_prompt(ok)
     assert not [w for w in result.warnings if w.code == "ui_vocabulary"], result.warnings
+
+
+def test_linter_ignores_ui_terms_inside_negative_clause():
+    """Prompt video buộc phải nói điều KHÔNG được xảy ra, mà payload Flow không có trường negative.
+
+    Nếu linter phạt cả mệnh đề cấm thì nó đang phạt đúng câu skill yêu cầu viết, và người dùng sẽ
+    bỏ mệnh đề cấm để hết đỏ — mất luôn ràng buộc duy nhất chống cắt cảnh.
+    """
+    from src.Workflows.prompt_lint import lint_video_prompt
+
+    body = "Camera pushes in slowly at natural real-time speed."
+    banned_but_negated = (
+        f"{body} The model stands still and holds eye contact. "
+        "One continuous shot, staying inside the frame, with no cut, no added lettering or printed graphics."
+    )
+    assert not [w for w in lint_video_prompt(banned_but_negated).warnings if w.code == "ui_vocabulary"]
+
+    still_caught = f"{body} The model turns with a banner on screen."
+    assert [w for w in lint_video_prompt(still_caught).warnings if w.code == "ui_vocabulary"]
+
+
+def test_linter_budget_matches_skill():
+    """Ngân sách từ của linter và skill phải cùng một con số, nếu không agent bị dạy hai chuẩn."""
+    from src.Workflows.prompt_lint import VIDEO_MAX_WORDS
+
+    text = (SKILLS / "lookbook-video-prompter.md").read_text(encoding="utf-8")
+    assert f"trần cứng **{VIDEO_MAX_WORDS}**" in text or f"Trần cứng **{VIDEO_MAX_WORDS}**" in text
 
 
 def test_script_motion_prompts_are_lint_clean():

@@ -1,0 +1,84 @@
+[
+  {
+    "id": "F-001",
+    "title": "Script khai goal + beats + negative cho từng clip",
+    "priority": 1,
+    "acceptance": [
+      "schema.json chấp nhận clips[].goal, clips[].beats[], clips[].negative[] (tuỳ chọn)",
+      "validate_script bắt: beat đầu at_s!=0, beat chồng lấn, tổng beat lệch duration_s, beat holds_gaze thiếu must_not",
+      "configs/lookbook_script.json có beats cho clip1 và clip2, validate pass"
+    ],
+    "verify": "python -m pytest tests/test_script_contract.py -q",
+    "passes": true,
+    "evidence": "python -m pytest tests/test_script_beats.py -q -> 14 passed. validate_script bat: at_s!=0, ho beat, chong lan, tong lech duration, holds_gaze thieu must_not, duration_s=0, action rong. test_default_script_declares_beats_for_every_clip + beats_cover_clip_exactly deu xanh."
+  },
+  {
+    "id": "F-002",
+    "title": "Renderer beats -> prose sống sót sanitizer",
+    "priority": 2,
+    "acceptance": [
+      "motion_prompt.beats_to_prompt(clip) sinh câu camera + 3 beat theo thứ tự văn xuôi",
+      "sanitize_video_prompt(out, aggressive=False) == out.strip() với cả 2 clip mẫu",
+      "không chứa nhãn giây dạng 0s-2s / [0-2s] / (0s-2s)",
+      "từ ngoài whitelist bị từ chối thay vì render"
+    ],
+    "verify": "python -m pytest tests/test_motion_prompt.py -q",
+    "passes": true,
+    "evidence": "python -m pytest tests/test_motion_prompt.py -q -> 21 passed. clip1 110 tu, clip2 99 tu; sanitize(aggressive=False)==prompt cho ca hai. script mau render khong warning."
+  },
+  {
+    "id": "F-003",
+    "title": "Lint + skill đồng bộ ngân sách từ mới",
+    "priority": 3,
+    "acceptance": [
+      "VIDEO_MAX_WORDS=120, VIDEO_MIN_WORDS=40",
+      "UI_TERMS bỏ qua mệnh đề phủ định ('without ... banner')",
+      "skill mô tả cấu trúc 3 beat, bỏ template tote/halter cứng, ngân sách 70-100",
+      "test_prompt_skills_contract xanh"
+    ],
+    "verify": "python -m pytest tests/test_prompt_skills_contract.py -q",
+    "passes": true,
+    "evidence": "python -m pytest tests/test_prompt_skills_contract.py -q -> 38 passed. VIDEO_MAX_WORDS=120/MIN=40; UI_TERMS dung _find_affirmed_in_clause; test_skill_example_matches_renderer khoa skill == renderer output."
+  },
+  {
+    "id": "F-004",
+    "title": "Node video gửi clip_id xuống prompt agent",
+    "priority": 4,
+    "acceptance": [
+      "CanvasNodeState có clipId; node mẫu lb_video_1=clip1, lb_video_2=clip2",
+      "CanvasDrawer có select clip cho node video",
+      "3 call site generate-node-prompt gửi clip_id + clip_role + script_path",
+      "/api/node/options trả script.path + script.clips"
+    ],
+    "verify": "npm run build (web) + python -c probe node_options",
+    "passes": false,
+    "evidence": ""
+  },
+  {
+    "id": "F-005",
+    "title": "prompt_agent dùng beats và báo rõ khi thiếu clip_id",
+    "priority": 5,
+    "acceptance": [
+      "is_video thiếu clip_id -> instruction có dòng cảnh báo THIẾU clip_id",
+      "clip có beats -> instruction yêu cầu dùng đúng câu renderer, cấm đổi thứ tự",
+      "is_video có clip_id -> instruction chứa role + shots + chain_from"
+    ],
+    "verify": "python -m pytest tests/test_prompt_agent_context.py -q",
+    "passes": false,
+    "evidence": ""
+  },
+  {
+    "id": "F-006",
+    "title": "Raw video QA ghi vào delivery.json",
+    "priority": 6,
+    "acceptance": [
+      "raw_video_qa.evaluate_clip() trả >=6 gate có status pass/warn/skip",
+      "gate không đo được mang status skip kèm lý do, không bịa số",
+      "delivery.json có clips[].qa và qa_summary",
+      "README in bảng gate warn/fail"
+    ],
+    "verify": "python -m pytest tests/test_raw_video_qa.py -q",
+    "passes": false,
+    "evidence": ""
+  }
+]
