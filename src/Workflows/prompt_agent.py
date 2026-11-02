@@ -308,7 +308,8 @@ class PromptAgent:
             return [
                 "  → Vai trò ảnh: Ảnh 1 = MODEL (identity: mặt, tóc, dáng — giữ nguyên).",
                 "     Ảnh 2 = GARMENT (trang phục cần mặc — chép đúng phom, màu, chất liệu).",
-                "     Không có ảnh bối cảnh riêng: lấy bối cảnh từ Ảnh 2.",
+                "     Không có ảnh bối cảnh riêng: dùng studio trơn ở module Environment của skill,",
+                "     KHÔNG kế thừa bối cảnh Ảnh 2 (ảnh Shopee ngoài đường sẽ lọt vào khung).",
             ]
         return [
             "  → Chỉ có MỘT ảnh: nó đóng cả vai model và trang phục.",
