@@ -71,6 +71,16 @@ from ..Workflows.media_service import (
     resolve_input_path,
     validate_video_duration,
 )
+from ..Workflows.flow_catalog import (
+    VIDEO_SUB_MODES,
+    CatalogError,
+    capture_resolution,
+    image_model_key,
+    normalize_count,
+    resolve_image_model,
+    resolve_video_model,
+    video_model_key,
+)
 from ..Workflows.prompt_agent import NodePromptTask, get_prompt_agent
 from ..Workflows.script_contract import ScriptError, load_script
 from ..Workflows.skill_manager import get_skill_manager
@@ -112,9 +122,17 @@ class NodeImageBody(BaseModel):
     """One canvas image node: prompt + ratio + optional attached reference image(s)."""
 
     prompt: str = Field(min_length=1, max_length=MAX_PROMPT_CHARS)
-    aspect_ratio: Optional[str] = None      # "16:9" (verified), other ratios need capture
+    aspect_ratio: Optional[str] = None      # one of the 5 captured ratios (see /api/node/options)
     aspect: Optional[int] = None            # raw enum escape hatch (wins over aspect_ratio)
     seed: Optional[int] = None
+    #: Composer model id or label (`nano_banana_pro` / `Nano Banana Pro`).
+    #: See `src/Workflows/flow_catalog.py` — never guess a key.
+    model: Optional[str] = None
+    #: Batch size, mirroring the composer's x1..x4.
+    count: int = 1
+    #: When true the Flow composer is in "Tác nhân" (Agent) mode: it hides every
+    #: model/aspect/count control, so user values are not applied.
+    agent_mode: bool = False
     reference_image_path: Optional[str] = None   # path or /api/uploads|references|assets URL
     reference_image_paths: Optional[list[str]] = None
     project_id: Optional[str] = None
@@ -130,13 +148,27 @@ class NodeImageBody(BaseModel):
 
 
 class NodeVideoBody(BaseModel):
-    """One canvas video node: prompt + ratio + attached frame (or auto image→video chain)."""
+    """One canvas video node: prompt + sub-mode + model + aspect/resolution/duration/count.
+
+    Mirrors the Flow composer: sub-mode "Khung hình" (image→video, needs a frame) or
+    "Thành phần" (text→video, no frame). Model choice decides whether resolution and
+    duration are selectable at all (Veo fixes both).
+    """
 
     prompt: str = Field(min_length=1, max_length=MAX_PROMPT_CHARS)
     aspect_ratio: str = "9:16"
+    #: ``frames`` = Khung hình (image→video) | ``ingredients`` = Thành phần (text→video).
+    sub_mode: str = "frames"
+    #: Composer model id or label (`omni_1_1_flash` / `Omni 1.1 Flash`).
+    model: Optional[str] = None
+    #: Batch size, mirroring the composer's x1..x4.
+    count: int = 1
+    #: When true the Flow composer is in "Tác nhân" (Agent) mode: it hides every
+    #: model/aspect/resolution/duration/count control, so user values are not applied.
+    agent_mode: bool = False
     frame_path: Optional[str] = None        # attached image (path or /api/... URL)
     image_prompt: Optional[str] = None      # used only when auto_image generates the frame
-    image_aspect_ratio: str = "16:9"        # frame image ratio (only 16:9 verified today)
+    image_aspect_ratio: str = "16:9"        # frame image ratio
     auto_image: bool = True
     seed: Optional[int] = None
     resolution: str = "1080p"
@@ -1122,7 +1154,9 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
     def api_node_image(body: NodeImageBody):
         try:
             ratio, enum = resolve_image_aspect(body.aspect_ratio, body.aspect)
-        except (AspectNotVerifiedError, UnsupportedOptionError, ValueError) as e:
+            model_info = resolve_image_model(body.model)
+            count = normalize_count(body.count)
+        except (AspectNotVerifiedError, UnsupportedOptionError, CatalogError, ValueError) as e:
             raise HTTPException(status_code=400, detail=str(e))
         if body.seed is not None and not (1 <= int(body.seed) <= 2147483647):
             raise HTTPException(status_code=400, detail="seed phải nằm trong int32: 1..2147483647")
@@ -1152,6 +1186,9 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
             "aspect_ratio": ratio,
             "aspect": enum,
             "seed": body.seed,
+            "model": model_info.id,
+            "count": count,
+            "agent_mode": body.agent_mode,
             "reference_image_path": all_refs[0] if all_refs else None,
             "reference_image_paths": all_refs if all_refs else None,
             "project_id": body.project_id,
@@ -1161,22 +1198,38 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
             "dry_run": body.dry_run,
             "remove_watermark": body.remove_watermark,
         })
-        return {"job_id": job.id, "kind": "image", "aspect_ratio": ratio, "aspect": enum}
+        return {
+            "job_id": job.id, "kind": "image", "aspect_ratio": ratio, "aspect": enum,
+            "model": model_info.id, "model_label": model_info.label,
+            "model_key": image_model_key(model_info), "count": count,
+        }
 
     @app.post("/api/node/video")
     def api_node_video(body: NodeVideoBody):
         try:
             ratio = normalize_video_ratio(body.aspect_ratio)
-            resolution = normalize_video_resolution(body.resolution)
-            duration = validate_video_duration(body.duration_s)
+            model_info = resolve_video_model(body.model)
+            resolution = normalize_video_resolution(body.resolution, model=model_info.id)
+            duration = validate_video_duration(body.duration_s, model=model_info.id)
+            sub_mode = str(body.sub_mode or "frames").strip().lower()
+            if sub_mode not in VIDEO_SUB_MODES:
+                raise UnsupportedOptionError(
+                    f"Sub-mode video {body.sub_mode!r} không hợp lệ. Chọn: {', '.join(VIDEO_SUB_MODES)}."
+                )
+            count = normalize_count(body.count)
+            model_key = video_model_key(
+                model_info, sub_mode=sub_mode, duration_s=duration,
+                resolution=capture_resolution(model_info, resolution), aspect_ratio=ratio,
+            )
             image_ratio, _image_enum = resolve_image_aspect(body.image_aspect_ratio)
         except (AspectNotVerifiedError, UnsupportedOptionError, ValueError) as e:
             raise HTTPException(status_code=400, detail=str(e))
-        if not body.frame_path and not body.auto_image:
+        if sub_mode == "frames" and not body.frame_path and not body.auto_image:
             raise HTTPException(
                 status_code=400,
-                detail="Flow chỉ hỗ trợ image-to-video: cần ảnh đính kèm (frame_path) "
-                       "hoặc bật auto_image=true để tạo ảnh khung hình trước.",
+                detail="Sub-mode 'Khung hình' (image→video) cần ảnh đính kèm (frame_path) hoặc "
+                       "bật auto_image=true để tạo ảnh khung hình trước. Dùng sub_mode='ingredients' "
+                       "nếu chỉ muốn text→video từ câu lệnh.",
             )
         if body.frame_path and not resolve_input_path(body.frame_path).is_file():
             raise HTTPException(status_code=400, detail=f"Không tìm thấy ảnh đính kèm: {body.frame_path}")
@@ -1197,14 +1250,25 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
             "seed": body.seed,
             "resolution": resolution,
             "duration_s": duration,
+            "model": model_info.id,
+            "sub_mode": sub_mode,
+            "count": count,
+            "agent_mode": body.agent_mode,
             "project_id": body.project_id,
             "workspace_project_id": body.workspace_project_id,
             "dry_run": body.dry_run,
             "remove_watermark": body.remove_watermark,
         })
+        frame_source = (
+            "none" if sub_mode == "ingredients"
+            else ("provided" if body.frame_path else "generated")
+        )
         return {
             "job_id": job.id, "kind": "video", "aspect_ratio": ratio,
-            "resolution": resolution, "duration_s": duration, "frame_source": ("provided" if body.frame_path else "generated"),
+            "resolution": resolution, "duration_s": duration,
+            "model": model_info.id, "model_label": model_info.label,
+            "model_key": model_key, "sub_mode": sub_mode, "count": count,
+            "frame_source": frame_source,
         }
 
     @app.post("/api/node/last_frame")
