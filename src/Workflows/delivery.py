@@ -403,6 +403,9 @@ def _clip_manifest_entry(
         "policy_retries": ref.policy_retries if ref else 0,
         # Giá trị script yêu cầu, để người dựng biết lệch bao nhiêu so với thực đo.
         "script_duration_s": clip.duration_s,
+        #: Kết quả QA thô của clip (`raw_video_qa`). Điền sau khi đã copy file, ở
+        #: `_attach_clip_qa` — gate khung nối cần biết clip trước đã có file hay chưa.
+        "qa": None,
     }
 
     if ref is None:
@@ -469,6 +472,44 @@ def _clip_manifest_entry(
         if info.fps and info.fps not in (24.0, 25.0, 30.0):
             warnings.append(f"clip '{clip.id}' ở {info.fps}fps — lạ so với nguồn Flow (24fps).")
     return entry
+
+def _attach_clip_qa(
+    script: LookbookScript,
+    entries: list[dict],
+    dest_clips_dir: Path,
+) -> dict:
+    """Chấm QA cho từng clip đã copy và gắn vào entry.
+
+    Chạy **sau** vòng copy vì `chain_match` cần khung cuối của clip nguồn, mà clip nguồn
+    chỉ có file ở `dest_clips_dir` sau khi chính nó được copy. Chạy trước thì gate nối
+    luôn rơi vào `skip` một cách vô cớ.
+
+    Kết quả chỉ **cảnh báo**: không có gì ném ra ngoài, không gate nào chặn export.
+    """
+    from .raw_video_qa import evaluate_clip, qa_summary
+
+    by_id = {e["id"]: e for e in entries}
+    clips_qa = []
+    for clip in script.clips:
+        entry = by_id.get(clip.id)
+        if entry is None:
+            continue
+
+        dst = dest_clips_dir / Path(entry["path"]).name if entry.get("path") else None
+        prev_video = None
+        if clip.chain_source_clip:
+            prev_entry = by_id.get(clip.chain_source_clip)
+            if prev_entry and prev_entry.get("path"):
+                prev_video = dest_clips_dir / Path(prev_entry["path"]).name
+
+        qa = evaluate_clip(clip, dst, script, prev_video=prev_video)
+        entry["qa"] = qa.to_dict()
+        clips_qa.append(qa)
+
+    summary = qa_summary(clips_qa)
+    # Không nối vào `warnings` của delivery: README đã có bảng QA riêng, và `_clip_manifest_entry`
+    # đã cảnh báo board UI theo cách của nó. Nối thêm là mỗi lỗi hiện hai lần.
+    return summary
 
 
 def _resolve_item_image(ref: ItemRef) -> Optional[Path]:
@@ -749,6 +790,37 @@ def _render_readme(manifest: dict, result: DeliveryResult) -> str:
             "đừng dựng phim trên nền này.",
         ]
 
+    qa = manifest.get("qa_summary") or {}
+    flagged = [
+        (c["id"], g)
+        for c in manifest["clips"]
+        for g in ((c.get("qa") or {}).get("gates") or [])
+        if g["status"] in ("warn", "skip")
+    ]
+    if flagged:
+        counts = qa.get("counts") or {}
+        lines += [
+            "",
+            "## Kiểm tra clip thô (QA)",
+            "",
+            f"Kết quả: **{qa.get('status', '?')}** — "
+            f"{counts.get('pass', 0)} đạt, {counts.get('warn', 0)} cảnh báo, "
+            f"{counts.get('skip', 0)} chưa đo được. Đây là cảnh báo, không chặn dựng phim.",
+            "",
+            "| clip | gate | kết quả | số đo |",
+            "| :-- | :-- | :-- | :-- |",
+        ]
+        for clip_id, g in flagged:
+            mark = "⚠️" if g["status"] == "warn" else "—"
+            detail = g["detail"].replace("|", "\\|")
+            lines.append(f"| {clip_id} | {g['name']} | {mark} {g['status']} | {detail} |")
+        if counts.get("skip"):
+            lines += [
+                "",
+                "`skip` nghĩa là **chưa ai kiểm**, không phải đã đạt — thường do thiếu ffmpeg "
+                "hoặc clip chưa sinh.",
+            ]
+
     if manifest["summary"]["clips_missing"] or result.warnings:
         lines += ["", "## Cần kiểm tra", ""]
         for m in manifest["summary"]["clips_missing"]:
@@ -813,6 +885,9 @@ def build_delivery(
         _clip_manifest_entry(clip, refs_by_clip.get(clip.id), delivery_root / "clips", missing, warnings)
         for clip in script.clips
     ]
+
+    # QA chạy sau khi đã copy đủ clip: gate `chain_match` cần khung cuối của clip nguồn.
+    qa_summary_data = _attach_clip_qa(script, clip_entries, delivery_root / "clips")
 
     # Plate: lấy từ clip đầu tiên có ảnh nền, ưu tiên file đã khai tường minh.
     plate_rel: Optional[str] = None
@@ -929,6 +1004,8 @@ def build_delivery(
         "clips": clip_entries,
         "items": item_entries,
         "timeline": timeline,
+        #: QA thô của toàn bộ clip: trạng thái xấu nhất + từng cảnh báo/gate chưa đo được.
+        "qa_summary": qa_summary_data,
         "audio": {
             "bgm": script.audio.get("bgm"),
             "bgm_start_s": script.audio.get("bgm_start_s"),

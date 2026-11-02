@@ -78,7 +78,7 @@
       "README in bảng gate warn/fail"
     ],
     "verify": "python -m pytest tests/test_raw_video_qa.py -q",
-    "passes": false,
-    "evidence": ""
+    "passes": true,
+    "evidence": "python -m pytest tests/test_raw_video_qa.py -q -> 26 passed. python -m pytest tests -q -> 392 passed, 5 failed (dung 5 failure baseline D-001: test_account_pool x3, test_media_service x2). Do tren clip that out/deliveries/havana_donna_set/clips/clip1.mp4 (720x1280/24fps/8.000s): evaluate_clip -> 9 gate, 5 pass / 3 warn / 1 skip trong 3.7s. Nguong do duoc: scdet dinh clip that 10.79 (t=4.0, doi tu the - xac nhan bang khung t3.9 vs t4.0) vs cat cung tong hop 15.63 => threshold 12; freezedetect -40dB bao nham, -50dB d=0.5 dung; tblend|YAVG trung vi hook 0-1s=0.95 vs than 2-8s=4.55 => hook_still ratio 0.429 pass. delivery.json co clips[].qa + qa_summary{status,counts,ok,warnings,skipped}; README in bang 'Kiem tra clip tho (QA)' kem cau 'khong chan dung phim'."
   }
 ]

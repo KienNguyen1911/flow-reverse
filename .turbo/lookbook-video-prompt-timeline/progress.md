@@ -50,3 +50,45 @@ python -m pytest tests -q                               -> 348 passed, 5 failed 
 ### Tiếp theo
 
 F-004 (nối `clip_id` từ FE), F-005 (prompt_agent dùng beats), F-006 (raw video QA).
+
+## 2026-11-02 — F-004, F-005 xong
+
+**F-004 — FE gửi `clip_id`**
+- `web/src/types.ts`: `ScriptClipOption`, `NodeMediaOptions.script`, `CanvasNodeState.clipId`.
+- `web/src/hooks.ts`: `useScriptClips()` (cache chung với `useLimits`).
+- `web/src/components/CanvasPanel.tsx`: `SCRIPT_PATH`, `clipRoleOf()`, 2 call site gửi
+  `clip_id`/`clip_role`/`script_path`; template `lb_video_1=clip1`, `lb_video_2=clip2`.
+- `web/src/components/CanvasDrawer.tsx`: select clip + call site thứ 3 + cảnh báo khi chưa chọn.
+- `src/Workflows/media_service.py`: `node_options()` trả `script.path`/`script.clips`.
+- `tests/test_node_options_script.py`: 5 test.
+
+**F-005 — prompt_agent dùng beats**
+- `_beat_lines()`: chèn nhịp có cấu trúc + prompt renderer nguyên văn + "KHÔNG đổi thứ tự".
+- Thiếu `clip_id` → in `THIẾU \`clip_id\`` + danh sách clip thay vì im lặng.
+- `tests/test_prompt_agent_context.py`: 13 test.
+
+Commit: `d1b52db`.
+
+## 2026-11-02 — F-006 xong
+
+**raw video QA**
+- `src/Workflows/raw_video_qa.py` (543 dòng): 9 gate — `duration_match`, `fps_ok`,
+  `resolution_ok`, `no_hard_cut`, `not_frozen`, `no_baked_ui`, `hook_clean`, `hook_still`,
+  `chain_match` — cộng `evaluate_clip()`, `qa_summary()`, `hook_window_s()`.
+- Mỗi gate trả `pass`/`warn`/`skip`, **không có `fail`** (người dùng chọn "chỉ cảnh báo").
+- Ngưỡng đo từ clip thật, không phải số tròn:
+  - `HARD_CUT_THRESHOLD=12` — clip thật đỉnh 10.79 (t=4.0, chỉ đổi tư thế: đã mở 2 khung
+    t3.9 vs t4.0 để xác nhận cùng cảnh); cắt cứng tổng hợp 15.63.
+  - `FREEZE_NOISE_DB=-50` — `-40dB` báo nhầm đoạn 0.5–0.875s chỉ là chuyển động chậm.
+  - `HOOK_STILL_RATIO_MAX=0.6` — đo được 0.429 (hook median 0.95 vs thân 4.55).
+  - `CHAIN_SSIM_MIN=0.90` — SSIM nội bộ clip1 là 0.475, nên gate chỉ có nghĩa cho cặp hai clip.
+- `delivery.py`: `_attach_clip_qa()` chạy **sau** vòng copy (gate nối cần file clip trước),
+  gắn `clips[].qa`, `manifest["qa_summary"]`, bảng QA trong `_render_readme`.
+- Không nối QA vào `result.warnings`: README đã có bảng riêng, nối thêm thì mỗi lỗi hiện hai lần.
+- `tests/test_raw_video_qa.py`: 26 test.
+- Full suite: 392 passed, 5 failed = **đúng baseline D-001**, không phát sinh mới.
+
+### Tiếp theo
+
+Không còn feature nào `passes: false`. Việc mở: nối `delivery.build_delivery` vào API/UI nếu
+muốn QA hiện ngay trong Flow Bench; hiện QA chỉ chạy lúc export.
