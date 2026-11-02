@@ -67,6 +67,9 @@ LogFn = Callable[[str, str], None]
 # --------------------------------------------------------------------------- #
 
 VIDEO_SUBMIT_RPC = "eb1hJf"
+#: Text→video submit RPC, used by the composer's "Thành phần" (ingredients) sub-mode.
+#: Captured 0-credit 2026-11-03: traces/submit_bodies/t2v_omni_8s_720p_summary.json.
+VIDEO_TEXT_SUBMIT_RPC = "YhhmEf"
 VIDEO_UPSAMPLE_RPC = "p0UkFb"
 VIDEO_POLL_RPC = "jwpduf"
 VIDEO_MEDIA_URL_RPC = "as29s"
@@ -264,7 +267,7 @@ def build_video_args(
     project_id: str,
     prompt: str,
     recaptcha_token: str,
-    starting_frame_media_id: str,
+    starting_frame_media_id: Optional[str],
     *,
     aspect_ratio: str = "9:16",
     seed: Optional[int] = None,
@@ -273,10 +276,13 @@ def build_video_args(
     u1: Optional[str] = None,
     u2: Optional[str] = None,
     gen_id: Optional[str] = None,
+    count: int = 1,
+    resolution: str = "720p",
 ) -> list:
     """Assemble the deterministic eb1hJf args payload (see `docs/api_specs/flow_create_video.md` §2.2).
 
-    Layout:
+    Layout (image→video, ``starting_frame_media_id`` set)::
+
         video_spec = [
             [None, None, [[[prompt]]]],
             "abra_i2v_8s",
@@ -287,6 +293,10 @@ def build_video_args(
         ]
         ref = [None, 22, None, None, None, project_id, None, None, None, None, [recaptcha_token, 1]]
         args = [[video_spec], ref, [gen_id, 2]]
+
+    360p (captured): the model key gains a ``_360p`` suffix and the spec grows to 10
+    entries with ``spec[9] = [4]``. ``count`` > 1 duplicates the spec, one ``u1``/``u2``
+    pair per render (captured: ``x2`` → ``args[0]`` has two specs).
     """
     if seed is not None:
         seed = int(seed)
@@ -301,16 +311,35 @@ def build_video_args(
     u2 = (u2 or str(uuid.uuid4())).upper()
     gen_id = (gen_id or str(uuid.uuid4())).upper()
     pid = project_id.strip().lower()
-    sf_id = starting_frame_media_id.strip().lower()
+    sf_id = starting_frame_media_id.strip().lower() if starting_frame_media_id else None
 
-    video_spec = [
-        [None, None, [[[prompt]]]],
-        model_key or VIDEO_MODEL_KEY,
-        int(aspect_enum),
-        int(seed) if seed is not None else None,
-        [None, sf_id, None, None, None, crop_box],
-        [None, None, None, None, u1, u2],
-    ]
+    # 360p is signalled twice: `_360p` on the model key and `spec[9] = [4]`, which makes
+    # the spec 10 long instead of 6 (captured: traces/submit_bodies/vid_360p_summary.json).
+    is_360 = str(resolution or "").strip().lower().startswith("360")
+    model_key = model_key or VIDEO_MODEL_KEY
+    if is_360 and not model_key.endswith("_360p"):
+        model_key = f"{model_key}_360p"
+
+    def _spec(idx: int) -> list:
+        s_u1 = u1 if idx == 0 else str(uuid.uuid4()).upper()
+        s_u2 = u2 if idx == 0 else str(uuid.uuid4()).upper()
+        s_seed = (int(seed) if seed is not None else None) if idx == 0 else (
+            new_seed() if seed is not None else None
+        )
+        spec: list[Any] = [
+            [None, None, [[[prompt]]]],
+            model_key,
+            int(aspect_enum),
+            s_seed,
+            [None, sf_id, None, None, None, crop_box],
+            [None, None, None, None, s_u1, s_u2],
+        ]
+        if is_360:
+            spec.extend([None, None, None, [4]])
+        return spec
+
+    specs = [_spec(i) for i in range(max(1, int(count)))]
+
     ref = [
         None,
         VIDEO_TOOL_ID,
@@ -324,7 +353,90 @@ def build_video_args(
         None,
         [recaptcha_token, 1],
     ]
-    return [[video_spec], ref, [gen_id, 2]]
+    return [specs, ref, [gen_id, 2]]
+
+
+def build_text_video_args(
+    project_id: str,
+    prompt: str,
+    recaptcha_token: str,
+    *,
+    aspect_ratio: str = "9:16",
+    seed: Optional[int] = None,
+    model_key: str = "abra_t2v_8s",
+    u1: Optional[str] = None,
+    u2: Optional[str] = None,
+    gen_id: Optional[str] = None,
+    count: int = 1,
+    resolution: str = "720p",
+) -> list:
+    """Assemble the ``YhhmEf`` args payload for the "Thành phần" (text→video) sub-mode.
+
+    Captured 0-credit (``traces/submit_bodies/t2v_omni_8s_720p_summary.json``)::
+
+        spec = [
+            [None, None, [[[prompt]]]],
+            "abra_t2v_8s",          # model key, prefix abra_t2v_*/veo_3_1_t2v*
+            aspect_enum,            # 1 = 9:16, 2 = 16:9
+            seed_or_null,
+            [None, None, None, None, u1, u2],   # NO starting frame
+        ]
+        ref   = [None, 22, None, None, None, project_id, None, None, None, None, [token, 1]]
+        args  = [[spec, ...], ref, [gen_id, 2]]
+
+    360p grows the spec to 8 entries with ``spec[7] = [4]``.
+    """
+    if seed is not None:
+        seed = int(seed)
+        if not (1 <= seed <= SEED_MAX):
+            raise ValueError(f"seed must fit signed int32: 1..{SEED_MAX} (got {seed})")
+
+    aspect_enum = VIDEO_ASPECT_PORTRAIT if "9:16" in str(aspect_ratio) else VIDEO_ASPECT_LANDSCAPE
+    u1 = (u1 or str(uuid.uuid4())).upper()
+    u2 = (u2 or str(uuid.uuid4())).upper()
+    gen_id = (gen_id or str(uuid.uuid4())).upper()
+    pid = project_id.strip().lower()
+
+    is_360 = str(resolution or "").strip().lower().startswith("360")
+    if is_360 and not model_key.endswith("_360p"):
+        model_key = f"{model_key}_360p"
+
+    def _spec(idx: int) -> list:
+        s_u1 = u1 if idx == 0 else str(uuid.uuid4()).upper()
+        s_u2 = u2 if idx == 0 else str(uuid.uuid4()).upper()
+        s_seed = seed if idx == 0 else (new_seed() if seed is not None else None)
+        spec: list[Any] = [
+            [None, None, [[[prompt]]]],
+            model_key,
+            int(aspect_enum),
+            s_seed,
+            [None, None, None, None, s_u1, s_u2],
+        ]
+        if is_360:
+            spec.extend([None, None, [4]])
+        return spec
+
+    specs = [_spec(i) for i in range(max(1, int(count)))]
+    ref = [
+        None,
+        VIDEO_TOOL_ID,
+        None,
+        None,
+        None,
+        pid,
+        None,
+        None,
+        None,
+        None,
+        [recaptcha_token, 1],
+    ]
+    return [specs, ref, [gen_id, 2]]
+
+
+def _count_needs_change(chip_text: str, want: int) -> bool:
+    """Does the composer chip show a different batch count than ``want``?"""
+    txt = str(chip_text or "")
+    return f"x{want}" not in txt
 
 
 def build_video_upsample_1080p_args(
@@ -1300,54 +1412,192 @@ class FlowVideoBridge:
         info = bridge.attach_reference(frame_path)
         return bool(info.get("preview_seen"))
 
-    def _ensure_ui_video_frames_mode(self, page: Any, target_aspect: str) -> None:
-        """Ensure composer UI is in Video -> Khung hình / Frames Mode (crop_free) -> 8s -> target_aspect -> x1 (bilingual VI/EN)."""
-        settings_btn = page.query_selector("button.settings-trigger-button")
-        if not settings_btn:
-            return
-        btn_txt = (settings_btn.inner_text() or "").strip()
-        need_aspect_icon = "crop_9_16" if target_aspect == "9:16" else "crop_16_9"
-        has_8s = ("8 giây" in btn_txt) or ("8s" in btn_txt)
-        has_start_slot = bool(
-            page.query_selector(
-                '//button[contains(., "Bắt đầu") or contains(., "Start")] | //flow-image-ingredient-chip'
+    def _settings_popover_open(self, page: Any) -> bool:
+        try:
+            return bool(
+                page.evaluate(
+                    "() => [...document.querySelectorAll('.cdk-overlay-pane')]"
+                    ".filter(p => p.offsetWidth || p.offsetHeight).length > 0"
+                )
+            )
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _open_settings_popover(self, page: Any) -> bool:
+        if self._settings_popover_open(page):
+            return True
+        return bool(
+            page.evaluate(
+                "() => { const b = document.querySelector('button.settings-trigger-button');"
+                " if (!b || !(b.offsetWidth || b.offsetHeight)) return false; b.click(); return true; }"
             )
         )
-        # Note: in Ingredients mode ("Thành phần" / "Ingredients"), the composer shows "Agent" or "+" instead of "Bắt đầu"/"Start"
-        has_start_btn = bool(page.query_selector('//button[contains(., "Bắt đầu") or contains(., "Start")]'))
-        if "Video" in btn_txt and has_8s and need_aspect_icon in btn_txt and "x1" in btn_txt and has_start_btn:
-            return
 
-        settings_btn.click(force=True)
-        page.wait_for_timeout(500)
-        xpath_selectors = [
-            '//button[@role="radio" and (contains(., "videocam") or contains(., "Video"))]',
-            '//button[@role="radio" and (contains(., "crop_free") or contains(., "Khung hình") or contains(., "Frames"))]',
-            f'//button[@role="radio" and contains(., "{target_aspect}")]',
-            '//button[@role="radio" and (contains(., "8 giây") or normalize-space(.)="8s")]',
-            '//button[@role="radio" and normalize-space(.)="x1"]',
-        ]
-        for xp in xpath_selectors:
-            r_btn = page.query_selector(xp)
-            if r_btn and r_btn.get_attribute("aria-checked") != "true":
-                r_btn.click(force=True)
-                page.wait_for_timeout(250)
+    def _pick_in_popover(self, page: Any, label: str) -> bool:
+        """Click a radio/menu item in the open settings popover by its visible label."""
+        return bool(
+            page.evaluate(
+                r"""(label) => {
+                const n = s => (s || '').replace(/\s+/g, ' ').trim();
+                const ps = [...document.querySelectorAll('.cdk-overlay-pane')].filter(p => p.offsetWidth || p.offsetHeight);
+                const p = ps[ps.length - 1];
+                if (!p) return false;
+                const els = [...p.querySelectorAll('[role="radio"], [role="menuitem"], button')];
+                const el = els.find(e => n(e.innerText) === label)
+                  || els.find(e => n(e.innerText).endsWith(' ' + label))
+                  || els.find(e => n(e.innerText).startsWith(label + ' '));
+                if (!el) return false;
+                if (el.disabled === true || el.getAttribute('aria-disabled') === 'true') return false;
+                if (el.getAttribute('aria-checked') === 'true') return true;
+                el.click();
+                return true;
+            }""",
+                label,
+            )
+        )
 
+    def _pick_video_model(self, page: Any, model_label: str) -> bool:
+        """Pick a model in the video composer (the model menu lives in a nested overlay)."""
+        if not self._open_settings_popover(page):
+            return False
+        page.wait_for_timeout(450)
+        opened = page.evaluate(
+            r"""() => {
+            const ps = [...document.querySelectorAll('.cdk-overlay-pane')].filter(p => p.offsetWidth || p.offsetHeight);
+            const p = ps[ps.length - 1];
+            if (!p) return false;
+            const b = [...p.querySelectorAll('button')].find(x => (x.getAttribute('aria-label') || '') === 'Chọn nhóm mô hình');
+            if (!b) return false;
+            b.click();
+            return true;
+          }"""
+        )
+        if not opened:
+            return False
+        page.wait_for_timeout(450)
+        ok = self._pick_in_popover(page, model_label)
+        page.wait_for_timeout(400)
+        return bool(ok)
+
+    def _close_settings_popover(self, page: Any) -> None:
         backdrop = page.query_selector(".cdk-overlay-backdrop")
         if backdrop:
             backdrop.click(force=True)
         else:
             page.keyboard.press("Escape")
-        page.wait_for_timeout(350)
+        page.wait_for_timeout(320)
 
-        new_btn = page.query_selector("button.settings-trigger-button")
-        new_txt = ((new_btn.inner_text() if new_btn else "") or "").strip()
-        new_html = (new_btn.inner_html() if new_btn else "") or ""
-        if "Video" not in new_txt and "videocam" not in new_html:
-            raise PageInteractionError(
-                f"Không chuyển được composer sang chế độ Video (hiện tại: {new_txt!r})."
+    def _ensure_ui_video_mode(
+        self,
+        page: Any,
+        *,
+        sub_mode: str = "frames",
+        target_aspect: str = "9:16",
+        model_label: Optional[str] = None,
+        duration_s: int = 8,
+        resolution: str = "720p",
+        count: int = 1,
+        offer_resolution: bool = True,
+        offer_duration: bool = True,
+    ) -> str:
+        """Drive the composer to Video + the requested sub-mode/config; returns the chip text.
+
+        Observed contract (see ``.turbo/node-config-parity/matrix.md``): Angular closes the
+        settings popover after a model pick, so every option group needs its own open; and
+        picking a Veo model removes the resolution + duration groups entirely.
+        """
+        sub_label = "Khung hình" if sub_mode == "frames" else "Thành phần"
+        aspect = "9:16" if "9:16" in str(target_aspect) else "16:9"
+        want_count = max(1, int(count or 1))
+
+        def _chip() -> str:
+            btn = page.query_selector("button.settings-trigger-button")
+            return ((btn.inner_text() if btn else "") or "").replace("\n", " ").strip()
+
+        # Already there?
+        txt = _chip()
+        expected_bits = [
+            "Video" in txt,
+            aspect.replace(":", "_").replace("_", "_") in txt.replace(":", "_"),
+            f"x{want_count}" in txt,
+        ]
+        if model_label:
+            expected_bits.append(model_label.replace("🍌 ", "") in txt)
+        if offer_duration:
+            expected_bits.append(f"{duration_s} giây" in txt or f"{duration_s}s" in txt)
+        if offer_resolution:
+            expected_bits.append(str(resolution).lower() in txt.lower())
+        # Sub-mode is not part of the chip; always ensure it once.
+        if all(expected_bits):
+            self._ensure_video_sub_mode(page, sub_label)
+            return _chip()
+
+        for step in (("Video", None), (sub_label, None), (aspect, None)):
+            if not self._open_settings_popover(page):
+                break
+            page.wait_for_timeout(450)
+            if not self._pick_in_popover(page, step[0]):
+                self._log("warn", f"Không chọn được {step[0]!r} trên popover Video")
+            page.wait_for_timeout(320)
+            self._close_settings_popover(page)
+
+        if model_label and not self._pick_video_model(page, model_label):
+            self._log("warn", f"Không chọn được model video {model_label!r}")
+        self._close_settings_popover(page)
+
+        if offer_resolution:
+            if self._open_settings_popover(page):
+                page.wait_for_timeout(420)
+                self._pick_in_popover(page, str(resolution))
+                page.wait_for_timeout(300)
+                self._close_settings_popover(page)
+
+        if offer_duration:
+            if self._open_settings_popover(page):
+                page.wait_for_timeout(420)
+                self._pick_in_popover(page, f"{duration_s} giây")
+                page.wait_for_timeout(300)
+                self._close_settings_popover(page)
+
+        if _count_needs_change(_chip(), want_count):
+            if self._open_settings_popover(page):
+                page.wait_for_timeout(420)
+                self._pick_in_popover(page, f"x{want_count}")
+                page.wait_for_timeout(300)
+                self._close_settings_popover(page)
+
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(250)
+        return _chip()
+
+    def _ensure_video_sub_mode(self, page: Any, sub_label: str) -> None:
+        """Make sure the composer is on the wanted sub-mode (Khung hình / Thành phần)."""
+        try:
+            has_start_slot = bool(
+                page.query_selector("flow-image-ingredient-chip")
+                or page.query_selector('//button[contains(., "Bắt đầu") or contains(., "Start")]')
             )
-        self._log("info", f"Composer ở chế độ Video: {new_txt!r}")
+            if sub_label == "Khung hình" and has_start_slot:
+                return
+            if not self._open_settings_popover(page):
+                return
+            page.wait_for_timeout(420)
+            self._pick_in_popover(page, sub_label)
+            page.wait_for_timeout(320)
+            self._close_settings_popover(page)
+        except Exception as exc:  # noqa: BLE001
+            self._log("warn", f"Không đổi được sub-mode video sang {sub_label!r}: {exc}")
+
+    def _ensure_ui_video_frames_mode(self, page: Any, target_aspect: str) -> None:
+        """Backwards-compatible wrapper: Video → Khung hình → 8s → target_aspect → x1."""
+        chip = self._ensure_ui_video_mode(page, sub_mode="frames", target_aspect=target_aspect)
+        btn = page.query_selector("button.settings-trigger-button")
+        html = (btn.inner_html() if btn else "") or ""
+        if "Video" not in chip and "videocam" not in html:
+            raise PageInteractionError(
+                f"Không chuyển được composer sang chế độ Video (hiện tại: {chip!r})."
+            )
+        self._log("info", f"Composer ở chế độ Video: {chip!r}")
 
     def _attach_starting_frame_ui_fallback(self, page: Any, frame_p: Path) -> None:
         """Fallback UI attachment when synthetic paste does not mount flow-image-ingredient-chip (bilingual VI/EN)."""
@@ -1472,6 +1722,13 @@ class FlowVideoBridge:
         aggressive_sanitize: bool = False,
         seed: Optional[int] = None,
         resolution: str = "1080p",
+        *,
+        model_key: Optional[str] = None,
+        model_label: Optional[str] = None,
+        count: int = 1,
+        offer_resolution: bool = True,
+        offer_duration: bool = True,
+        capture_resolution: str = "720p",
     ) -> Path:
         """Protocol-level ("Bridge Mode") Video generation on Google Flow (`eb1hJf` + `jwpduf` + `as29s`).
 
@@ -1534,10 +1791,21 @@ class FlowVideoBridge:
                 )
                 self._log("info", f"Prompt ({len(clean_prompt)} ký tự): '{clean_prompt[:85]}...'")
 
-                # 1. Ensure reCAPTCHA Enterprise & clean page state, install VIDEO_HOOK_JS and ensure Video + Khung hình mode
+                # 1. Ensure reCAPTCHA Enterprise & clean page state, install VIDEO_HOOK_JS and drive
+                #    the composer to Video → sub-mode → aspect → model → resolution → duration → count
                 self._ensure_recaptcha_ready(br, active_pid)
                 self.install_video_hook(br)
-                self._ensure_ui_video_frames_mode(page, target_aspect)
+                self._ensure_ui_video_mode(
+                    page,
+                    sub_mode="frames",
+                    target_aspect=target_aspect,
+                    model_label=model_label,
+                    duration_s=duration_s,
+                    resolution=capture_resolution,
+                    count=count,
+                    offer_resolution=offer_resolution,
+                    offer_duration=offer_duration,
+                )
 
                 # 2. Upload & attach starting frame via synthetic paste (`maseQ`) or UI fallback
                 uploaded_media_id = self.upload_starting_frame_via_paste(
@@ -1601,10 +1869,13 @@ class FlowVideoBridge:
                     starting_frame_media_id=starting_frame_media_id,
                     aspect_ratio=target_aspect,
                     seed=seed_to_use,
+                    model_key=model_key or VIDEO_MODEL_KEY,
                     crop_box=cap_crop_box,
                     u1=u1,
                     u2=u2,
                     gen_id=gen_id,
+                    count=count,
+                    resolution=capture_resolution,
                 )
                 our_body = encode_video_batchexecute_form(VIDEO_SUBMIT_RPC, our_args, at_param)
                 new_reqid = (app_reqid + 100000) if app_reqid is not None else 990001
@@ -1694,3 +1965,180 @@ class FlowVideoBridge:
                 return downloaded
 
         raise BridgeError("Không thể hoàn tất tạo video qua FlowVideoBridge.")
+
+    def generate_text_video_flow(
+        self,
+        prompt_text: str,
+        dest_path: Path | str,
+        duration_s: int = 8,
+        timeout_s: float = 300.0,
+        project_id: Optional[str] = None,
+        aspect_ratio: str = "9:16",
+        aggressive_sanitize: bool = False,
+        seed: Optional[int] = None,
+        resolution: str = "1080p",
+        *,
+        model_key: Optional[str] = None,
+        model_label: Optional[str] = None,
+        count: int = 1,
+        offer_resolution: bool = True,
+        offer_duration: bool = True,
+        capture_resolution: str = "720p",
+    ) -> Path:
+        """Text→video via the composer's "Thành phần" sub-mode (``YhhmEf``), 0 frame needed.
+
+        Captured 0-credit on 2026-11-03 (``traces/submit_bodies/t2v_*``): the composer sends
+        ``YhhmEf`` with a model key prefixed ``abra_t2v_*`` / ``veo_3_1_t2v*`` and an empty
+        starting-frame slot at ``spec[4]``. This is the path the node uses when no image is
+        attached, so a video node no longer has to generate a throwaway frame first.
+        """
+        dest_p = Path(dest_path).resolve()
+        dest_p.parent.mkdir(parents=True, exist_ok=True)
+        target_aspect = "9:16" if "9:16" in str(aspect_ratio) else "16:9"
+
+        with FlowBridge(self.cdp_url, log=lambda m: self._log("info", m)) as br:
+            page = br.page
+            assert page is not None
+
+            if project_id and f"/project/{project_id}" not in page.url:
+                self._log("step", f"Điều hướng SPA tới dự án Flow: {project_id}")
+                br.nav_project(project_id)
+
+            active_pid = project_id
+            if not active_pid and "/project/" in page.url:
+                active_pid = page.url.split("/project/")[1].split("/")[0].split("?")[0]
+            if not active_pid:
+                raise BridgeError("Không xác định được project_id trên trang Flow hiện tại.")
+            active_pid = active_pid.strip().lower()
+
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(300)
+            self._cleanup_failed_tiles_in_dom(page)
+
+            max_protocol_attempts = 2
+            for attempt in range(max_protocol_attempts):
+                is_retry = attempt > 0
+                clean_prompt = sanitize_video_prompt(prompt_text, aggressive=aggressive_sanitize or is_retry)
+                seed_to_use = new_seed() if (seed is None or is_retry) else int(seed)
+
+                self._log(
+                    "step",
+                    f"[Text→Video {attempt + 1}/{max_protocol_attempts}] {duration_s}s {target_aspect} "
+                    f"seed={seed_to_use} model={model_label or 'app'} x{count}",
+                )
+
+                self._ensure_recaptcha_ready(br, active_pid)
+                self.install_video_hook(br)
+                self._ensure_ui_video_mode(
+                    page,
+                    sub_mode="ingredients",
+                    target_aspect=target_aspect,
+                    model_label=model_label,
+                    duration_s=duration_s,
+                    resolution=capture_resolution,
+                    count=count,
+                    offer_resolution=offer_resolution,
+                    offer_duration=offer_duration,
+                )
+
+                br._eval("window.__videoHook.cap = null; window.__blockVideoGen = true;")
+                br.type_prompt(clean_prompt)
+                time.sleep(jitter(0.4, 0.1, 0.2))
+                br.click_generate(timeout_s=15.0, expected_mode="video")
+
+                try:
+                    cap = self.wait_video_capture(br, timeout_s=25.0)
+                    self.disarm_video_hook(br)
+                    app_reqid = extract_app_reqid(cap["url"])
+                    token, at_param, _app_args, cap_rpcid = parse_video_app_capture(cap["body"])
+                    if cap_rpcid != VIDEO_TEXT_SUBMIT_RPC:
+                        br.reload(settle_s=4.0)
+                        raise BridgeError(
+                            f"Request mồi là {cap_rpcid} thay vì {VIDEO_TEXT_SUBMIT_RPC} "
+                            "(composer không ở sub-mode 'Thành phần') — hủy submit."
+                        )
+                except (TokenParseError, CaptureTimeoutError) as cap_err:
+                    self.disarm_video_hook(br)
+                    if attempt + 1 < max_protocol_attempts:
+                        self._log("warn", f"reCAPTCHA chưa sẵn sàng ({cap_err}) — reload và thử lại...")
+                        br.reload(settle_s=5.0)
+                        continue
+                    br.reload(settle_s=4.0)
+                    raise
+
+                u1 = str(uuid.uuid4()).upper()
+                u2 = str(uuid.uuid4()).upper()
+                gen_id = str(uuid.uuid4()).upper()
+
+                our_args = build_text_video_args(
+                    project_id=active_pid,
+                    prompt=clean_prompt,
+                    recaptcha_token=token,
+                    aspect_ratio=target_aspect,
+                    seed=seed_to_use,
+                    model_key=model_key or "abra_t2v_8s",
+                    u1=u1,
+                    u2=u2,
+                    gen_id=gen_id,
+                    count=count,
+                    resolution=capture_resolution,
+                )
+                our_body = encode_video_batchexecute_form(VIDEO_TEXT_SUBMIT_RPC, our_args, at_param)
+                new_reqid = (app_reqid + 100000) if app_reqid is not None else 990001
+                fire_url = build_rpc_url_from_template(cap["url"], VIDEO_TEXT_SUBMIT_RPC, new_reqid)
+
+                fr = br.fire(fire_url, our_body, timeout_s=60.0, poll_s=1.0)
+                parsed_submit = parse_batchexecute_text(fr.text)
+                if not parsed_submit.get("ok"):
+                    kind, hint = describe_reject(parsed_submit.get("grpc_code"), parsed_submit.get("detail") or "")
+                    raise BridgeError(f"{VIDEO_TEXT_SUBMIT_RPC} bị từ chối ({kind}, 0 credit): {hint}")
+
+                video_media_id = extract_video_submit_media_id(
+                    parsed_submit.get("data"),
+                    project_id=active_pid,
+                    exclude=[u1, u2, gen_id],
+                )
+                if not video_media_id:
+                    raise BridgeError(
+                        f"{VIDEO_TEXT_SUBMIT_RPC} thành công nhưng không thấy video_media_id: {fr.text[:250]}"
+                    )
+                self._log("info", f"{VIDEO_TEXT_SUBMIT_RPC} nhận job: video_media_id={video_media_id}")
+
+                poll_res = self.poll_video_rpc(
+                    br,
+                    video_media_id=video_media_id,
+                    project_id=active_pid,
+                    timeout_s=timeout_s,
+                    poll_interval_s=4.0,
+                )
+                if poll_res["state"] == "failed":
+                    err_code = poll_res.get("error_code") or "PUBLIC_ERROR_VIDEO_GENERATION_FAILED"
+                    cats = ", ".join(poll_res.get("error_categories") or [])
+                    self._cleanup_failed_tiles_in_dom(page)
+                    if attempt + 1 < max_protocol_attempts and "PROMINENT_PEOPLE" not in err_code:
+                        self._log("warn", f"Video bị từ chối ({err_code} / {cats}) — làm sạch prompt và thử lại...")
+                        br.reload(settle_s=4.0)
+                        continue
+                    br.reload(settle_s=4.0)
+                    raise BridgeError(f"Flow từ chối tạo video ({err_code} [{cats}]).")
+
+                signed_url: Optional[str] = None
+                if "1080" in str(resolution):
+                    signed_url = self.upsample_and_fetch_1080p_url_rpc(
+                        br,
+                        video_media_id=video_media_id,
+                        item_id=poll_res.get("item_id"),
+                        project_id=active_pid,
+                        aspect_ratio=target_aspect,
+                        timeout_s=120.0,
+                    )
+                if not signed_url:
+                    signed_url = poll_res.get("signed_url") or self.fetch_signed_video_url_rpc(
+                        br, video_media_id=video_media_id, project_id=active_pid
+                    )
+                downloaded = self.download_video_verified(br, signed_url, dest_p)
+                strip_video_audio(downloaded, log=self._log)
+                br.reload(settle_s=4.0)
+                return downloaded
+
+        raise BridgeError("Không thể hoàn tất tạo video text→video qua FlowVideoBridge.")
