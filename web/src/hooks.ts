@@ -3,8 +3,10 @@ import { api } from "./api";
 import type {
   GalleryRun,
   Job,
+  NodeMediaOptions,
   PoolInfo,
   Project,
+  ScriptClipOption,
   Status,
   TryOnRunManifest,
   AssetUploadedItem,
@@ -25,6 +27,42 @@ export interface Limits {
 
 // Nhiều component cùng cần limits ⇒ giữ một promise dùng chung, chỉ fetch 1 lần.
 let limitsPromise: Promise<Limits> | null = null;
+//: Cache riêng cho danh sách clip của kịch bản: cùng endpoint, nhưng component khác tiêu thụ.
+let nodeOptionsPromise: Promise<NodeMediaOptions | null> | null = null;
+
+function fetchNodeOptions(): Promise<NodeMediaOptions | null> {
+  if (!nodeOptionsPromise) {
+    nodeOptionsPromise = api
+      .nodeOptions()
+      .catch(() => {
+        nodeOptionsPromise = null;
+        return null;
+      });
+  }
+  return nodeOptionsPromise;
+}
+
+/**
+ * Clip của kịch bản Lookbook, cho ô chọn trên node video.
+ *
+ * Trả `[]` khi chưa tải xong hoặc backend không có script — node ảnh và project chưa gắn kịch bản
+ * vẫn dùng component này nên UI phải chịu được cả hai.
+ */
+export function useScriptClips(): ScriptClipOption[] {
+  const [clips, setClips] = useState<ScriptClipOption[]>([]);
+  useEffect(() => {
+    let stop = false;
+    fetchNodeOptions()
+      .then((o) => {
+        if (!stop && o?.script?.clips) setClips(o.script.clips);
+      })
+      .catch(() => {});
+    return () => {
+      stop = true;
+    };
+  }, []);
+  return clips;
+}
 
 function fetchLimits(): Promise<Limits> {
   if (!limitsPromise) {

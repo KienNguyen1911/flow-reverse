@@ -39,9 +39,12 @@ import {
   highlightPrompt,
 } from "./canvasNodeBits";
 import { Chip, Spinner } from "./ui";
-import { useLimits } from "../hooks";
+import { useLimits, useScriptClips } from "../hooks";
 import { MediaPreviewModal, type PreviewMediaItem } from "./MediaPreviewModal";
 import { DeliveryModal } from "./DeliveryModal";
+
+//: Kịch bản mặc định — cùng đường dẫn với `DeliveryModal` và `script_contract.load_default_script`.
+const SCRIPT_PATH = "configs/lookbook_script.json";
 
 // --------------------------------------------------------------------------- //
 // Canvas node graph — image nodes feed video nodes (image-to-video chains).
@@ -255,6 +258,7 @@ export function canvasStateToGraph(state?: WorkspaceCanvasState | null): {
       elapsedS: typeof r.elapsedS === "number" ? r.elapsedS : null,
       agentSkillId: optionalStr(r.agentSkillId),
       agentCustomHint: optionalStr(r.agentCustomHint),
+      clipId: optionalStr(r.clipId),
       isItem: typeof r.isItem === "boolean" ? r.isItem : false,
       itemName: optionalStr(r.itemName),
       itemScope: ITEM_SCOPES.includes(String(r.itemScope) as ItemScope)
@@ -686,6 +690,7 @@ function createLookbook8sTemplate(): { nodes: CanvasNode[]; groups: CanvasGroup[
       sourceImageId: "lb_plate",
       sourceImageIds: ["lb_plate"],
       agentSkillId: "lookbook-video-prompter",
+      clipId: "clip1",
       videoRatio: "9:16",
       resolution: "1080p",
       imageAspectRatio: "9:16",
@@ -725,6 +730,7 @@ function createLookbook8sTemplate(): { nodes: CanvasNode[]; groups: CanvasGroup[
       sourceImageId: "lb_last_frame",
       sourceImageIds: ["lb_last_frame"],
       agentSkillId: "lookbook-video-prompter",
+      clipId: "clip2",
       videoRatio: "9:16",
       resolution: "1080p",
       imageAspectRatio: "9:16",
@@ -983,6 +989,14 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
 ) {
   const [graph, setGraph] = useState<Graph>(loadGraph);
   const limits = useLimits();
+  const scriptClips = useScriptClips();
+  //: `clip_id` → `role`, lấy từ `/api/node/options`. Backend cần cả hai để nói rõ vai clip khi
+  //: script không đọc được, nên không để nó tự suy ngược từ id.
+  const clipRoleOf = useCallback(
+    (clipId?: string | null) =>
+      (clipId && scriptClips.find((c) => c.id === clipId)?.role) || undefined,
+    [scriptClips],
+  );
   const [view, setView] = useState<View>({ x: 40, y: 20, z: 1 });
   const [opts, setOpts] = useState<NodeMediaOptions | null>(null);
   const [linking, setLinking] = useState<{ id: string; kind: NodeType; side: "in" | "out" } | null>(null);
@@ -1591,6 +1605,11 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
           skill_id: target.agentSkillId || undefined,
           custom_hint: target.agentCustomHint || undefined,
           is_video_continuation: isCont,
+          // Thiếu `clip_id` thì agent không đọc được role/shots/chain_from/beats và mọi node video
+          // sinh ra cùng một prompt. `script_path` để backend đọc đúng kịch bản đang dùng.
+          clip_id: target.type === "video" ? target.clipId || undefined : undefined,
+          clip_role: target.type === "video" ? clipRoleOf(target.clipId) : undefined,
+          script_path: target.type === "video" ? SCRIPT_PATH : undefined,
           // Ảnh sản phẩm ⇒ agent chọn skill cutout, và tên món là ngữ cảnh duy nhất khi
           // node chưa gắn ảnh tham chiếu.
           is_item: !!target.isItem,
@@ -1707,6 +1726,11 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
                     skill_id: n.agentSkillId || undefined,
                     custom_hint: n.agentCustomHint || undefined,
                     is_video_continuation: isVideoContinuation(nodesRef.current, n),
+                    // Cùng lý do với nút AI Prompt: thiếu `clip_id` thì JIT sinh prompt đè lên
+                    // prompt đúng, và hai node video lại ra giống nhau.
+                    clip_id: n.type === "video" ? n.clipId || undefined : undefined,
+                    clip_role: n.type === "video" ? clipRoleOf(n.clipId) : undefined,
+                    script_path: n.type === "video" ? SCRIPT_PATH : undefined,
                     // Thiếu 2 trường này thì JIT chọn skill lookbook thay vì skill cutout,
                     // và prompt sinh ra lại đi vẽ người mẫu cho node ảnh sản phẩm.
                     is_item: !!n.isItem,

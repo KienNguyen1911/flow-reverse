@@ -23,9 +23,12 @@ import {
 } from "@phosphor-icons/react";
 import { api } from "../api";
 import type { Job, JobEvent } from "../types";
-import { FALLBACK_LIMITS, useLimits } from "../hooks";
+import { FALLBACK_LIMITS, useLimits, useScriptClips } from "../hooks";
 import { OrderBadge, PromptEditor, highlightPrompt } from "./canvasNodeBits";
 import { Spinner } from "./ui";
+
+//: Kịch bản mặc định — cùng đường dẫn với `CanvasPanel` và `DeliveryModal`.
+const SCRIPT_PATH = "configs/lookbook_script.json";
 
 /** Option list builders — giữ giá trị hiện tại của node kể cả khi options chưa tải xong. */
 function aspectRatioOptions(current: string): string[] {
@@ -78,6 +81,8 @@ export interface CanvasDrawerNode {
   elapsedS?: number | null;
   agentSkillId?: string | null;
   agentCustomHint?: string | null;
+  /** Clip trong kịch bản Lookbook (`clip1`, `clip2`, …) mà node video này sinh. */
+  clipId?: string | null;
   /** Ảnh node này sinh ra là **ảnh sản phẩm** ⇒ chép vào thư viện `items/` của project. */
   isItem?: boolean;
   /** Tên món, dùng để đặt tên file trong thư viện. */
@@ -274,6 +279,8 @@ export function CanvasDrawer({
   const [aiGenerating, setAiGenerating] = useState(false);
   const [customHint, setCustomHint] = useState("");
   const [selectedSkill, setSelectedSkill] = useState("");
+  const [selectedClip, setSelectedClip] = useState("");
+  const scriptClips = useScriptClips();
   const [skillsList, setSkillsList] = useState<{ id: string; name: string }[]>([]);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [hoverUpId, setHoverUpId] = useState<string | null>(null);
@@ -282,8 +289,9 @@ export function CanvasDrawer({
     if (node) {
       setSelectedSkill(node.agentSkillId ?? "");
       setCustomHint(node.agentCustomHint ?? "");
+      setSelectedClip(node.clipId ?? "");
     }
-  }, [node?.id, node?.agentSkillId, node?.agentCustomHint]);
+  }, [node?.id, node?.agentSkillId, node?.agentCustomHint, node?.clipId]);
 
   useEffect(() => {
     api.agentSkills().then((res) => {
@@ -322,6 +330,14 @@ export function CanvasDrawer({
         skill_id: targetSkill,
         custom_hint: targetHint,
         is_video_continuation: isCont,
+        // Thiếu `clip_id` thì agent không đọc được role/shots/chain_from/beats và mọi node video
+        // sinh ra cùng một prompt.
+        clip_id: node.type === "video" ? (selectedClip || node.clipId || undefined) : undefined,
+        clip_role:
+          node.type === "video"
+            ? scriptClips.find((c) => c.id === (selectedClip || node.clipId))?.role
+            : undefined,
+        script_path: node.type === "video" ? SCRIPT_PATH : undefined,
         // Thiếu 3 trường này thì node ảnh sản phẩm bị coi là node ảnh lookbook: agent dùng
         // skill vẽ người mẫu và không biết phải cắt món nào.
         is_item: !!node.isItem,
@@ -855,6 +871,38 @@ export function CanvasDrawer({
                             </option>
                           ))}
                         </select>
+                      </div>
+                    )}
+
+                    {node.type === "video" && scriptClips.length > 0 && (
+                      <div className="flex flex-col gap-1">
+                        <label className="text-[10px] text-mut font-semibold">
+                          Clip trong kịch bản:
+                        </label>
+                        <select
+                          value={selectedClip}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setSelectedClip(val);
+                            onUpdateNode?.(node.id, { clipId: val || null });
+                          }}
+                          className="h-7 rounded-ctl border border-line2 bg-panel px-2 text-[11px] text-fg outline-none focus:border-acc"
+                          title="Clip quyết định vai (hook/showcase), nhịp beats và shots mà agent đọc được"
+                        >
+                          <option value="">(Chưa chọn — agent không thấy nhịp)</option>
+                          {scriptClips.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.id} · {c.role} · {c.duration_s}s
+                              {c.has_beats ? " · có nhịp" : ""}
+                            </option>
+                          ))}
+                        </select>
+                        {!selectedClip && (
+                          <p className="text-[10px] text-warn leading-snug">
+                            Chưa chọn clip ⇒ prompt bỏ qua nhịp 0–2s / 2–5s / 5–8s và mục tiêu riêng
+                            của clip.
+                          </p>
+                        )}
                       </div>
                     )}
 

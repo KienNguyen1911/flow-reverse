@@ -51,8 +51,8 @@
       "/api/node/options trả script.path + script.clips"
     ],
     "verify": "npm run build (web) + python -c probe node_options",
-    "passes": false,
-    "evidence": ""
+    "passes": true,
+    "evidence": "npx tsc --noEmit: 0 loi o CanvasPanel/CanvasDrawer/hooks.ts/types.ts (loi con lai la cua TryOnPanel.tsx co san). npm run build -> built in 2.21s. GET /api/node/options tra script.clips[0] = {id: clip1, role: hook, duration_s: 8.0, has_beats: true, goal: ...}. pytest tests/test_node_options_script.py -> 5 passed."
   },
   {
     "id": "F-005",
@@ -64,8 +64,8 @@
       "is_video có clip_id -> instruction chứa role + shots + chain_from"
     ],
     "verify": "python -m pytest tests/test_prompt_agent_context.py -q",
-    "passes": false,
-    "evidence": ""
+    "passes": true,
+    "evidence": "pytest tests/test_prompt_agent_context.py -> 13 passed. Probe end-to-end: clip_id=clip1 -> 'Clip dang viet: clip1 - vai **hook**' + beat 0.0-2.0s; clip_id=clip2 -> 'vai **showcase**'; clip_id=None -> dong 'THIEU `clip_id`' + liet ke clip1/clip2."
   },
   {
     "id": "F-006",

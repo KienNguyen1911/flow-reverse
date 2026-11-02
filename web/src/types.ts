@@ -288,11 +288,34 @@ export interface TryOnRunManifest {
 // Canvas node media (images / videos) — /api/node/*
 // --------------------------------------------------------------------------- //
 
+/** Một clip trong kịch bản Lookbook, dùng cho ô chọn clip trên node video. */
+export interface ScriptClipOption {
+  id: string;
+  role: "hook" | "showcase" | "detail";
+  duration_s: number;
+  camera?: string | null;
+  chain_from?: string | null;
+  goal?: string;
+  has_beats?: boolean;
+}
+
 export interface NodeMediaOptions {
   /** Validation caps enforced by the API; the UI mirrors them (xem `src/Workflows/limits.py`). */
   limits: {
     max_prompt_chars: number;
     max_batch_items: number;
+  };
+  /**
+   * Kịch bản Lookbook mặc định. Node video cần `clips[].id` để agent biết đang viết clip nào
+   * (`role`, shots, `chain_from`, beats). Trước đây FE không có nguồn nào để chọn nên mọi node video
+   * nhận context rỗng và sinh ra cùng một prompt.
+   */
+  script?: {
+    path: string | null;
+    slug?: string;
+    title?: string;
+    duration_s?: number;
+    clips: ScriptClipOption[];
   };
   image: {
     aspect_ratios: Record<string, number>;
@@ -621,6 +644,12 @@ export interface CanvasNodeState {
   elapsedS?: number | null;
   agentSkillId?: string | null;
   agentCustomHint?: string | null;
+  /**
+   * Clip trong kịch bản Lookbook mà node video này đang sinh (`clip1`, `clip2`, …).
+   * Bắt buộc với node video nhiều clip: thiếu nó thì agent không đọc được `role`, shots,
+   * `chain_from` hay beats, và mọi node video sinh ra cùng một prompt.
+   */
+  clipId?: string | null;
   /** Ảnh node này sinh ra là **ảnh sản phẩm** ⇒ chép vào thư viện `items/` của project. */
   isItem?: boolean;
   /** Tên món, dùng để đặt tên file trong thư viện. */

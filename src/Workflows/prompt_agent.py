@@ -284,6 +284,46 @@ class PromptAgent:
 
         return "\n".join(lines)
 
+    def _beat_lines(self, clip) -> list[str]:
+        """Nhịp của clip, kèm câu prompt đã render sẵn.
+
+        Agent **không được viết lại câu beat**: renderer tất định và gate round-trip sanitizer chỉ có
+        giá trị khi đầu vào không đổi giữa các lần chạy. Ở đây đưa cả hai dạng — beat có cấu trúc để
+        agent hiểu thứ tự, và prompt đã render để agent thấy đúng câu sẽ gửi Flow.
+        """
+        from .motion_prompt import MotionPromptError, beats_to_prompt, prompt_warnings
+
+        lines = [f"- Nhịp {clip.duration_s}s của clip này (nguồn: `clips[].beats`):"]
+        for idx, beat in enumerate(clip.beats, 1):
+            bits = [f"{beat.at_s}–{beat.end_s}s"]
+            if beat.holds_gaze:
+                bits.append("GIỮ MẮT với ống kính")
+            bits.append(beat.action)
+            lines.append("  · " + " · ".join(bits))
+            if beat.must_not:
+                lines.append(f"    cấm: {', '.join(beat.must_not)}")
+
+        try:
+            rendered = beats_to_prompt(clip)
+        except MotionPromptError as exc:  # script hỏng: báo cho agent, không chặn
+            lines.append(f"  → KHÔNG render được prompt từ beats: {exc}")
+            return lines
+
+        lines.extend([
+            "",
+            "  Prompt ĐÃ RENDER từ beats ở trên — dùng nguyên văn, chỉ được sửa khi người dùng yêu cầu:",
+            "  ```text",
+            f"  {rendered}",
+            "  ```",
+            "  → KHÔNG đổi thứ tự beat, KHÔNG thêm nhãn giây (`0-2s:` / `[0-2s]`), KHÔNG tả lại "
+            "khuôn mặt/trang phục/ánh sáng. Nếu buộc phải sửa, giữ đúng cấu trúc "
+            "'For the first … / From the … to the … / In the final …'.",
+        ])
+        for warn in prompt_warnings(clip, rendered):
+            lines.append(f"  → cảnh báo: {warn}")
+        return lines
+
+
     def _image_role_lines(self, task: NodePromptTask, count: int) -> list[str]:
         """Nói rõ ảnh nào là gì, để agent khỏi đoán theo thứ tự.
 
@@ -338,6 +378,22 @@ class PromptAgent:
         if not clip_id and is_video and len(script.clips) == 1:
             clip_id = script.clips[0].id
 
+        if is_video and not clip_id:
+            # Trước đây nhánh này im lặng: `clip_id` rỗng + script nhiều clip ⇒ `if is_video and
+            # clip_id` không chạy, `elif not is_video` cũng không chạy ⇒ node video chỉ nhận
+            # slug/title/fps. Agent không thấy role, shots, chain_from, beats — và vì thế cả hai
+            # node video sinh ra cùng một prompt. Nói thẳng ra thay vì để lặng.
+            lines.append(
+                "- **THIẾU `clip_id`**: không đọc được vai (role), shots, chain_from hay beats của clip. "
+                "Chọn clip trên node (Config → Clip trong kịch bản), nếu không prompt sẽ bỏ qua nhịp "
+                "0–2s / 2–5s / 5–8s và mục tiêu riêng của từng clip."
+            )
+            if len(script.clips) > 1:
+                lines.append(
+                    "  Clip có sẵn: "
+                    + ", ".join(f"`{c.id}` ({c.role}, {c.duration_s}s)" for c in script.clips)
+                )
+
         if is_video and clip_id:
             try:
                 clip = script.clip(clip_id)
@@ -348,6 +404,10 @@ class PromptAgent:
                     f"- Clip đang viết: {clip.id} — vai **{clip.role}**, "
                     f"{clip.duration_s}s, camera={clip.camera or 'tự do'}"
                 )
+                if clip.goal:
+                    lines.append(f"  → Mục tiêu của clip (dùng để đọc, KHÔNG chép vào prompt): {clip.goal}")
+                if clip.beats:
+                    lines.extend(self._beat_lines(clip))
                 if clip.chain_from:
                     lines.append(
                         f"  → nối tiếp từ `{clip.chain_from}`: mở đầu phải khớp tư thế frame cuối clip trước."

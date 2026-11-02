@@ -193,10 +193,42 @@ def validate_video_duration(duration_s: int) -> int:
 def node_options(config_path: Optional[Path | str] = None) -> dict:
     """Machine-readable option list for building canvas node UIs."""
     image_ratios = load_image_aspects(config_path)
+
+    # Danh sách clip của kịch bản mặc định: node video cần `clip_id` để agent biết đang viết clip
+    # nào (`role`, `shots`, `chain_from`, beats). Trước đây FE không có nguồn nào để chọn, và
+    # `_script_context_lines` lặng lẽ in context rỗng cho mọi node video.
+    script_info: dict = {"path": None, "clips": []}
+    try:
+        from .script_contract import load_default_script
+
+        script = load_default_script()
+        if script is not None:
+            script_info = {
+                "path": "configs/lookbook_script.json",
+                "slug": script.slug,
+                "title": script.title,
+                "duration_s": script.duration_s,
+                "clips": [
+                    {
+                        "id": c.id,
+                        "role": c.role,
+                        "duration_s": c.duration_s,
+                        "camera": c.camera,
+                        "chain_from": c.chain_from,
+                        "goal": c.goal,
+                        "has_beats": c.has_beats,
+                    }
+                    for c in script.clips
+                ],
+            }
+    except Exception:  # noqa: BLE001 - script hỏng không được chặn việc dựng UI
+        pass
+
     return {
         #: Validation caps enforced by the API — the UI mirrors these instead of
         #: hard-coding its own numbers (see ``src/Workflows/limits.py``).
         "limits": load_limits().as_dict(),
+        "script": script_info,
         "image": {
             "aspect_ratios": image_ratios,
             "verified_aspect_ratios": sorted(VERIFIED_IMAGE_ASPECTS),
