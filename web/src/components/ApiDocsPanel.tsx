@@ -12,6 +12,7 @@ import {
   Users,
 } from "@phosphor-icons/react";
 import { Spinner } from "./ui";
+import { useLimits } from "../hooks";
 
 const BASE = "http://127.0.0.1:4000";
 
@@ -205,7 +206,7 @@ const GROUPS: Group[] = [
         notes: [
           "Bắt buộc có items hoặc storyboard_path, ít nhất một trong hai.",
           "project_id tùy chọn, bỏ trống thì từng account tự chọn project đang mở.",
-          "Mỗi shot tối đa 7200 ký tự, một batch tối đa 300 ảnh.",
+          "Mỗi shot tối đa {max_prompt} ký tự, một batch tối đa {max_batch} ảnh.",
           "mode bỏ trống sẽ tự suy luận t2i hoặc i2i, i2i cần reference_image_path.",
           "depends_on_shot_id để shot sau chờ shot trước, nếu shot gốc lỗi thì shot phụ bị skipped.",
         ],
@@ -743,6 +744,12 @@ function TryIt({ path }: { path: string }) {
 
 function EndpointCard({ ep }: { ep: Ep }) {
   const [open, setOpen] = useState(false);
+  const limits = useLimits();
+  // Notes chứa placeholder để tài liệu không lệch với giới hạn backend thật.
+  const fill = (s: string) =>
+    s
+      .replaceAll("{max_prompt}", String(limits.max_prompt_chars))
+      .replaceAll("{max_batch}", String(limits.max_batch_items));
 
   return (
     <div className="overflow-hidden rounded-ctl border border-line2 bg-panel2">
@@ -772,7 +779,7 @@ function EndpointCard({ ep }: { ep: Ep }) {
           {ep.notes?.length ? (
             <ul className="list-disc list-inside space-y-1.5 text-[12px] leading-relaxed text-mut marker:text-mut">
               {ep.notes.map((n, i) => (
-                <li key={i}>{n}</li>
+                <li key={i}>{fill(n)}</li>
               ))}
             </ul>
           ) : null}

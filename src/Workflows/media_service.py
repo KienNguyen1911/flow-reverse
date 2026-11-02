@@ -49,6 +49,7 @@ from ..Bridge.flow_video_bridge import FlowVideoBridge
 from .account_pool import ReferenceMediaRegistry, sha256_file
 from .flow_client import FlowClient
 from .flow_models import GenerationResult, ReferenceTemplate, parse_project_ref
+from .limits import load_limits
 from .media_probe import probe_video
 from .watermark_remover import remove_video_watermark
 
@@ -193,6 +194,9 @@ def node_options(config_path: Optional[Path | str] = None) -> dict:
     """Machine-readable option list for building canvas node UIs."""
     image_ratios = load_image_aspects(config_path)
     return {
+        #: Validation caps enforced by the API — the UI mirrors these instead of
+        #: hard-coding its own numbers (see ``src/Workflows/limits.py``).
+        "limits": load_limits().as_dict(),
         "image": {
             "aspect_ratios": image_ratios,
             "verified_aspect_ratios": sorted(VERIFIED_IMAGE_ASPECTS),

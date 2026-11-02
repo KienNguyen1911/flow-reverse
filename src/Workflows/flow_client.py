@@ -76,14 +76,16 @@ from .flow_models import (
     validate_seed,
 )
 from .watermark_remover import remove_image_watermark
+from .limits import load_limits
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUT = ROOT / "out" / "playground"
 DEFAULT_BREAKER = ROOT / "out" / "bridge_state.json"
 
-#: Giới hạn độ dài prompt do app áp đặt (Google Flow không công bố giới hạn cứng;
-#: 7.200 ký tự là mức an toàn cho prompt lookbook dài + mô tả trang phục chi tiết).
-MAX_PROMPT_CHARS = 7200
+#: Giới hạn độ dài prompt do app áp đặt (Google Flow không công bố giới hạn cứng).
+#: Nguồn duy nhất: ``src/Workflows/limits.py`` (env ``FLOWBENCH_MAX_PROMPT_CHARS``
+#: hoặc ``configs/limits.json`` ghi đè). Giữ alias này để code/CLI cũ không vỡ.
+MAX_PROMPT_CHARS = load_limits().max_prompt_chars
 
 EventFn = Callable[[str, str, Optional[dict]], None]
 

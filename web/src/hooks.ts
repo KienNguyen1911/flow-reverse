@@ -14,6 +14,53 @@ import type {
 
 const TERMINAL: ReadonlySet<string> = new Set(["succeeded", "failed", "rejected"]);
 
+/** Fallback khi chưa gọi được `/api/node/options` — khớp default trong
+ *  `src/Workflows/limits.py`. Chỉ là lưới an toàn cho UI, không phải nguồn chân lý. */
+export const FALLBACK_LIMITS = { max_prompt_chars: 7200, max_batch_items: 300 } as const;
+
+export interface Limits {
+  max_prompt_chars: number;
+  max_batch_items: number;
+}
+
+// Nhiều component cùng cần limits ⇒ giữ một promise dùng chung, chỉ fetch 1 lần.
+let limitsPromise: Promise<Limits> | null = null;
+
+function fetchLimits(): Promise<Limits> {
+  if (!limitsPromise) {
+    limitsPromise = api
+      .nodeOptions()
+      .then((o) => ({
+        max_prompt_chars: o.limits?.max_prompt_chars ?? FALLBACK_LIMITS.max_prompt_chars,
+        max_batch_items: o.limits?.max_batch_items ?? FALLBACK_LIMITS.max_batch_items,
+      }))
+      .catch(() => {
+        // Cho phép thử lại ở lần mount sau (server có thể chưa lên).
+        limitsPromise = null;
+        return { ...FALLBACK_LIMITS };
+      });
+  }
+  return limitsPromise;
+}
+
+/** Validation caps do backend công bố (nguồn duy nhất: `src/Workflows/limits.py`). */
+export function useLimits(): Limits {
+  const [limits, setLimits] = useState<Limits>({ ...FALLBACK_LIMITS });
+  useEffect(() => {
+    let stop = false;
+    fetchLimits()
+      .then((l) => {
+        if (!stop) setLimits(l);
+      })
+      .catch(() => {});
+    return () => {
+      stop = true;
+    };
+  }, []);
+  return limits;
+}
+
+
 /** Poll bridge status every `intervalMs`. */
 export function useStatus(intervalMs = 5000) {
   const [status, setStatus] = useState<Status | null>(null);

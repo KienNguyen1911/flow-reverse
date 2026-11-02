@@ -289,6 +289,11 @@ export interface TryOnRunManifest {
 // --------------------------------------------------------------------------- //
 
 export interface NodeMediaOptions {
+  /** Validation caps enforced by the API; the UI mirrors them (xem `src/Workflows/limits.py`). */
+  limits: {
+    max_prompt_chars: number;
+    max_batch_items: number;
+  };
   image: {
     aspect_ratios: Record<string, number>;
     verified_aspect_ratios: string[];

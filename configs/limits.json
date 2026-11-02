@@ -1,0 +1,5 @@
+{
+  "_comment": "Giới hạn vận hành. Backend đọc file này lúc khởi động (src/Workflows/limits.py); UI lấy qua GET /api/node/options -> limits. Env FLOWBENCH_MAX_PROMPT_CHARS / FLOWBENCH_MAX_BATCH_ITEMS ghi đè file. Sửa xong phải restart server.",
+  "max_prompt_chars": 7200,
+  "max_batch_items": 300
+}

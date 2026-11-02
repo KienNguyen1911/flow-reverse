@@ -19,6 +19,7 @@ import {
 } from "@phosphor-icons/react";
 import { api } from "../api";
 import type { Job, JobEvent } from "../types";
+import { FALLBACK_LIMITS, useLimits } from "../hooks";
 import { Spinner } from "./ui";
 
 export interface CanvasDrawerNode {
@@ -106,9 +107,13 @@ function isWaitingRetry(events?: JobEvent[] | null): boolean {
   return false;
 }
 
-function diagnoseError(reason: string | null | undefined): ErrorDiagnosis {
+function diagnoseError(
+  reason: string | null | undefined,
+  maxPrompt: number = FALLBACK_LIMITS.max_prompt_chars,
+): ErrorDiagnosis {
   const r = (reason || "").trim();
   const lower = r.toLowerCase();
+  const fmt = maxPrompt.toLocaleString("vi-VN");
 
   if (
     lower.includes("prominent_people_filter") ||
@@ -189,9 +194,9 @@ function diagnoseError(reason: string | null | undefined): ErrorDiagnosis {
       code: "VALIDATION_ERROR",
       title: "Tham số đầu vào không hợp lệ",
       explanation:
-        "Dữ liệu gửi lên server không đúng định dạng hoặc vượt quá giới hạn cho phép (prompt rỗng, quá 7.200 ký tự, tỷ lệ khung hình, seed,...). Lỗi này phát sinh ngay tại app, chưa gửi gì lên Google Flow nên không mất credit.",
+        `Dữ liệu gửi lên server không đúng định dạng hoặc vượt quá giới hạn cho phép (prompt rỗng, quá ${fmt} ký tự, tỷ lệ khung hình, seed,...). Lỗi này phát sinh ngay tại app, chưa gửi gì lên Google Flow nên không mất credit.`,
       fixHint:
-        "1. Prompt rỗng là nguyên nhân phổ biến nhất — nhập prompt hoặc bấm AI Prompt trên node rồi chạy lại.\n2. Prompt tối đa 7.200 ký tự; chọn tỷ lệ khung hình đã được xác thực.",
+        `1. Prompt rỗng là nguyên nhân phổ biến nhất — nhập prompt hoặc bấm AI Prompt trên node rồi chạy lại.\n2. Prompt tối đa ${fmt} ký tự; chọn tỷ lệ khung hình đã được xác thực.`,
     };
   }
 
@@ -224,6 +229,7 @@ export function CanvasDrawer({
   onUpdatePrompt,
   onUpdateNode,
 }: CanvasDrawerProps) {
+  const limits = useLimits();
   const [job, setJob] = useState<Job | null>(null);
   const [loadingJob, setLoadingJob] = useState(false);
   const [activeTab, setActiveTab] = useState<"error" | "logs" | "config" | "preview">("error");
@@ -360,8 +366,11 @@ export function CanvasDrawer({
   }, [job?.events?.length]);
 
   const diagnosis = useMemo(() => {
-    return diagnoseError(node?.reason || job?.error || (job?.result?.reason as string));
-  }, [node?.reason, job?.error, job?.result]);
+    return diagnoseError(
+      node?.reason || job?.error || (job?.result?.reason as string),
+      limits.max_prompt_chars,
+    );
+  }, [node?.reason, job?.error, job?.result, limits.max_prompt_chars]);
 
   const waitingRetry = useMemo(() => isWaitingRetry(job?.events), [job?.events]);
   const isRunning = node?.status === "running" || node?.status === "queued";

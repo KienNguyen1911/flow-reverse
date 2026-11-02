@@ -13,6 +13,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { Btn, IconBtn } from "./ui";
+import { useLimits } from "../hooks";
 
 interface Props {
   open: boolean;
@@ -23,6 +24,7 @@ type TabKey = "credit" | "batch" | "safety" | "shortcuts";
 
 export function GuideModal({ open, onClose }: Props) {
   const [tab, setTab] = useState<TabKey>("credit");
+  const limits = useLimits();
 
   if (!open) return null;
 
@@ -151,8 +153,8 @@ export function GuideModal({ open, onClose }: Props) {
                 </p>
                 <ul className="mt-2 space-y-1.5 list-disc list-inside text-dim">
                   <li>Mỗi dòng văn bản tương ứng với <strong className="text-fg">1 ảnh độc lập</strong>. Dòng trống được tự động bỏ qua.</li>
-                  <li>Hỗ trợ tối đa <strong className="text-fg">300 ảnh/batch</strong> trong một lượt chạy.</li>
-                  <li>Mỗi dòng có độ dài tối đa 7200 ký tự.</li>
+                  <li>Hỗ trợ tối đa <strong className="text-fg">{limits.max_batch_items} ảnh/batch</strong> trong một lượt chạy.</li>
+                  <li>Mỗi dòng có độ dài tối đa {limits.max_prompt_chars} ký tự.</li>
                 </ul>
               </div>
 

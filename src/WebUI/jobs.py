@@ -50,6 +50,7 @@ from ..Workflows.account_pool import (
 )
 from ..Workflows.flow_client import CircuitOpenError, FlowClient
 from ..Workflows.flow_models import ProjectInfo, ReferenceTemplate, parse_project_ref
+from ..Workflows.limits import load_limits
 from ..Workflows.media_service import MediaService
 from ..Workflows.node_retry import (
     NodeExecutionError,
@@ -59,7 +60,7 @@ from ..Workflows.node_retry import (
 
 ROOT = Path(__file__).resolve().parents[2]
 TERMINAL_STATES = {"succeeded", "failed", "rejected"}
-MAX_BATCH_ITEMS = 300
+MAX_BATCH_ITEMS = load_limits().max_batch_items
 
 
 @dataclass

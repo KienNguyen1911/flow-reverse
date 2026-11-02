@@ -15,6 +15,7 @@ import {
 import type { BatchItemRequest, PoolInfo, Project } from "../types";
 import { Btn, Field, IconBtn, InfoTip, Panel } from "./ui";
 import { api } from "../api";
+import { useLimits } from "../hooks";
 
 export interface GenRequest {
   project_id: string;
@@ -55,11 +56,13 @@ const BATCH_ON_KEY = "fb_batch_on";
 const BATCH_KEY = "fb_batch_prompts";
 const BATCH_REF_KEY = "fb_batch_ref";
 const RM_WM_KEY = "fb_remove_watermark";
-const MAX_BATCH = 300;
-//: Khớp giới hạn backend (`MAX_PROMPT_CHARS` trong `src/Workflows/flow_client.py`)
-const MAX_PROMPT = 7200;
+//: Số ảnh/batch & độ dài prompt lấy từ backend (`/api/node/options` → `limits`),
+//: nguồn duy nhất là `src/Workflows/limits.py`.
 
 export function ComposePanel(p: Props) {
+  const limits = useLimits();
+  const MAX_BATCH = limits.max_batch_items;
+  const MAX_PROMPT = limits.max_prompt_chars;
   const [prompt, setPrompt] = useState(() => localStorage.getItem(PROMPT_KEY) ?? "");
   const [seedStr, setSeedStr] = useState("");
   const [formErr, setFormErr] = useState<string | null>(null);
@@ -145,6 +148,11 @@ export function ComposePanel(p: Props) {
     }
     if (!prompt.trim()) {
       setFormErr("Prompt không được để trống.");
+      return null;
+    }
+    if (prompt.trim().length > MAX_PROMPT) {
+      // maxLength trên textarea đã chặn gõ tay; đây là lưới cho dữ liệu dán/AI cũ.
+      setFormErr(`Prompt dài quá ${MAX_PROMPT} ký tự (đang ${prompt.trim().length}).`);
       return null;
     }
     return {
