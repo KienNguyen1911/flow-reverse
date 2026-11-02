@@ -164,14 +164,32 @@ def build_image_args(
     u1: Optional[str] = None,
     u2: Optional[str] = None,
     gen_id: Optional[str] = None,
+    *,
+    model_key: str = IMAGE_MODEL_KEY,
+    count: int = 1,
 ) -> list:
-    """Assemble the full ogiZ0b args (E8-validated layout)."""
-    u1 = u1 or str(uuid.uuid4()).upper()
-    u2 = u2 or str(uuid.uuid4()).upper()
+    """Assemble the full ogiZ0b args (E8-validated layout).
+
+    ``count`` mirrors the composer's ``x1..x4``: the app sends one spec per image in
+    ``args[1]``, each with its own seed and its own ``u1``/``u2`` tracking UUIDs
+    (captured 0-credit, ``traces/submit_bodies/img_x4_summary.json``). ``args[2]``
+    stays ``1`` regardless of the batch size.
+    """
     gen_id = gen_id or str(uuid.uuid4()).upper()
     ref = [None, IMAGE_TOOL_ID, None, None, None, project_id, None, None, None, None, [recaptcha_token, 1]]
-    spec = [None, None, None, int(seed), int(aspect), IMAGE_MODEL_KEY, None, ref, [[[prompt]]], None, None, None, u1, u2]
-    return [None, [spec], 1, ref, [gen_id]]
+
+    n = max(1, int(count))
+    specs: list[list] = []
+    for i in range(n):
+        # The first spec keeps the caller's UUIDs so existing callers stay byte-identical;
+        # extra specs get fresh ones, exactly like the app's own batch.
+        s_u1 = u1 if (i == 0 and u1) else str(uuid.uuid4()).upper()
+        s_u2 = u2 if (i == 0 and u2) else str(uuid.uuid4()).upper()
+        s_seed = int(seed) if i == 0 else new_seed()
+        specs.append(
+            [None, None, None, s_seed, int(aspect), model_key, None, ref, [[[prompt]]], None, None, None, s_u1, s_u2]
+        )
+    return [None, specs, 1, ref, [gen_id]]
 
 
 def build_create_project_args(title: str) -> list:

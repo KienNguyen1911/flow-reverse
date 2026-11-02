@@ -629,15 +629,26 @@ class FlowBridge:
             time.sleep(1.0)
         raise PageInteractionError("Không nhập được prompt vào composer sau nhiều lần thử.")
 
-    def ensure_ui_image_mode(self, target_aspect: Optional[str] = None) -> bool:
-        """Ensure composer UI is in Image Mode ('Hình ảnh' / 'Image') with target_aspect and x1.
+    def ensure_ui_image_mode(
+        self,
+        target_aspect: Optional[str] = None,
+        *,
+        model_label: Optional[str] = None,
+        count: int = 1,
+    ) -> bool:
+        """Ensure composer UI is in Image Mode ('Hình ảnh' / 'Image') with target_aspect, model and count.
 
         Prevents the critical issue where a previous video run leaves composer in Video mode,
         causing subsequent image nodes to trigger video generation instead of image generation.
+
+        Also selects the composer model (the app closes the popover after a model pick, so
+        every option group needs its own popover open) and the batch count, because the
+        captured request carries whichever options the UI is showing.
         """
         if self.page is None:
             return False
         page = self.page
+        want_count = max(1, int(count or 1))
         try:
             settings_btn = page.query_selector("button.settings-trigger-button")
             if not settings_btn:
@@ -657,8 +668,12 @@ class FlowBridge:
                 norm_aspect = target_aspect.replace(":", "_")
                 aspect_ok = (target_aspect in btn_txt) or (f"crop_{norm_aspect}" in btn_html)
 
-            # If already image mode, correct aspect, and x1 count, no need to toggle
-            if not is_video and aspect_ok and ("x1" in btn_txt or "| 1" in btn_txt or "· 1" in btn_txt):
+            model_ok = True
+            if model_label:
+                model_ok = model_label.replace("🍌 ", "") in btn_txt or "🍌" in btn_txt
+            count_ok = f"x{want_count}" in btn_txt
+
+            if not is_video and aspect_ok and count_ok and model_ok:
                 self._log(f"UI đã ở chế độ Hình ảnh ({btn_txt})")
                 return True
 
@@ -694,16 +709,17 @@ class FlowBridge:
                             page.wait_for_timeout(250)
                         break
 
-            # 3. Ensure Batch Count is x1 (avoid generating multiple images / wasting credits)
-            x1_selectors = [
-                '//button[@role="radio" and (normalize-space(.)="x1" or normalize-space(.)="1")]',
-                '//button[normalize-space(.)="x1" or normalize-space(.)="1"]',
+            # 3. Batch Count ("x1".."x4") — the app's own batch length decides how many
+            #    specs our payload carries, so the UI must agree with `count`.
+            x_count_selectors = [
+                f'//button[@role="radio" and normalize-space(.)="x{want_count}"]',
+                f'//button[normalize-space(.)="x{want_count}"]',
             ]
-            for x1_xp in x1_selectors:
-                x1_btn = page.query_selector(x1_xp)
-                if x1_btn:
-                    if x1_btn.get_attribute("aria-checked") != "true":
-                        x1_btn.click(force=True)
+            for x_xp in x_count_selectors:
+                x_btn = page.query_selector(x_xp)
+                if x_btn:
+                    if x_btn.get_attribute("aria-checked") != "true":
+                        x_btn.click(force=True)
                         page.wait_for_timeout(250)
                     break
 
@@ -715,6 +731,10 @@ class FlowBridge:
                 page.keyboard.press("Escape")
             page.wait_for_timeout(400)
 
+            # 5. Model — Angular closes the popover after a pick, so this needs its own open.
+            if model_label:
+                self._select_image_model(model_label)
+
             # Verification
             new_txt = (settings_btn.inner_text() or "").strip()
             self._log(f"UI composer đã chuyển sang: {new_txt}")
@@ -725,6 +745,57 @@ class FlowBridge:
                 page.keyboard.press("Escape")
             except Exception:
                 pass
+            return False
+
+    def _select_image_model(self, model_label: str) -> bool:
+        """Pick an image model in the composer's model dropdown (label like 'Nano Banana Pro')."""
+        page = self.page
+        if page is None:
+            return False
+        target = model_label.replace("🍌 ", "").strip()
+        try:
+            btn = page.query_selector("button.settings-trigger-button")
+            if not btn:
+                return False
+            btn.click(force=True)
+            page.wait_for_timeout(500)
+            opened = page.evaluate(
+                r"""() => {
+                const ps = [...document.querySelectorAll('.cdk-overlay-pane')].filter(p => p.offsetWidth || p.offsetHeight);
+                const p = ps[ps.length - 1];
+                if (!p) return false;
+                const b = [...p.querySelectorAll('button')].find(x => (x.getAttribute('aria-label') || '') === 'Chọn nhóm mô hình');
+                if (!b) return false;
+                b.click();
+                return true;
+              }"""
+            )
+            if not opened:
+                page.keyboard.press("Escape")
+                return False
+            page.wait_for_timeout(450)
+            picked = page.evaluate(
+                r"""(label) => {
+                const n = s => (s || '').replace(/🍌/g, '').replace(/\s+/g, ' ').trim();
+                const ps = [...document.querySelectorAll('.cdk-overlay-pane')].filter(p => p.offsetWidth || p.offsetHeight);
+                const p = ps[ps.length - 1];
+                if (!p) return false;
+                const el = [...p.querySelectorAll('[role="menuitem"], button.mat-mdc-menu-item, button')]
+                  .find(e => n(e.innerText) === label);
+                if (!el) return false;
+                el.click();
+                return true;
+              }""",
+                target,
+            )
+            page.wait_for_timeout(450)
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(300)
+            if not picked:
+                self._log(f"Không chọn được model ảnh {target!r} trên composer")
+            return bool(picked)
+        except Exception as e:  # noqa: BLE001
+            self._log(f"Lỗi chọn model ảnh ({target}): {e}")
             return False
 
     _GEN_BTN_JS = (

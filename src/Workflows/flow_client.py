@@ -31,6 +31,7 @@ import re
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
@@ -54,6 +55,7 @@ from ..Bridge.flow_bridge import (
 )
 from .flow_models import (
     ASPECT_DEFAULT,
+    IMAGE_MODEL_KEY,
     BridgeStatus,
     CapturedRequestInfo,
     GeneratedImage,
@@ -433,6 +435,9 @@ class FlowClient:
         reference: Optional[ReferenceTemplate] = None,
         reference_path: Optional[str | Path] = None,
         reference_paths: Optional[list[str | Path]] = None,
+        model_key: Optional[str] = None,
+        model_label: Optional[str] = None,
+        count: int = 1,
         on_event: Optional[EventFn] = None,
     ) -> GenerationResult:
         """Generate one image via Bridge Mode. ~1 credit if accepted, 0 if rejected.
@@ -440,6 +445,9 @@ class FlowClient:
         ``reference_path`` or ``reference_paths`` (i2i): direct image file(s) to attach via paste;
         the bridge waits until uploads reach 100% + settle, types prompt, and captures.
         ``reference`` (i2i fallback): pass a :class:`ReferenceTemplate`.
+
+        ``model_key`` / ``model_label`` / ``count`` mirror the composer's model dropdown
+        and ``x1..x4`` batch selector (see ``src/Workflows/flow_catalog.py``).
         """
         ev = self._mk_events(on_event)
         project = parse_project_ref(project_id)
@@ -466,6 +474,9 @@ class FlowClient:
                 reference=reference,
                 reference_path=reference_path,
                 reference_paths=reference_paths,
+                model_key=model_key,
+                model_label=model_label,
+                count=count,
                 ev=ev,
             )
             if dry_run or res.status == "dry_run":
@@ -505,6 +516,9 @@ class FlowClient:
         reference: Optional[ReferenceTemplate] = None,
         reference_path: Optional[str | Path] = None,
         reference_paths: Optional[list[str | Path]] = None,
+        model_key: Optional[str] = None,
+        model_label: Optional[str] = None,
+        count: int = 1,
     ) -> GenerationResult:
         run_dir = self._new_run_dir(prompt)
         t0 = time.time()
@@ -520,10 +534,12 @@ class FlowClient:
                 br.nav_project(project_id)
                 ui_started = True
 
-                # Đảm bảo composer UI ở chế độ Hình ảnh và chọn đúng tỷ lệ trước khi đính ảnh
+                # Đảm bảo composer UI ở chế độ Hình ảnh, đúng tỷ lệ, đúng model và đúng số lượng
+                # trước khi đính ảnh — request mồi của app mang theo đúng option đang hiển thị.
                 target_ratio = aspect_ratio or ("9:16" if int(aspect) == 2 else "16:9")
-                ev("step", f"kiểm tra và chuyển composer sang chế độ Hình ảnh ({target_ratio})...")
-                br.ensure_ui_image_mode(target_ratio)
+                want_count = max(1, int(count or 1))
+                ev("step", f"kiểm tra và chuyển composer sang chế độ Hình ảnh ({target_ratio}, model={model_label or '?'}, x{want_count})...")
+                br.ensure_ui_image_mode(target_ratio, model_label=model_label, count=want_count)
 
                 # Determine actual reference image paths
                 actual_ref_paths: list[Path] = []
@@ -570,20 +586,29 @@ class FlowClient:
                 (run_dir / "app_request_body.txt").write_text(cap.body, encoding="utf-8")
 
                 u1, u2, gen_id = new_uuids()
+                eff_model_key = model_key
                 if actual_ref_paths:
-                    # Live capture with authentic upload ingredient(s)
-                    args = copy.deepcopy(app_args)
+                    # Live capture with authentic upload ingredient(s): keep the app's ingredient
+                    # slots, but rebuild the batch so seed/aspect/model/count are ours.
                     try:
-                        spec = args[1][0]
-                        spec[3] = int(seed)
-                        spec[4] = int(aspect)
-                        spec[12] = u1
-                        spec[13] = u2
-                        if isinstance(args[4], list) and args[4]:
-                            args[4][0] = gen_id
-                    except Exception as exc:
-                        ev("warn", f"không cập nhật được seed/aspect trong live capture: {exc}")
-                    ev("info", f"i2i live capture: đính kèm {len(actual_ref_paths)} ảnh ({', '.join(p.name for p in actual_ref_paths)}), seed {seed}, aspect {aspect}")
+                        base_spec = copy.deepcopy(app_args[1][0])
+                    except Exception as exc:  # noqa: BLE001
+                        raise ValueError(f"captured ogiZ0b args không đọc được spec: {exc}") from exc
+                    specs = []
+                    for i in range(want_count):
+                        s = copy.deepcopy(base_spec)
+                        s[3] = int(seed) if i == 0 else generate_seed()
+                        s[4] = int(aspect)
+                        if eff_model_key:
+                            s[5] = eff_model_key
+                        s[12] = u1 if i == 0 else str(uuid.uuid4()).upper()
+                        s[13] = u2 if i == 0 else str(uuid.uuid4()).upper()
+                        specs.append(s)
+                    args = copy.deepcopy(app_args)
+                    args[1] = specs
+                    if isinstance(args[4], list) and args[4]:
+                        args[4][0] = gen_id
+                    ev("info", f"i2i live capture: đính kèm {len(actual_ref_paths)} ảnh ({', '.join(p.name for p in actual_ref_paths)}), seed {seed}, aspect {aspect}, model {eff_model_key or 'app'}, x{want_count}")
                 elif reference is not None:
                     args, replaced = build_args_from_template(
                         reference.template_args,
@@ -595,7 +620,11 @@ class FlowClient:
                        f"i2i template replay: ref sha {reference.sha256[:8]}… (media≈{reference.media_id or '?'}), "
                        f"thay {replaced}")
                 else:
-                    args = build_image_args(project_id, prompt, token, seed, aspect, u1, u2, gen_id)
+                    args = build_image_args(
+                        project_id, prompt, token, seed, aspect, u1, u2, gen_id,
+                        model_key=eff_model_key or IMAGE_MODEL_KEY,
+                        count=want_count,
+                    )
                 body = encode_batchexecute_form("ogiZ0b", args, at_param)
                 (run_dir / "our_request_body.txt").write_text(body, encoding="utf-8")
                 (run_dir / "our_args.pretty.json").write_text(json.dumps(args, ensure_ascii=False, indent=1), encoding="utf-8")
