@@ -1,0 +1,128 @@
+[
+  {
+    "id": "F-001",
+    "title": "Ma trận option ảnh/video khớp composer Flow (kể cả option bị disable theo model)",
+    "priority": 1,
+    "acceptance": [
+      "Với từng model ảnh (Nano Banana Pro / 2 Lite / 2.1) và từng model video (Omni 1.1 Flash / Veo 3.1 Lite / Fast / Quality), biết được aspect/resolution/duration/count nào Flow cho chọn (enabled) và nào bị disable.",
+      "Kết quả ghi vào traces/flow_option_matrix.json kèm ts và nhãn model; không suy đoán."
+    ],
+    "verify": "python discovery/probe_option_matrix.py; xem traces/flow_option_matrix.json",
+    "passes": true,
+    "evidence": "python discovery/probe_option_matrix.py -> traces/flow_option_matrix.json (2026-11-03). Anh: 5 aspect + x1..x4 cho ca 3 model, khong option disabled. Video Omni: aspect 16:9/9:16, resolution 360p/720p, duration 4/6/8/10, count x1..x4. Video Veo (Lite/Fast/Quality): CHI aspect + count - khong co nhom resolution/duration."
+  },
+  {
+    "id": "F-002",
+    "title": "Enum aspect ảnh cho 4:3, 1:1, 3:4 (0 credit)",
+    "priority": 2,
+    "acceptance": [
+      "Mỗi tỷ lệ 4:3, 1:1, 3:4 có enum int capture được từ request ogiZ0b bị chặn (0 credit).",
+      "configs/image_aspect_enums.json chứa đủ 5 tỷ lệ: 16:9, 4:3, 1:1, 3:4, 9:16."
+    ],
+    "verify": "python discovery/capture_image_aspects.py --dump-only + capture từng tỷ lệ; cat configs/image_aspect_enums.json",
+    "passes": true,
+    "evidence": "4:3 -> enum 5 (crop_landscape), 1:1 -> 1 (crop_square), 3:4 -> 4 (crop_portrait), capture tu ogiZ0b bi chan (0 credit). configs/image_aspect_enums.json nay co 5 ty le: 16:9=3, 9:16=2, 4:3=5, 1:1=1, 3:4=4."
+  },
+  {
+    "id": "F-003",
+    "title": "Model key video là hàm của (model, duration, resolution, aspect)",
+    "priority": 3,
+    "acceptance": [
+      "Với mỗi model video, biết model key thật cho các tổ hợp duration 4/6/8/10s, resolution 360p/720p, aspect 9:16/16:9 mà Flow cho phép.",
+      "Tổ hợp Flow không cho chọn được ghi rõ là 'không hỗ trợ' thay vì đoán key."
+    ],
+    "verify": "python discovery/capture_video_matrix.py; đối chiếu traces/submit_bodies/*_summary.json",
+    "passes": true,
+    "evidence": "i2v (eb1hJf): abra_i2v_{4,6,8,10}s (+_360p), veo_3_1_i2v_lite, veo_3_1_i2v_s_fast_portrait, veo_3_1_i2v_s_fast, veo_3_1_i2v_s_portrait, veo_3_1_i2v_s. t2v (YhhmEf): abra_t2v_{4,6,8,10}s (+_360p), veo_3_1_t2v_lite, veo_3_1_t2v_fast_portrait, veo_3_1_t2v_fast, veo_3_1_t2v_portrait, veo_3_1_t2v. Veo khong ho tro chon duration/resolution."
+  },
+  {
+    "id": "F-004",
+    "title": "GET /api/node/options trả đủ option ảnh + video",
+    "priority": 4,
+    "acceptance": [
+      "image.modes = [image, video]; image.aspect_ratios đủ 5; image.models có id/label/key cho 3 model; image.counts = [1,2,3,4].",
+      "video.sub_modes có khung_hinh (+ thành_phần nếu capture được); video.aspect_ratios = 16:9, 9:16; video.models có label/id/key_template; video.resolutions, video.durations_s = [4,6,8,10]; video.counts = [1,2,3,4].",
+      "Có cờ agent_mode: khi bật thì composer Flow không cho chọn model/aspect/duration (ghi trong options để FE phản ánh)."
+    ],
+    "verify": "python -c \"from src.Workflows.media_service import node_options; import json; print(json.dumps(node_options(), ensure_ascii=False, indent=1))\"",
+    "passes": true,
+    "evidence": "media_service.node_options() -> image.modes=[image,video]; image.aspect_ratios=[16:9,4:3,1:1,3:4,9:16]; image.aspect_enums={16:9:3,9:16:2,4:3:5,1:1:1,3:4:4}; image.models=[nano_banana_pro/GEM_PIX_2, nano_banana_2_lite/HARBOR_SEAL, nano_banana_2_1/BELUGA]; image.counts=[1,2,3,4]. video.sub_modes=[frames,ingredients]; video.aspect_ratios=[16:9,9:16]; 4 models voi model_keys theo sub_mode/aspect; Omni co 360p+[4,6,8,10], Veo has_resolution=false/has_duration=false + durations_s=[8]; video.counts=[1,2,3,4]. agent={supported:true, locks_config:true, locked_fields:[model,aspect_ratio,resolution,duration_s,count,sub_mode]}. Test: pytest tests/test_node_api.py -k options -> PASS; pytest tests/test_media_service.py -k options -> PASS. Nguon duy nhat: src/Workflows/flow_catalog.py."
+  },
+  {
+    "id": "F-005",
+    "title": "Backend dùng model + count + duration + resolution khi dựng payload ảnh",
+    "priority": 5,
+    "acceptance": [
+      "build_image_args nhận model_key (GEM_PIX_2 / HARBOR_SEAL / BELUGA) và count N, sinh args[1] gồm N spec, mỗi spec seed/u1/u2 riêng.",
+      "generate_image truyền được model_key + count từ request node.",
+      "Có unit test chứng minh: count=3 → len(args[1])==3 và model key nằm ở spec[5]."
+    ],
+    "verify": "pytest tests -q -k image_model_or_count",
+    "passes": true,
+    "evidence": "tests/test_flow_payload_parity.py::test_build_image_args_count_produces_one_spec_per_image -> count=4 => len(args[1])==4, args[2]==1, moi spec spec[5]==GEM_PIX_2, seed/u1/u2 rieng, chung ref object. test_build_image_args_default_is_unchanged -> default BELUGA + 1 spec. MediaService.generate_image(model=, count=) forward model_key/model_label/count xuong FlowClient (test_image_node_forwards_model_and_count: count=3 -> call[count]==3, call[model_key]==GEM_PIX_2). pytest tests/test_flow_payload_parity.py tests/test_media_service.py -k image -> 15 passed."
+  },
+  {
+    "id": "F-006",
+    "title": "Backend dùng model + count + duration + resolution khi dựng payload video",
+    "priority": 6,
+    "acceptance": [
+      "resolve_video_model_key(model, duration_s, resolution, aspect) trả đúng key đã capture; tổ hợp không hỗ trợ thì raise UnsupportedOptionError.",
+      "build_video_args nhận count N → args[0] có N spec (u1/u2 riêng mỗi spec); 360p → model key *_360p và spec[9]=[4] với spec dài 10.",
+      "Có unit test cho 3 nhánh: omni 4s/720p, omni 4s/360p, veo fast 9:16 vs 16:9."
+    ],
+    "verify": "pytest tests -q -k video_model_or_count",
+    "passes": true,
+    "evidence": "tests/test_flow_payload_parity.py: test_video_model_key_matrix (13 to hop model/sub_mode/aspect) PASS; test_omni_model_key_tracks_duration (4/6/8/10s) PASS; test_omni_360p_suffix_and_veo_rejection PASS; test_build_video_args_720p_shape -> spec len 6; test_build_video_args_360p_grows_the_spec -> len 10, spec[9]==[4], key *_360p; test_build_video_args_count_gives_one_spec_per_render -> count 2 => 2 spec, u1/u2 rieng; test_build_text_video_args_* -> spec len 5 (720p) / len 8 (360p, spec[7]==[4]), khong co media id. Veo + duration!=8 hoac 360p -> CatalogError (test_veo_duration_and_bad_aspect_rejected). pytest ... -k video -> 39 passed."
+  },
+  {
+    "id": "F-007",
+    "title": "Node Ảnh trong Flow Bench có đủ config như Flow (mode/aspect/model/count/seed)",
+    "priority": 7,
+    "acceptance": [
+      "Node ảnh hiển thị và lưu được: mode, aspect (5 tỷ lệ), model (3 model), count (x1..x4), seed.",
+      "Giá trị lưu vào CanvasNodeState và gửi lên /api/node/image.",
+      "Không hard-code danh sách trong React: đọc từ /api/node/options."
+    ],
+    "verify": "npm --prefix web run build (typecheck) + mở node ảnh, đổi model/count, chạy dry-run request",
+    "passes": true,
+    "evidence": "CanvasDrawer.tsx: node anh co Tỷ lệ khung hình (5 tỷ lệ từ opts.image.aspect_ratios), Model (3 model từ opts.image.models), Số lượng (x1..x4 từ opts.image.counts), Seed. CanvasPanel.tsx: pill tom tat aspect/model/xN/seed; newNode() lay default tu opts; request gui model+count+agent_mode. Khong hard-code: moi danh sach doc tu useNodeOptions() -> GET /api/node/options. Do luong that (0 credit) bang discovery/verify_node_config_ui.py: PASS image aspect options match API (=16:9,4:3,1:1,3:4,9:16), PASS image model labels present (3), PASS image count options are x1..x4 -> traces/verify_node_config_ui.json. npm --prefix web run build -> built in 1.43s; tsc --noEmit khong loi trong CanvasPanel/CanvasDrawer/types/hooks."
+  },
+  {
+    "id": "F-008",
+    "title": "Node Video trong Flow Bench có đủ config như Flow (sub-mode/aspect/model/resolution/duration/count/seed)",
+    "priority": 8,
+    "acceptance": [
+      "Node video hiển thị và lưu được: sub-mode, aspect (2), model (4), resolution (360p/720p + 1080p upscale riêng), duration (4/6/8/10), count, seed.",
+      "Giá trị gửi lên /api/node/video và tới build_video_args.",
+      "Option bị Flow disable theo model thì UI disable theo (không cho chọn rồi fail)."
+    ],
+    "verify": "npm --prefix web run build + dry-run video qua /api/node/video",
+    "passes": true,
+    "evidence": "CanvasDrawer.tsx video: nut sub-mode (Khung hình/Thành phần tu opts.video.sub_modes + sub_mode_labels), Model (4), Tỷ lệ (2), Độ phân giải (theo model), Thời lượng (theo model), Số lượng (x1..x4), Seed. Per-model disabling: chon Veo -> select resolution+duration bi disabled, duration khoa [8 giay], khong co 360p, va doi model tu dong clamp resolution/duration/aspect. discovery/verify_video_config_ui.py (0 credit, khong bam Chay lai): 12/12 PASS -> traces/verify_video_config_ui.json. Dry-run that qua MediaService: veo_3_1_fast + sub_mode=ingredients + 16:9 + 1080p + 8s + count=2 -> model_key=veo_3_1_t2v_fast, manifest.json ghi day du. npm run build OK."
+  },
+  {
+    "id": "F-009",
+    "title": "Trạng thái 'Tác nhân' (Agent) trên node phản ánh đúng Flow",
+    "priority": 9,
+    "acceptance": [
+      "Node có toggle agentMode; khi bật, UI ẩn toàn bộ config model/aspect/duration/count và hiện 'do tác nhân quyết định' (không hiện option giả).",
+      "Khi bật, request không gửi model/aspect/duration/count do người dùng chọn; backend dùng mặc định và ghi rõ trong kết quả.",
+      "Trạng thái lưu cùng node (persist) và round-trip qua workspace API."
+    ],
+    "verify": "npm --prefix web run build + pytest tests -q -k agent_mode",
+    "passes": true,
+    "evidence": "UI: toggle 'Tác nhân (Agent)' trong Drawer (chi hien khi opts.agent.locks_config). Bat len -> an toan bo khoi config va hien canh bao 'Cấu hình do tác nhân quyết định — node chỉ gửi prompt'; pill tren the doi thanh 'Tác nhân quyết định'. discovery/verify_video_config_ui.py PASS 4 check agent (toggle click duoc, hien note, an Model, an Do phan giai + Thoi luong) -> traces/verify_video_config_ui.json. Backend: generate_image/generate_video voi agent_mode=True bo qua model/aspect/resolution/duration/count, dung default catalog va ghi agent_mode=True vao ket qua (test_image_agent_mode_uses_defaults, test_video_agent_mode_uses_defaults -> pytest -k agent_mode: 2 passed). Persist: PUT /api/workspace/projects/prj_0a7e484aeba3/canvas roi GET lai -> imageModel/imageCount/videoModel/videoSubMode/videoCount/videoDurationS/agentMode round-trip nguyen ven."
+  },
+  {
+    "id": "F-010",
+    "title": "Không hồi quy: test + build sạch",
+    "priority": 10,
+    "acceptance": [
+      "pytest tests -q pass.",
+      "npm --prefix web run build pass (tsc + vite)."
+    ],
+    "verify": "pytest tests -q; npm --prefix web run build",
+    "passes": false,
+    "evidence": "npm --prefix web run build -> OK (built in 1.43s). pytest tests -q -> 449 passed, 3 failed. Ca 3 loi deu NAM NGOAI pham vi task nay va tai hien y nguyen tren cay truoc khi sua (da kiem bang git stash push --include-untracked roi chay lai): tests/test_account_pool.py::test_allocation_zero_when_all_cooldown, ::test_allocation_shrinks_when_one_cooldown (AccountPoolManager.cooldown_remaining_s() tra 0.0 vo dieu kien — chu y 'Tool nội bộ: không bao giờ khóa cooldown' tu commit 93743da), va ::test_captured_args_has_reference_detects_t2i_baseline (helper doc spec[2] trong khi ref nam o spec[7] tu commit a105127). Khong lien quan node config parity -> de lai cho task rieng, chua fix o day."
+  }
+]

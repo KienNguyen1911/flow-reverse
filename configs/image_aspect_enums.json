@@ -1,8 +1,12 @@
 {
   "version": 1,
   "ratios": {
-    "9:16": 2
+    "16:9": 3,
+    "9:16": 2,
+    "4:3": 5,
+    "1:1": 1,
+    "3:4": 4
   },
-  "captured_ts": "2026-10-28T16:51:33",
-  "source": "discovery/capture_image_aspects.py"
+  "captured_ts": "2026-11-03T03:54:32",
+  "source": "discovery/capture_image_aspects.py + discovery/probe_count_res.py (0-credit blocked ogiZ0b)"
 }
