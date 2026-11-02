@@ -64,6 +64,29 @@ export function useScriptClips(): ScriptClipOption[] {
   return clips;
 }
 
+/**
+ * Toàn bộ option của composer Flow (ảnh + video + agent) do backend công bố.
+ *
+ * Nguồn duy nhất là `GET /api/node/options` → `src/Workflows/flow_catalog.py`.
+ * UI **không được** hard-code tỷ lệ/model/số lượng: mỗi khoá là một giá trị đã capture
+ * 0-credit từ composer thật, đoán sai là mất credit.
+ */
+export function useNodeOptions(): NodeMediaOptions | null {
+  const [opts, setOpts] = useState<NodeMediaOptions | null>(null);
+  useEffect(() => {
+    let stop = false;
+    fetchNodeOptions()
+      .then((o) => {
+        if (!stop) setOpts(o);
+      })
+      .catch(() => {});
+    return () => {
+      stop = true;
+    };
+  }, []);
+  return opts;
+}
+
 function fetchLimits(): Promise<Limits> {
   if (!limitsPromise) {
     limitsPromise = api

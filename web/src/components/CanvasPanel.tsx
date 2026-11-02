@@ -27,7 +27,9 @@ import type {
   ItemScope,
   Job,
   LibraryItem,
+  NodeImageModelOption,
   NodeMediaOptions,
+  NodeVideoModelOption,
   WorkspaceCanvasState,
 } from "../types";
 import { CanvasDrawer, type CanvasDrawerNode } from "./CanvasDrawer";
@@ -247,6 +249,13 @@ export function canvasStateToGraph(state?: WorkspaceCanvasState | null): {
       videoRatio: str(r.videoRatio, "9:16"),
       resolution: str(r.resolution, "1080p"),
       imageAspectRatio: str(r.imageAspectRatio, "9:16"),
+      imageModel: optionalStr(r.imageModel),
+      imageCount: typeof r.imageCount === "number" ? r.imageCount : 1,
+      videoModel: optionalStr(r.videoModel),
+      videoSubMode: optionalStr(r.videoSubMode) ?? "frames",
+      videoCount: typeof r.videoCount === "number" ? r.videoCount : 1,
+      videoDurationS: typeof r.videoDurationS === "number" ? r.videoDurationS : 8,
+      agentMode: typeof r.agentMode === "boolean" ? r.agentMode : false,
       autoImagePrompt: str(r.autoImagePrompt),
       removeWatermark: typeof r.removeWatermark === "boolean" ? r.removeWatermark : true,
       jobId: optionalStr(r.jobId),
@@ -599,8 +608,15 @@ function newNode(type: NodeType, opts: NodeMediaOptions | null, x: number, y: nu
     sourceImageId: null,
     sourceImageIds: [],
     videoRatio: opts?.video.default_aspect_ratio ?? "9:16",
-    resolution: opts?.video.default_resolution ?? "1080p",
+    resolution: "1080p",
     imageAspectRatio: "16:9",
+    imageModel: opts?.image.default_model ?? "nano_banana_2_1",
+    imageCount: opts?.image.default_count ?? 1,
+    videoModel: opts?.video.default_model ?? "omni_1_1_flash",
+    videoSubMode: opts?.video.default_sub_mode ?? "frames",
+    videoCount: opts?.video.default_count ?? 1,
+    videoDurationS: 8,
+    agentMode: false,
     autoImagePrompt: "",
     removeWatermark: true,
     jobId: null,
@@ -1479,7 +1495,12 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
       try {
         if (n.type === "ref") return { ok: !!n.fileUrl, fileUrl: n.fileUrl };
 
-        const srcRes = resolveSource(nodesRef.current, n, dry);
+        // "Thành phần" (ingredients) là text→video: prompt là đủ, không cần frame,
+        // nên không được chặn node chỉ vì ảnh nguồn chưa chạy xong.
+        const isTextToVideo = n.type === "video" && (n.videoSubMode ?? "frames") === "ingredients";
+        const srcRes: SourceResult = isTextToVideo
+          ? { ok: true, url: null, urls: [] }
+          : resolveSource(nodesRef.current, n, dry);
         if (!srcRes.ok) {
           patchNode(nodeId, { status: "failed", reason: srcRes.reason });
           showToast(`Lỗi node: ${srcRes.reason}`, "err", nodeId);
@@ -1492,6 +1513,9 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
             prompt: n.prompt.trim(),
             aspect_ratio: n.aspectRatio,
             seed: n.seed,
+            model: n.imageModel ?? undefined,
+            count: n.imageCount ?? 1,
+            agent_mode: !!n.agentMode,
             reference_image_path: srcRes.url,
             reference_image_paths: srcRes.urls,
             project_id: undefined,
@@ -1505,16 +1529,25 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
           });
         } else if (n.type === "video") {
           const framePath = srcRes.url;
-          const autoImage = !framePath;
+          // "Thành phần" (ingredients) là text→video thật: không cần frame, không cần
+          // auto_image. "Khung hình" (frames) cần frame, có thể sinh ảnh trước.
+          const subMode = n.videoSubMode ?? "frames";
+          const needsFrame = subMode === "frames";
+          const autoImage = needsFrame && !framePath;
           promise = api.nodeVideo({
             prompt: n.prompt.trim(),
             aspect_ratio: n.videoRatio,
-            frame_path: framePath,
+            sub_mode: subMode,
+            model: n.videoModel ?? undefined,
+            count: n.videoCount ?? 1,
+            agent_mode: !!n.agentMode,
+            frame_path: needsFrame ? framePath : undefined,
             auto_image: autoImage,
             image_prompt: autoImage && n.autoImagePrompt.trim() ? n.autoImagePrompt.trim() : undefined,
             image_aspect_ratio: autoImage ? n.imageAspectRatio : undefined,
             seed: n.seed,
             resolution: n.resolution,
+            duration_s: n.videoDurationS ?? 8,
             project_id: undefined,
             workspace_project_id: props.workspaceProjectId ?? null,
             dry_run: dry,
@@ -2123,10 +2156,23 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
     (n) => n.status === "idle" || n.status === "failed" || n.status === "rejected",
   ).length;
 
-  const imageRatios = Object.keys(opts?.image.aspect_ratios ?? { "16:9": 3 });
-  const verifiedRatios = new Set(opts?.image.verified_aspect_ratios ?? ["16:9"]);
-  const videoRatios = opts?.video.aspect_ratios ?? ["9:16", "16:9"];
-  const resolutions = opts?.video.resolutions ?? ["1080p", "720p"];
+  const imageRatios = opts?.image.aspect_ratios ?? ["16:9", "4:3", "1:1", "3:4", "9:16"];
+  // Aspect enum của ảnh là bằng chứng capture được ⇒ mọi tỷ lệ backend trả về đều dùng được.
+  const verifiedRatios = new Set(opts?.image.aspect_ratios ?? imageRatios);
+  const videoRatios = opts?.video.aspect_ratios ?? ["16:9", "9:16"];
+  // Độ phân giải phụ thuộc model (Veo không có 360p): lấy danh sách lớn nhất, NodeCard
+  // tự lọc lại theo `has_resolution` của model đang chọn.
+  const resolutions = Array.from(
+    new Set((opts?.video.models ?? []).flatMap((m) => m.resolutions ?? [])),
+  );
+  const videoResolutionList = resolutions.length ? resolutions : ["720p", "1080p"];
+  const imageModels = opts?.image.models ?? [];
+  const videoModels = opts?.video.models ?? [];
+  const imageCounts = opts?.image.counts ?? [1, 2, 3, 4];
+  const videoCounts = opts?.video.counts ?? [1, 2, 3, 4];
+  const videoSubModes = opts?.video.sub_modes ?? ["frames", "ingredients"];
+  const videoSubModeLabels = opts?.video.sub_mode_labels ?? {};
+  const agentLocked = !!opts?.agent?.locks_config;
 
   const drawerNode = nodes.find((n) => n.id === drawerNodeId) ?? null;
   const promptEditorNode = nodes.find((n) => n.id === promptEditorNodeId) ?? null;
@@ -2786,7 +2832,16 @@ export const CanvasPanel = forwardRef<CanvasPanelHandle, CanvasPanelProps>(funct
               imageRatios={imageRatios}
               verifiedRatios={verifiedRatios}
               videoRatios={videoRatios}
-              resolutions={resolutions}
+              resolutions={videoResolutionList}
+              imageModels={imageModels}
+              imageCounts={imageCounts}
+              imageDefaultModel={opts?.image.default_model ?? ""}
+              videoModels={videoModels}
+              videoCounts={videoCounts}
+              videoDefaultModel={opts?.video.default_model ?? ""}
+              videoSubModes={videoSubModes}
+              videoSubModeLabels={videoSubModeLabels}
+              agentLocked={agentLocked}
               linking={linking}
               wfBusy={wfBusy}
               onPromptChange={(prompt) => patchNode(n.id, { prompt })}
@@ -3150,6 +3205,15 @@ function CanvasNodeCard(props: {
   verifiedRatios: Set<string>;
   videoRatios: string[];
   resolutions: string[];
+  imageModels: NodeImageModelOption[];
+  imageCounts: number[];
+  imageDefaultModel: string;
+  videoModels: NodeVideoModelOption[];
+  videoCounts: number[];
+  videoDefaultModel: string;
+  videoSubModes: string[];
+  videoSubModeLabels: Record<string, string>;
+  agentLocked: boolean;
   linking: { id: string; kind: NodeType; side: "in" | "out" } | null;
   wfBusy: boolean;
   onPromptChange: (v: string) => void;
@@ -3178,7 +3242,13 @@ function CanvasNodeCard(props: {
   onMeasure?: (id: string, height: number) => void;
   onHeaderDown: (e: React.PointerEvent) => void;
 }) {
-  const { n, allNodes, imageRatios, verifiedRatios, videoRatios, resolutions, linking, wfBusy, aiGeneratingId, onGenerateAiPrompt, skillsList, itemLibrary, selected } = props;
+  const {
+    n, allNodes, imageRatios, verifiedRatios, videoRatios, resolutions,
+    imageModels, imageCounts, imageDefaultModel,
+    videoModels, videoCounts, videoDefaultModel,
+    videoSubModes, videoSubModeLabels, agentLocked,
+    linking, wfBusy, aiGeneratingId, onGenerateAiPrompt, skillsList, itemLibrary, selected,
+  } = props;
   const st = statusStyle(n.status);
   const isRef = n.type === "ref";
   const isImg = n.type === "image";
@@ -3247,8 +3317,11 @@ function CanvasNodeCard(props: {
     (isLastFrame ? !!n.sourceImageId : n.prompt.trim().length > 0);
 
   const upstream = n.sourceImageId ? allNodes.find((i) => i.id === n.sourceImageId) : undefined;
+  /** "Thành phần" là text→video: không cần frame nên không có nguồn nào bị chặn. */
+  const textToVideo = isVid && (n.videoSubMode ?? "frames") === "ingredients";
   const sourceBlocked =
     !isRef &&
+    !textToVideo &&
     connectedSources.length > 0 &&
     connectedSources.some((src) => {
       if (isLastFrame) return src.status !== "succeeded" || !src.videoUrl;
@@ -3655,18 +3728,44 @@ function CanvasNodeCard(props: {
 
             {/* Summary pills thay cho dropdown Tỷ lệ + ô Seed: 1 hàng, bấm → Drawer. */}
             <div className="flex items-center gap-1 flex-wrap">
-              <SummaryPill
-                value={n.aspectRatio + (verifiedRatios.has(n.aspectRatio) ? "" : " ⚠")}
-                title={`Tỷ lệ khung hình: ${n.aspectRatio}${
-                  verifiedRatios.has(n.aspectRatio) ? "" : " (chưa verify)"
-                } — bấm để đổi`}
-                onClick={() => props.onOpenDrawer(n.id, "config")}
-              />
-              <SummaryPill
-                value={`Seed: ${n.seed ?? "random"}`}
-                title="Seed — bấm để đổi trong Cấu hình"
-                onClick={() => props.onOpenDrawer(n.id, "config")}
-              />
+              {n.agentMode ? (
+                <SummaryPill
+                  tone="warn"
+                  value="Tác nhân quyết định"
+                  title="Flow đang bật 'Tác nhân': composer ẩn model/tỷ lệ/số lượng nên node chỉ gửi prompt — bấm để tắt trong Cấu hình"
+                  onClick={() => props.onOpenDrawer(n.id, "config")}
+                />
+              ) : (
+                <>
+                  <SummaryPill
+                    value={n.aspectRatio}
+                    title={`Tỷ lệ khung hình: ${n.aspectRatio} — bấm để đổi`}
+                    onClick={() => props.onOpenDrawer(n.id, "config")}
+                  />
+                  <SummaryPill
+                    label="Model"
+                    value={
+                      imageModels.find((m) => m.id === (n.imageModel ?? ""))?.label ??
+                      imageModels.find((m) => m.id === (imageDefaultModel || ""))?.label ??
+                      imageModels[0]?.label ??
+                      n.imageModel ??
+                      "—"
+                    }
+                    title="Model ảnh của composer Flow — bấm để đổi"
+                    onClick={() => props.onOpenDrawer(n.id, "config")}
+                  />
+                  <SummaryPill
+                    value={`x${n.imageCount ?? 1}`}
+                    title="Số ảnh mỗi lần chạy (x1..x4 như composer) — bấm để đổi"
+                    onClick={() => props.onOpenDrawer(n.id, "config")}
+                  />
+                  <SummaryPill
+                    value={`Seed: ${n.seed ?? "random"}`}
+                    title="Seed — bấm để đổi trong Cấu hình"
+                    onClick={() => props.onOpenDrawer(n.id, "config")}
+                  />
+                </>
+              )}
               {n.isItem && (
                 <SummaryPill
                   tone="warn"
@@ -3682,25 +3781,35 @@ function CanvasNodeCard(props: {
         {/* VIDEO NODE */}
         {isVid && (
           <>
-            <label className="flex flex-col gap-0.5">
-              <span className="text-[10px] font-semibold text-mut">Nguồn ảnh khung hình</span>
-              <select
-                value={n.sourceImageId ?? ""}
-                onChange={(e) => props.onSourceChange(e.target.value)}
-                className="h-7 rounded-ctl border border-line2 bg-panel2 px-1.5 text-[11px] text-fg focus:border-acc outline-none"
-              >
-                <option value="">Tự tạo ảnh khung (auto)</option>
-                {sourceOptions.map((i) => (
-                  <option key={i.id} value={i.id}>
-                    {sourceLabel(i)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {sourceBlocked && (
-              <p className="text-[10px] text-warn leading-snug">
-                Node nguồn chưa chạy xong — video sẽ chờ/bỏ qua khi chạy workflow.
+            {/* "Thành phần" = text→video (`YhhmEf`): không có ô chọn ảnh khung vì Flow
+                không gửi frame nào trong payload của sub-mode này. */}
+            {textToVideo ? (
+              <p className="text-[10px] text-mut leading-snug">
+                Thành phần (text→video): chỉ cần prompt, không dùng ảnh khung.
               </p>
+            ) : (
+              <>
+                <label className="flex flex-col gap-0.5">
+                  <span className="text-[10px] font-semibold text-mut">Nguồn ảnh khung hình</span>
+                  <select
+                    value={n.sourceImageId ?? ""}
+                    onChange={(e) => props.onSourceChange(e.target.value)}
+                    className="h-7 rounded-ctl border border-line2 bg-panel2 px-1.5 text-[11px] text-fg focus:border-acc outline-none"
+                  >
+                    <option value="">Tự tạo ảnh khung (auto)</option>
+                    {sourceOptions.map((i) => (
+                      <option key={i.id} value={i.id}>
+                        {sourceLabel(i)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {sourceBlocked && (
+                  <p className="text-[10px] text-warn leading-snug">
+                    Node nguồn chưa chạy xong — video sẽ chờ/bỏ qua khi chạy workflow.
+                  </p>
+                )}
+              </>
             )}
 
             <div className="flex items-center justify-between mt-0.5 gap-1.5 min-w-0">
@@ -3751,24 +3860,73 @@ function CanvasNodeCard(props: {
               onExpand={() => props.onOpenPromptEditor(n.id)}
             />
 
-            {/* Summary pills: Tỷ lệ • Độ phân giải • Frame nguồn — chỉnh chi tiết trong Drawer. */}
+            {/* Summary pills: Sub-mode • Model • Tỷ lệ • Độ phân giải • Thời lượng • Số lượng
+                — giống chip tóm tắt của composer Flow; chỉnh chi tiết trong Drawer. */}
             <div className="flex items-center gap-1 flex-wrap">
-              <SummaryPill
-                value={n.videoRatio}
-                title={`Tỷ lệ video: ${n.videoRatio} — bấm để đổi`}
-                onClick={() => props.onOpenDrawer(n.id, "config")}
-              />
-              <SummaryPill
-                value={n.resolution}
-                title={`Độ phân giải: ${n.resolution} — bấm để đổi`}
-                onClick={() => props.onOpenDrawer(n.id, "config")}
-              />
-              <SummaryPill
-                label="Frame"
-                value={upstream ? (upstream.type === "last_frame" ? "Nối tiếp" : "Node Ảnh") : "Auto"}
-                title="Ảnh khung nguồn — bấm để đổi trong Cấu hình"
-                onClick={() => props.onOpenDrawer(n.id, "config")}
-              />
+              {n.agentMode ? (
+                <SummaryPill
+                  tone="warn"
+                  value="Tác nhân quyết định"
+                  title="Flow đang bật 'Tác nhân': composer ẩn model/tỷ lệ/độ phân giải/thời lượng/số lượng nên node chỉ gửi prompt — bấm để tắt trong Cấu hình"
+                  onClick={() => props.onOpenDrawer(n.id, "config")}
+                />
+              ) : (
+                <>
+                  <SummaryPill
+                    label="Sub"
+                    value={
+                      videoSubModeLabels[n.videoSubMode ?? "frames"] ??
+                      (n.videoSubMode === "ingredients" ? "Thành phần" : "Khung hình")
+                    }
+                    title="Sub-mode video: Khung hình (ảnh→video) hay Thành phần (câu lệnh→video)"
+                    onClick={() => props.onOpenDrawer(n.id, "config")}
+                  />
+                  <SummaryPill
+                    label="Model"
+                    value={
+                      videoModels.find((m) => m.id === (n.videoModel ?? ""))?.label ??
+                      videoModels.find((m) => m.id === (videoDefaultModel || ""))?.label ??
+                      videoModels[0]?.label ??
+                      n.videoModel ??
+                      "—"
+                    }
+                    title="Model video của composer Flow — bấm để đổi"
+                    onClick={() => props.onOpenDrawer(n.id, "config")}
+                  />
+                  <SummaryPill
+                    value={n.videoRatio}
+                    title={`Tỷ lệ video: ${n.videoRatio} — bấm để đổi`}
+                    onClick={() => props.onOpenDrawer(n.id, "config")}
+                  />
+                  <SummaryPill
+                    value={n.resolution}
+                    title={`Độ phân giải: ${n.resolution} — bấm để đổi`}
+                    onClick={() => props.onOpenDrawer(n.id, "config")}
+                  />
+                  <SummaryPill
+                    value={`${n.videoDurationS ?? 8}s`}
+                    title="Thời lượng mỗi video — bấm để đổi"
+                    onClick={() => props.onOpenDrawer(n.id, "config")}
+                  />
+                  <SummaryPill
+                    value={`x${n.videoCount ?? 1}`}
+                    title="Số video mỗi lần chạy (x1..x4 như composer) — bấm để đổi"
+                    onClick={() => props.onOpenDrawer(n.id, "config")}
+                  />
+                  <SummaryPill
+                    label="Frame"
+                    value={
+                      (n.videoSubMode ?? "frames") === "ingredients"
+                        ? "Không cần"
+                        : upstream
+                          ? (upstream.type === "last_frame" ? "Nối tiếp" : "Node Ảnh")
+                          : "Auto"
+                    }
+                    title="Ảnh khung nguồn — bấm để đổi trong Cấu hình"
+                    onClick={() => props.onOpenDrawer(n.id, "config")}
+                  />
+                </>
+              )}
             </div>
           </>
         )}

@@ -299,6 +299,40 @@ export interface ScriptClipOption {
   has_beats?: boolean;
 }
 
+/** Một model trong composer Flow (nguồn: `src/Workflows/flow_catalog.py`). */
+export interface NodeImageModelOption {
+  id: string;
+  label: string;
+  /** Model key THẬT đã capture (`GEM_PIX_2` / `HARBOR_SEAL` / `BELUGA`) — chỉ để hiển thị. */
+  model_key?: string | null;
+}
+
+/**
+ * Một model video. `has_resolution` / `has_duration` là bằng chứng quan sát được: chọn model
+ * Veo thì composer Flow **biến mất** nhóm độ phân giải + thời lượng (cố định 720p / 8s).
+ * UI phải disable hoặc ẩn hai nhóm đó theo cờ này, không được cho chọn rồi fail.
+ */
+export interface NodeVideoModelOption {
+  id: string;
+  label: string;
+  aspect_ratios: string[];
+  resolutions: string[];
+  durations_s: number[];
+  has_resolution: boolean;
+  has_duration: boolean;
+  model_keys?: Record<string, Record<string, string>>;
+}
+
+/** Agent ("Tác nhân") khoá toàn bộ cấu hình — Flow ẩn hết khỏi composer. */
+export interface NodeAgentModeOptions {
+  supported: boolean;
+  /** True ⇒ bật agent thì model/tỷ lệ/độ phân giải/thời lượng/số lượng không do user chọn. */
+  locks_config: boolean;
+  note?: string;
+  locked_fields: string[];
+  extra_buttons?: { id: string; label: string; purpose?: string }[];
+}
+
 export interface NodeMediaOptions {
   /** Validation caps enforced by the API; the UI mirrors them (xem `src/Workflows/limits.py`). */
   limits: {
@@ -317,26 +351,41 @@ export interface NodeMediaOptions {
     duration_s?: number;
     clips: ScriptClipOption[];
   };
+  /** Toàn bộ danh sách dưới đây do backend trả về — FE KHÔNG được hard-code. */
   image: {
-    aspect_ratios: Record<string, number>;
-    verified_aspect_ratios: string[];
+    modes: string[];
+    mode_labels: Record<string, string>;
+    aspect_ratios: string[];
+    aspect_enums: Record<string, number>;
     default_aspect_ratio: string;
+    models: NodeImageModelOption[];
+    default_model: string;
+    counts: number[];
+    default_count: number;
     supports_reference_image: boolean;
     supports_seed: boolean;
     supports_watermark_removal: boolean;
   };
   video: {
+    modes: string[];
+    sub_modes: string[];
+    sub_mode_labels: Record<string, string>;
+    sub_mode_descriptions?: Record<string, string>;
+    default_sub_mode: string;
     aspect_ratios: string[];
+    aspect_enums: Record<string, number>;
     default_aspect_ratio: string;
-    durations_s: number[];
-    resolutions: string[];
-    default_resolution: string;
+    models: NodeVideoModelOption[];
+    default_model: string;
+    counts: number[];
+    default_count: number;
     supports_starting_frame: boolean;
     supports_text_to_video: boolean;
     auto_image_chain: boolean;
     supports_seed: boolean;
     supports_watermark_removal: boolean;
   };
+  agent?: NodeAgentModeOptions;
 }
 
 export interface NodeImageRequest {
@@ -344,6 +393,12 @@ export interface NodeImageRequest {
   aspect_ratio?: string;
   aspect?: number;
   seed?: number | null;
+  /** Model id hoặc label (`nano_banana_pro` / `Nano Banana Pro`). */
+  model?: string | null;
+  /** Số ảnh mỗi lần chạy (x1..x4 như composer). */
+  count?: number;
+  /** Flow đang ở chế độ "Tác nhân": bỏ qua model/tỷ lệ/count do user chọn. */
+  agent_mode?: boolean;
   reference_image_path?: string | null;
   reference_image_paths?: string[];
   project_id?: string | null;
@@ -360,6 +415,14 @@ export interface NodeImageRequest {
 export interface NodeVideoRequest {
   prompt: string;
   aspect_ratio?: string;
+  /** `frames` = Khung hình (image→video) | `ingredients` = Thành phần (text→video). */
+  sub_mode?: string;
+  /** Model id hoặc label (`omni_1_1_flash` / `Omni 1.1 Flash`). */
+  model?: string | null;
+  /** Số video mỗi lần chạy (x1..x4 như composer). */
+  count?: number;
+  /** Flow đang ở chế độ "Tác nhân": bỏ qua cấu hình do user chọn. */
+  agent_mode?: boolean;
   frame_path?: string | null;
   image_prompt?: string | null;
   image_aspect_ratio?: string;
@@ -399,6 +462,13 @@ export interface NodeImageResult {
   media_id?: string | null;
   reference_sha256?: string | null;
   reference_media_id?: string | null;
+  /** Composer model that actually ran (catalog id) + its label. */
+  model?: string;
+  model_label?: string;
+  /** Số ảnh đã yêu cầu (x1..x4). */
+  count?: number;
+  /** True ⇒ composer ở chế độ "Tác nhân", cấu hình do Flow quyết định. */
+  agent_mode?: boolean;
   dry_run?: boolean;
   elapsed_s?: number;
   reason?: string | null;
@@ -419,9 +489,16 @@ export interface NodeVideoResult {
   video_bytes?: number | null;
   resolution: string;
   duration_s: number;
+  /** Composer config that actually ran (xem `src/Workflows/flow_catalog.py`). */
+  model?: string;
+  model_label?: string;
+  model_key?: string | null;
+  sub_mode?: string;
+  count?: number;
+  agent_mode?: boolean;
   frame_path?: string | null;
   frame_url?: string | null;
-  frame_source?: "provided" | "generated" | null;
+  frame_source?: "provided" | "generated" | "none" | null;
   image_prompt?: string | null;
   watermark_removed?: boolean;
   dry_run?: boolean;
@@ -633,6 +710,23 @@ export interface CanvasNodeState {
   videoRatio: string;
   resolution: string;
   imageAspectRatio: string;
+  /** Model ảnh đã chọn (`nano_banana_pro` …) — danh sách đọc từ `/api/node/options`. */
+  imageModel?: string | null;
+  /** Số ảnh mỗi lần chạy (x1..x4 như composer Flow). */
+  imageCount?: number;
+  /** Model video đã chọn (`omni_1_1_flash` …). */
+  videoModel?: string | null;
+  /** Sub-mode video: `frames` (Khung hình) | `ingredients` (Thành phần). */
+  videoSubMode?: string;
+  /** Số video mỗi lần chạy (x1..x4). */
+  videoCount?: number;
+  /** Thời lượng video yêu cầu (4/6/8/10s; Veo khoá 8s). */
+  videoDurationS?: number;
+  /**
+   * Flow composer đang ở chế độ "Tác nhân" (Agent). Khi bật, Flow ẩn toàn bộ
+   * model/tỷ lệ/độ phân giải/thời lượng/số lượng ⇒ node không cho chọn và chỉ gửi prompt.
+   */
+  agentMode?: boolean;
   autoImagePrompt: string;
   removeWatermark?: boolean;
   jobId: string | null;
