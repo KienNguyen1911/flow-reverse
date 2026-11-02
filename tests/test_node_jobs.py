@@ -101,3 +101,89 @@ def test_node_video_job_maps_urls(tmp_path):
     assert job.state == "succeeded"
     assert job.result["video_url"] == f"/api/node/files/{run_dir.name}/video.mp4"
     assert job.result["frame_url"] == f"/api/node/files/{run_dir.name}/starting_frame.png"
+
+
+def test_node_video_job_forwards_composer_config(tmp_path):
+    """The job must pass model/sub_mode/count through, not silently drop them."""
+    seen: dict = {}
+
+    class RecordingService(FakeService):
+        def generate_video(self, **kwargs):
+            seen.update(kwargs)
+            return NodeVideoResult(
+                status="dry_run",
+                prompt="pan",
+                aspect_ratio="16:9",
+                run_id="r1",
+                run_dir=str(tmp_path / "r1"),
+                sub_mode="ingredients",
+                model="veo_3_1_fast",
+                model_key="veo_3_1_t2v_fast",
+                count=2,
+            )
+
+    manager = _manager(tmp_path, RecordingService())
+    job = Job(
+        "node_video",
+        {
+            "prompt": "pan",
+            "model": "veo_3_1_fast",
+            "sub_mode": "ingredients",
+            "count": 2,
+            "duration_s": 8,
+            "resolution": "720p",
+            "agent_mode": True,
+            "dry_run": True,
+        },
+    )
+    manager._run_node_video(job)
+
+    assert job.state == "succeeded"
+    assert seen["model"] == "veo_3_1_fast"
+    assert seen["sub_mode"] == "ingredients"
+    assert seen["count"] == 2
+    assert seen["agent_mode"] is True
+    assert job.result["model"] == "veo_3_1_fast"
+    assert job.result["sub_mode"] == "ingredients"
+    assert job.result["count"] == 2
+
+
+def test_node_image_job_forwards_model_and_count(tmp_path):
+    seen: dict = {}
+
+    class RecordingService(FakeService):
+        def generate_image(self, **kwargs):
+            seen.update(kwargs)
+            return NodeImageResult(
+                status="dry_run",
+                prompt="x",
+                aspect_ratio="1:1",
+                aspect_enum=1,
+                run_id="r1",
+                run_dir=str(tmp_path / "r1"),
+                model="nano_banana_pro",
+                count=3,
+                agent_mode=True,
+            )
+
+    manager = _manager(tmp_path, RecordingService())
+    job = Job(
+        "node_image",
+        {
+            "prompt": "x",
+            "aspect_ratio": "1:1",
+            "aspect": 1,
+            "model": "nano_banana_pro",
+            "count": 3,
+            "agent_mode": True,
+            "dry_run": True,
+        },
+    )
+    manager._run_node_image(job)
+
+    assert job.state == "succeeded"
+    assert seen["model"] == "nano_banana_pro"
+    assert seen["count"] == 3
+    assert seen["agent_mode"] is True
+    assert job.result["count"] == 3
+    assert job.result["agent_mode"] is True

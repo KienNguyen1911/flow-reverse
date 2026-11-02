@@ -23,19 +23,90 @@ def client(tmp_path_factory) -> TestClient:
     return TestClient(app)
 
 
-def test_node_options(client: TestClient):
+def test_node_options_matches_captured_flow_composer(client: TestClient):
+    """Options come from flow_catalog (0-credit captures), never from FE guesses."""
     r = client.get("/api/node/options")
     assert r.status_code == 200
     body = r.json()
-    assert body["image"]["aspect_ratios"] == {"16:9": 3, "9:16": 2}
-    assert body["video"]["aspect_ratios"] == ["9:16", "16:9"]
-    assert body["video"]["supports_text_to_video"] is False
+
+    image = body["image"]
+    assert image["aspect_ratios"] == ["16:9", "4:3", "1:1", "3:4", "9:16"]
+    assert image["aspect_enums"] == {"16:9": 3, "9:16": 2, "4:3": 5, "1:1": 1, "3:4": 4}
+    assert image["counts"] == [1, 2, 3, 4]
+    assert [(m["id"], m["model_key"]) for m in image["models"]] == [
+        ("nano_banana_pro", "GEM_PIX_2"),
+        ("nano_banana_2_lite", "HARBOR_SEAL"),
+        ("nano_banana_2_1", "BELUGA"),
+    ]
+
+    video = body["video"]
+    assert video["sub_modes"] == ["frames", "ingredients"]
+    assert video["aspect_ratios"] == ["16:9", "9:16"]
+    assert video["counts"] == [1, 2, 3, 4]
+    assert video["supports_text_to_video"] is True
+    models = {m["id"]: m for m in video["models"]}
+    assert set(models) == {"omni_1_1_flash", "veo_3_1_lite", "veo_3_1_fast", "veo_3_1_quality"}
+    # Only Omni exposes 360p + the 4/6/8/10 duration group (observed in the composer).
+    assert models["omni_1_1_flash"]["has_resolution"] is True
+    assert models["omni_1_1_flash"]["durations_s"] == [4, 6, 8, 10]
+    for veo in ("veo_3_1_lite", "veo_3_1_fast", "veo_3_1_quality"):
+        assert models[veo]["has_resolution"] is False
+        assert models[veo]["has_duration"] is False
+        assert models[veo]["durations_s"] == [8]
+        assert "360p" not in models[veo]["resolutions"]
+
+    # Agent mode locks the whole config block.
+    assert body["agent"]["locks_config"] is True
+    assert "model" in body["agent"]["locked_fields"]
+    assert "count" in body["agent"]["locked_fields"]
 
 
-def test_node_image_rejects_unverified_ratio(client: TestClient):
-    r = client.post("/api/node/image", json={"prompt": "x", "aspect_ratio": "1:1", "dry_run": True})
+def test_node_image_accepts_every_captured_ratio(client: TestClient):
+    """All five ratios now have a captured enum ⇒ none may be rejected as unverified."""
+    for ratio in ("16:9", "4:3", "1:1", "3:4", "9:16"):
+        r = client.post("/api/node/image", json={"prompt": "x", "aspect_ratio": ratio, "dry_run": True})
+        assert r.status_code == 200, f"{ratio}: {r.text}"
+
+
+def test_node_image_rejects_unknown_ratio(client: TestClient):
+    r = client.post("/api/node/image", json={"prompt": "x", "aspect_ratio": "21:9", "dry_run": True})
     assert r.status_code == 400
-    assert "capture_image_aspects" in r.json()["detail"]
+    assert "21:9" in r.json()["detail"]
+
+
+def test_node_image_rejects_unknown_model_and_bad_count(client: TestClient):
+    r = client.post(
+        "/api/node/image",
+        json={"prompt": "x", "aspect_ratio": "16:9", "model": "nano_banana_9", "dry_run": True},
+    )
+    assert r.status_code == 400
+    assert "nano_banana_9" in r.json()["detail"]
+
+    r = client.post(
+        "/api/node/image",
+        json={"prompt": "x", "aspect_ratio": "16:9", "count": 9, "dry_run": True},
+    )
+    assert r.status_code == 400
+    assert "Số lượng" in r.json()["detail"]
+
+
+def test_node_image_echoes_model_and_count(client: TestClient):
+    r = client.post(
+        "/api/node/image",
+        json={
+            "prompt": "x",
+            "aspect_ratio": "1:1",
+            "model": "nano_banana_pro",
+            "count": 3,
+            "dry_run": True,
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["model"] == "nano_banana_pro"
+    assert body["model_key"] == "GEM_PIX_2"
+    assert body["count"] == 3
+    assert body["aspect"] == 1
 
 
 def test_node_image_requires_confirm(client: TestClient):
@@ -56,7 +127,26 @@ def test_node_video_requires_frame_or_auto_image(client: TestClient):
         json={"prompt": "x", "auto_image": False, "aspect_ratio": "9:16", "dry_run": True},
     )
     assert r.status_code == 400
-    assert "image-to-video" in r.json()["detail"]
+    assert "Khung hình" in r.json()["detail"]
+
+
+def test_node_video_ingredients_needs_no_frame(client: TestClient):
+    """"Thành phần" is a real text→video path (`YhhmEf`): no frame, no auto image."""
+    r = client.post(
+        "/api/node/video",
+        json={
+            "prompt": "x",
+            "sub_mode": "ingredients",
+            "auto_image": False,
+            "aspect_ratio": "9:16",
+            "dry_run": True,
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["sub_mode"] == "ingredients"
+    assert body["frame_source"] == "none"
+    assert body["model_key"] == "abra_t2v_8s"
 
 
 def test_node_video_rejects_bad_ratio_and_duration(client: TestClient):
@@ -64,7 +154,99 @@ def test_node_video_rejects_bad_ratio_and_duration(client: TestClient):
     assert r.status_code == 400
     r = client.post("/api/node/video", json={"prompt": "x", "duration_s": 16, "dry_run": True})
     assert r.status_code == 400
-    assert "8s" in r.json()["detail"]
+    assert "16s" in r.json()["detail"] or "không hỗ trợ" in r.json()["detail"].lower()
+
+
+def test_node_video_veo_fixes_resolution_and_duration(client: TestClient):
+    """Veo hides the resolution + duration groups, so those values must be rejected."""
+    r = client.post(
+        "/api/node/video",
+        json={
+            "prompt": "x",
+            "model": "veo_3_1_fast",
+            "sub_mode": "ingredients",
+            "resolution": "360p",
+            "auto_image": False,
+            "dry_run": True,
+        },
+    )
+    assert r.status_code == 400
+    assert "360p" in r.json()["detail"]
+
+    r = client.post(
+        "/api/node/video",
+        json={
+            "prompt": "x",
+            "model": "veo_3_1_fast",
+            "sub_mode": "ingredients",
+            "duration_s": 4,
+            "auto_image": False,
+            "dry_run": True,
+        },
+    )
+    assert r.status_code == 400
+
+    ok = client.post(
+        "/api/node/video",
+        json={
+            "prompt": "x",
+            "model": "veo_3_1_fast",
+            "sub_mode": "ingredients",
+            "aspect_ratio": "16:9",
+            "duration_s": 8,
+            "resolution": "1080p",
+            "auto_image": False,
+            "dry_run": True,
+        },
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["model_key"] == "veo_3_1_t2v_fast"
+
+    portrait = client.post(
+        "/api/node/video",
+        json={
+            "prompt": "x",
+            "model": "veo_3_1_fast",
+            "sub_mode": "ingredients",
+            "aspect_ratio": "9:16",
+            "auto_image": False,
+            "dry_run": True,
+        },
+    )
+    assert portrait.status_code == 200, portrait.text
+    assert portrait.json()["model_key"] == "veo_3_1_t2v_fast_portrait"
+
+
+def test_node_video_omni_360p_and_durations(client: TestClient):
+    r = client.post(
+        "/api/node/video",
+        json={
+            "prompt": "x",
+            "model": "omni_1_1_flash",
+            "sub_mode": "ingredients",
+            "resolution": "360p",
+            "duration_s": 4,
+            "auto_image": False,
+            "dry_run": True,
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["model_key"] == "abra_t2v_4s_360p"
+
+    r = client.post(
+        "/api/node/video",
+        json={
+            "prompt": "x",
+            "model": "omni_1_1_flash",
+            "sub_mode": "frames",
+            "resolution": "720p",
+            "duration_s": 10,
+            "auto_image": True,
+            "dry_run": True,
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["model_key"] == "abra_i2v_10s"
 
 
 def test_node_video_requires_confirm(client: TestClient):

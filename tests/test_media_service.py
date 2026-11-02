@@ -59,12 +59,16 @@ class FakeImageClient:
         prompt,
         *,
         aspect=3,
+        aspect_ratio=None,
         seed=None,
         dry_run=False,
         remove_watermark=True,
         poll_timeout_s=150.0,
         anti_abuse_retries=1,
         reference=None,
+        model_key=None,
+        model_label=None,
+        count=1,
         on_event=None,
     ):
         self.calls.append(
@@ -72,9 +76,13 @@ class FakeImageClient:
                 "project_id": project_id,
                 "prompt": prompt,
                 "aspect": aspect,
+                "aspect_ratio": aspect_ratio,
                 "seed": seed,
                 "dry_run": dry_run,
                 "reference": reference,
+                "model_key": model_key,
+                "model_label": model_label,
+                "count": count,
             }
         )
         run_dir = self.out_dir / f"img_run_{len(self.calls)}"
@@ -102,9 +110,17 @@ class FakeImageClient:
 class FakeVideoBridge:
     def __init__(self):
         self.calls: list[dict] = []
+        self.text_calls: list[dict] = []
 
     def generate_video_flow(self, **kwargs):
         self.calls.append(kwargs)
+        dest = Path(kwargs["dest_path"])
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"ftyp-mp4")
+        return dest
+
+    def generate_text_video_flow(self, **kwargs):
+        self.text_calls.append(kwargs)
         dest = Path(kwargs["dest_path"])
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"ftyp-mp4")
@@ -145,9 +161,11 @@ def test_resolve_image_aspect_reads_capture_config(tmp_path):
     assert resolve_image_aspect("9:16", config_path=cfg) == ("9:16", 1)
     assert load_image_aspects(cfg)["1:1"] == 2
     assert load_image_aspects(cfg)["16:9"] == 3  # built-in stays available
-    # Without the capture config the ratio must fail loudly, never guess.
+    assert load_image_aspects(cfg)["4:3"] == 5  # captured 2026-11-03
+    assert load_image_aspects(cfg)["3:4"] == 4
+    # Without the capture config a ratio with no captured enum must fail loudly, never guess.
     with pytest.raises(AspectNotVerifiedError) as exc:
-        resolve_image_aspect("9:16", config_path=tmp_path / "missing.json")
+        resolve_image_aspect("21:9", config_path=tmp_path / "missing.json")
     assert "capture_image_aspects" in str(exc.value)
 
 
@@ -158,21 +176,42 @@ def test_video_option_validation():
         normalize_video_ratio("1:1")
     assert normalize_video_resolution("1080") == "1080p"
     assert normalize_video_resolution("720") == "720p"
+    assert normalize_video_resolution("360") == "360p"
     with pytest.raises(UnsupportedOptionError):
         normalize_video_resolution("4k")
     assert validate_video_duration(8) == 8
+    assert validate_video_duration(4) == 4
     with pytest.raises(UnsupportedOptionError):
         validate_video_duration(16)
 
 
-def test_node_options_exposes_capabilities(tmp_path):
+def test_video_option_validation_per_model():
+    """Veo hides resolution + duration, so those choices must fail loudly per model."""
+    assert normalize_video_resolution("360p", model="omni_1_1_flash") == "360p"
+    assert normalize_video_resolution("1080p", model="omni_1_1_flash") == "1080p"
+    with pytest.raises(UnsupportedOptionError) as exc:
+        normalize_video_resolution("360p", model="veo_3_1_fast")
+    assert "360p" in str(exc.value)
+    assert validate_video_duration(4, model="omni_1_1_flash") == 4
+    assert validate_video_duration(8, model="veo_3_1_quality") == 8
+    with pytest.raises(UnsupportedOptionError):
+        validate_video_duration(4, model="veo_3_1_quality")
+
+
+def test_node_options_exposes_captured_catalog(tmp_path):
     opts = node_options(config_path=tmp_path / "none.json")
-    assert opts["image"]["aspect_ratios"] == {"16:9": 3}
+    assert opts["image"]["aspect_ratios"] == ["16:9", "4:3", "1:1", "3:4", "9:16"]
     assert opts["image"]["supports_reference_image"] is True
-    assert opts["video"]["aspect_ratios"] == ["9:16", "16:9"]
-    assert opts["video"]["durations_s"] == [8]
-    assert opts["video"]["supports_text_to_video"] is False
+    assert opts["image"]["counts"] == [1, 2, 3, 4]
+    assert [m["id"] for m in opts["image"]["models"]] == [
+        "nano_banana_pro", "nano_banana_2_lite", "nano_banana_2_1"
+    ]
+    assert opts["video"]["aspect_ratios"] == ["16:9", "9:16"]
+    assert opts["video"]["sub_modes"] == ["frames", "ingredients"]
+    assert opts["video"]["supports_text_to_video"] is True
     assert opts["video"]["auto_image_chain"] is True
+    assert opts["video"]["counts"] == [1, 2, 3, 4]
+    assert opts["agent"]["locks_config"] is True
 
 
 def test_cdp_lock_is_shared_per_endpoint():
@@ -280,3 +319,164 @@ def test_video_node_dry_run_does_not_call_bridge(tmp_path):
     assert res.status == "dry_run"
     assert res.video_path is None
     assert video.calls == []
+
+
+# --------------------------------------------------------------------------- #
+# Composer parity: model / count / sub-mode / agent mode
+# --------------------------------------------------------------------------- #
+
+
+def test_image_node_forwards_model_and_count(tmp_path):
+    """count N must reach the client as x N with the captured model key."""
+    svc, image, _video = _service(tmp_path)
+    res = svc.generate_image(
+        prompt="three cats", aspect_ratio="1:1", model="nano_banana_pro", count=3, dry_run=True
+    )
+    assert res.status == "dry_run"
+    assert (res.model, res.model_label, res.count) == ("nano_banana_pro", "Nano Banana Pro", 3)
+    call = image.calls[0]
+    assert call["model_key"] == "GEM_PIX_2"
+    assert call["model_label"] == "Nano Banana Pro"
+    assert call["count"] == 3
+    assert call["aspect"] == 1
+    assert call["aspect_ratio"] == "1:1"
+
+
+def test_image_node_rejects_unknown_model_and_count(tmp_path):
+    svc, image, _video = _service(tmp_path)
+    with pytest.raises(Exception):
+        svc.generate_image(prompt="x", model="nano_banana_9")
+    with pytest.raises(Exception):
+        svc.generate_image(prompt="x", count=7)
+    assert image.calls == []
+
+
+def test_image_agent_mode_uses_defaults(tmp_path):
+    """Agent ON hides model/aspect/count in Flow ⇒ we must fall back to defaults."""
+    svc, image, _video = _service(tmp_path)
+    res = svc.generate_image(
+        prompt="x", aspect_ratio="3:4", model="nano_banana_pro", count=4, agent_mode=True, dry_run=True
+    )
+    assert res.agent_mode is True
+    assert res.aspect_ratio == "16:9" and res.aspect_enum == 3
+    assert res.model == "nano_banana_2_1"
+    assert res.count == 1
+    call = image.calls[0]
+    assert call["model_key"] == "BELUGA"
+    assert call["count"] == 1
+
+
+def test_video_node_forwards_model_key_frames(tmp_path):
+    svc, _image, video = _service(tmp_path)
+    frame = tmp_path / "frame.png"
+    frame.write_bytes(b"frame")
+    res = svc.generate_video(
+        prompt="pan",
+        frame_path=frame,
+        aspect_ratio="16:9",
+        model="veo_3_1_fast",
+        sub_mode="frames",
+        count=2,
+        remove_watermark=False,
+    )
+    assert res.status == "ok"
+    assert (res.model, res.sub_mode, res.count) == ("veo_3_1_fast", "frames", 2)
+    call = video.calls[0]
+    assert call["model_key"] == "veo_3_1_i2v_s_fast"
+    assert call["count"] == 2
+    assert call["offer_resolution"] is False and call["offer_duration"] is False
+    assert call["capture_resolution"] == "720p"
+
+
+def test_video_node_ingredients_is_text_to_video(tmp_path):
+    """'Thành phần' submits YhhmEf: no frame, no auto image, t2v model key."""
+    svc, image, video = _service(tmp_path)
+    res = svc.generate_video(
+        prompt="ocean at sunrise",
+        sub_mode="ingredients",
+        aspect_ratio="9:16",
+        model="veo_3_1_quality",
+        auto_image=True,  # must be ignored in this sub-mode
+        remove_watermark=False,
+    )
+    assert res.status == "ok"
+    assert res.sub_mode == "ingredients"
+    assert res.frame_source is None
+    assert res.model_key == "veo_3_1_t2v_portrait"
+    assert image.calls == [], "ingredients must not generate a starting frame"
+    assert video.calls == [], "ingredients must not use the image→video RPC"
+    assert video.text_calls[0]["model_key"] == "veo_3_1_t2v_portrait"
+    assert video.text_calls[0]["prompt_text"] == "ocean at sunrise"
+
+
+def test_video_node_omni_360p_and_duration(tmp_path):
+    svc, _image, video = _service(tmp_path)
+    frame = tmp_path / "frame.png"
+    frame.write_bytes(b"frame")
+    res = svc.generate_video(
+        prompt="pan",
+        frame_path=frame,
+        aspect_ratio="9:16",
+        model="omni_1_1_flash",
+        sub_mode="frames",
+        resolution="360p",
+        duration_s=4,
+        remove_watermark=False,
+    )
+    assert res.model_key == "abra_i2v_4s_360p"
+    call = video.calls[0]
+    assert call["resolution"] == "360p"
+    assert call["capture_resolution"] == "360p"
+    assert call["duration_s"] == 4
+    assert call["offer_resolution"] is True and call["offer_duration"] is True
+
+
+def test_video_node_1080p_upsamples_from_720p(tmp_path):
+    svc, _image, video = _service(tmp_path)
+    frame = tmp_path / "frame.png"
+    frame.write_bytes(b"frame")
+    res = svc.generate_video(
+        prompt="pan", frame_path=frame, model="omni_1_1_flash", duration_s=8, remove_watermark=False
+    )
+    assert res.resolution == "1080p"
+    call = video.calls[0]
+    assert call["resolution"] == "1080p"
+    assert call["capture_resolution"] == "720p"
+    assert call["model_key"] == "abra_i2v_8s"
+
+
+def test_video_node_rejects_veo_with_360p(tmp_path):
+    svc, _image, video = _service(tmp_path)
+    frame = tmp_path / "frame.png"
+    frame.write_bytes(b"frame")
+    with pytest.raises(UnsupportedOptionError):
+        svc.generate_video(
+            prompt="pan", frame_path=frame, model="veo_3_1_lite", resolution="360p"
+        )
+    assert video.calls == []
+
+
+def test_video_agent_mode_uses_defaults(tmp_path):
+    svc, _image, video = _service(tmp_path)
+    frame = tmp_path / "frame.png"
+    frame.write_bytes(b"frame")
+    res = svc.generate_video(
+        prompt="pan",
+        frame_path=frame,
+        aspect_ratio="16:9",
+        model="veo_3_1_fast",
+        resolution="360p",
+        duration_s=4,
+        count=3,
+        agent_mode=True,
+        remove_watermark=False,
+    )
+    assert res.agent_mode is True
+    assert res.model == "omni_1_1_flash"
+    assert res.aspect_ratio == "9:16"
+    assert res.resolution == "1080p"
+    assert res.duration_s == 8
+    assert res.count == 1
+    call = video.calls[0]
+    assert call["model_key"] == "abra_i2v_8s"
+    assert call["count"] == 1
