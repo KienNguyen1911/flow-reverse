@@ -62,7 +62,8 @@ giá trị của task đủ lớn và các nhánh thực sự độc lập.
 
 ### 6. Cổng kiểm chứng và quyền hạn
 
-- `steps: 100` cho phép chạy dài trong một lượt nhưng vẫn có điểm dừng.
+- Không khai báo `steps` ⇒ agent không bị ép dừng ở một số vòng lặp cố định; Turbo chạy tới khi hoàn thành task.
+  (OpenCode chỉ cắt lượt khi `steps` được khai báo; `build`/`plan` mặc định cũng không có giới hạn này.)
 - Các lệnh không thể đảo ngược (`git push`, `git reset --hard`, `git clean`, `rm -rf`) được đặt `ask`.
 - Turbo dừng và hỏi khi yêu cầu mâu thuẫn, thiếu quyền, hoặc lỗi lặp lại 3 lần.
 

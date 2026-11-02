@@ -1,7 +1,7 @@
 ---
 description: Long-horizon orchestrator for multi-session work; keeps durable state and deploys focused subagents.
 mode: primary
-steps: 100
+# Không khai báo `steps`: không có giới hạn số vòng lặp, Turbo chạy tới khi xong.
 color: "#ff7a1a"
 permissions:
   - action: subagent
