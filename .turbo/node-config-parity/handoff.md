@@ -1,6 +1,10 @@
 # Handoff — node-config-parity
 
-**Trạng thái: xong 9/10 feature. F-010 (không hồi quy) còn mở vì 3 lỗi test pre-existing ngoài phạm vi.**
+**Trạng thái: xong 9/10 feature, ĐÃ COMMIT. F-010 (không hồi quy) còn mở vì 3 lỗi test
+pre-existing ngoài phạm vi.**
+
+Commit: `2c6a997` (catalog + capture tooling), `894bdcc` (image payload), `88fc2af` (video payload),
+`9fd2751` (service + agent mode), `293fdf5` (API + jobs), `6a8e7bb` (UI), `fa118f0` (tests).
 
 ## Đã làm
 
