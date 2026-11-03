@@ -371,23 +371,11 @@ class VideoGenerationMixin:
                     offer_duration=offer_duration,
                 )
 
-                # Clear previous reference chips
-                br.clear_reference_chips()
-
                 # Attach ingredient reference images if provided
                 if actual_ref_paths:
-                    if len(actual_ref_paths) == 1:
-                        self._log("step", f"Đính ảnh tham chiếu thành phần: {actual_ref_paths[0].name} (chờ upload 100% + 3s)...")
-                        paste_info = br.attach_reference_paste(actual_ref_paths[0], settle_s=3.0, clear_existing=False)
-                        self._log("info", f"Upload ảnh tham chiếu thành phần hoàn tất ({paste_info.get('upload_s', 0)}s) + 3s chờ ổn định")
-                    else:
-                        self._log("step", f"Đính {len(actual_ref_paths)} ảnh tham chiếu thành phần lần lượt...")
-                        for idx, rpath in enumerate(actual_ref_paths, 1):
-                            self._log("step", f"Đính ảnh tham chiếu thành phần #{idx}/{len(actual_ref_paths)}: {rpath.name}...")
-                            paste_info = br.attach_reference_paste(rpath, settle_s=0.5, clear_existing=False)
-                            self._log("info", f"Upload ảnh #{idx} ({rpath.name}) hoàn tất ({paste_info.get('upload_s', 0)}s)")
-                        self._log("info", "Chờ tất cả ảnh tham chiếu thành phần ổn định (3s)...")
-                        time.sleep(3.0)
+                    self.attach_video_ingredients(br, actual_ref_paths, settle_s=3.0)
+                else:
+                    br.clear_reference_chips()
 
                 br._eval("window.__videoHook.cap = null; window.__blockVideoGen = true;")
                 br.type_prompt(clean_prompt)
@@ -439,13 +427,26 @@ class VideoGenerationMixin:
                                 s[2] = int(aspect_val)
                             if len(s) > 3:
                                 s[3] = int(seed_to_use) if i == 0 else new_seed()
-                            if len(s) > 4 and isinstance(s[4], list) and len(s[4]) >= 6:
-                                s[4][4] = u1 if i == 0 else str(uuid.uuid4()).upper()
-                                s[4][5] = u2 if i == 0 else str(uuid.uuid4()).upper()
+                            uuid_idx = None
+                            for idx in range(len(s) - 1, 3, -1):
+                                slot = s[idx]
+                                if isinstance(slot, list) and len(slot) >= 6:
+                                    if slot[0] is None and slot[1] is None and slot[2] is None and slot[3] is None:
+                                        uuid_idx = idx
+                                        break
+                            if uuid_idx is None and len(s) > 4 and isinstance(s[4], list) and len(s[4]) >= 6:
+                                uuid_idx = 4
+                            if uuid_idx is not None:
+                                s[uuid_idx][4] = u1 if i == 0 else str(uuid.uuid4()).upper()
+                                s[uuid_idx][5] = u2 if i == 0 else str(uuid.uuid4()).upper()
                             specs.append(s)
 
                         our_args = copy.deepcopy(app_args)
                         our_args[0] = specs
+                        if len(our_args) > 1 and isinstance(our_args[1], list):
+                            ref = our_args[1]
+                            if len(ref) > 10 and isinstance(ref[10], list) and ref[10]:
+                                ref[10][0] = token
                         if len(our_args) > 2 and isinstance(our_args[2], list) and our_args[2]:
                             our_args[2][0] = gen_id
                         self._log("info", f"ingredients live capture: đính kèm {len(actual_ref_paths)} ảnh, seed={seed_to_use}, model={eff_model_key}, x{count}")

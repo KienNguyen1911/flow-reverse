@@ -78,3 +78,32 @@ def test_starting_frame_attach_video_ingredients(tmp_path):
     assert br.attached[1] == (f2, 0.5, False)
     assert len(res) == 2
 
+
+def test_starting_frame_attach_video_ingredients_single(tmp_path):
+    from src.Bridge.flow_video.starting_frame import StartingFrameMixin
+
+    class FakeBridge:
+        def __init__(self):
+            self.cleared = False
+            self.attached = []
+
+        def clear_reference_chips(self):
+            self.cleared = True
+
+        def attach_reference_paste(self, p, timeout_s=90.0, settle_s=0.5, clear_existing=False):
+            self.attached.append((p, settle_s, clear_existing))
+            return {"status": "ok", "path": str(p), "upload_s": 0.4}
+
+    f1 = tmp_path / "img1.png"
+    f1.write_bytes(b"data1")
+
+    mixin = StartingFrameMixin()
+    mixin._log = lambda lvl, msg: None
+    br = FakeBridge()
+    res = mixin.attach_video_ingredients(br, [f1], settle_s=2.0)
+    assert br.cleared is True
+    assert len(br.attached) == 1
+    assert br.attached[0] == (f1, 2.0, False)
+    assert len(res) == 1
+
+

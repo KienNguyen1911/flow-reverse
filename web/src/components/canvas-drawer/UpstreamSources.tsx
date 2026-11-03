@@ -69,7 +69,36 @@ export function UpstreamSources({ node, allNodes, anchorRef, onUpdateNode }: Pro
             : `Ảnh: ${c.prompt ? c.prompt.slice(0, 24) + "…" : c.id}`),
     }));
 
-  if (upstreams.length === 0) return null;
+  if (upstreams.length === 0) {
+    if (!canMultiRef || addableSources.length === 0) return null;
+    return (
+      <div
+        ref={anchorRef}
+        className="rounded-ctl border border-line2 bg-panel2 p-2.5 flex flex-col gap-1.5 scroll-mt-2"
+      >
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] font-semibold text-dim">
+            {node.type === "video" ? "Ảnh tham chiếu thành phần" : "Ảnh tham chiếu"}
+          </span>
+          <span className="text-[9.5px] text-mut">Chưa có ảnh nào</span>
+        </div>
+        <select
+          value=""
+          onChange={(e) => {
+            if (e.target.value) addUpstream(e.target.value);
+          }}
+          className="h-7 rounded-ctl border border-line2 bg-panel px-1.5 text-[11px] text-fg focus:border-acc outline-none cursor-pointer"
+        >
+          <option value="">+ Nối thêm ảnh tham chiếu…</option>
+          {addableSources.map((i) => (
+            <option key={i.id} value={i.id}>
+              {i.label}
+            </option>
+          ))}
+        </select>
+      </div>
+    );
+  }
 
   return (
     <div

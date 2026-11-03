@@ -140,17 +140,18 @@ class CircuitBreaker:
     def snapshot(self) -> dict:
         with self._lock:
             s = dict(self.state)
-        s["cooldown_remaining_s"] = 0.0
-        s["cooldown_until_ms"] = 0
+        now = int(time.time() * 1000)
+        s["cooldown_remaining_s"] = max(0.0, (s["cooldown_until_ms"] - now) / 1000.0)
         return s
 
     def check(self) -> None:
-        # Tool nội bộ: không bao giờ chặn hay khóa cooldown
-        return
+        s = self.snapshot()
+        if s["cooldown_remaining_s"] > 0:
+            raise CircuitOpenError(s["cooldown_remaining_s"], s["cooldown_reason"] or "cooldown")
 
     def trip(self, seconds: float, reason: str) -> None:
         with self._lock:
-            self.state["cooldown_until_ms"] = 0
+            self.state["cooldown_until_ms"] = int(time.time() * 1000 + seconds * 1000)
             self.state["cooldown_reason"] = reason
             self._save()
 

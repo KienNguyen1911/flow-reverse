@@ -122,10 +122,21 @@ class StartingFrameMixin:
         """Attach multiple reference images as ingredients sequentially."""
         bridge.clear_reference_chips()
         results = []
-        for p in file_paths:
+        n = len(file_paths)
+        if n == 1:
+            self._log("step", f"Đính ảnh tham chiếu thành phần: {file_paths[0].name} (chờ upload 100% + {settle_s:.0f}s)...")
+            res = self.attach_video_ingredient_via_paste(bridge, file_paths[0], settle_s=settle_s)
+            self._log("info", f"Upload ảnh tham chiếu thành phần hoàn tất ({res.get('upload_s', 0)}s) + {settle_s:.0f}s chờ ổn định")
+            return [res]
+
+        self._log("step", f"Đính {n} ảnh tham chiếu thành phần lần lượt...")
+        for idx, p in enumerate(file_paths, 1):
+            self._log("step", f"Đính ảnh tham chiếu thành phần #{idx}/{n}: {p.name}...")
             res = self.attach_video_ingredient_via_paste(bridge, p, settle_s=0.5)
+            self._log("info", f"Upload ảnh #{idx} ({p.name}) hoàn tất ({res.get('upload_s', 0)}s)")
             results.append(res)
         if settle_s > 0:
+            self._log("info", f"Chờ tất cả ảnh tham chiếu thành phần ổn định ({settle_s:.0f}s)...")
             time.sleep(settle_s)
         return results
 

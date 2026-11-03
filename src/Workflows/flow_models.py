@@ -263,6 +263,12 @@ def captured_args_has_reference(args: Any) -> Optional[bool]:
         if isinstance(spec[2], list) and len(spec[2]) > 0:
             return True
         return False
+    try:
+        ref = spec[7]
+        if isinstance(ref, list) and len(ref) > 2 and ref[2]:
+            return True
+    except Exception:  # noqa: BLE001
+        pass
     return False
 
 

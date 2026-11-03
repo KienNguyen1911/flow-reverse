@@ -409,27 +409,65 @@ export function VideoNodeBody({
               onSelect={(val) => actions.onFieldChange({ videoCount: Number(val) })}
             />
             <NodeDropdownPill
-              label="Frame"
+              label={(n.videoSubMode ?? "frames") === "ingredients" ? "Ref" : "Frame"}
               value={
                 (n.videoSubMode ?? "frames") === "ingredients"
-                  ? "Không cần"
+                  ? connectedSources.length > 0
+                    ? `${connectedSources.length} ảnh`
+                    : "Tùy chọn"
                   : upstream
                     ? (upstream.type === "last_frame" ? "Nối tiếp" : "Node Ảnh")
                     : "Auto"
               }
-              title="Ảnh khung nguồn — bấm để chọn nguồn"
+              title={
+                (n.videoSubMode ?? "frames") === "ingredients"
+                  ? `Ảnh tham chiếu thành phần (${connectedSources.length} ảnh) — bấm để chọn hoặc mở Cấu hình`
+                  : "Ảnh khung nguồn — bấm để chọn nguồn"
+              }
               id="frameSource"
               isOpen={dropdown.open === "frameSource"}
-              onToggle={() => {
-                if ((n.videoSubMode ?? "frames") === "ingredients") return;
-                dropdown.toggle("frameSource");
-              }}
+              onToggle={() => dropdown.toggle("frameSource")}
               onClose={dropdown.close}
-              header="Nguồn ảnh khung"
-              width="min-w-[190px]"
-              items={frameSourceItems}
-              selectedValue={n.sourceImageId ?? ""}
-              onSelect={(val) => actions.onSourceChange(String(val))}
+              header={
+                (n.videoSubMode ?? "frames") === "ingredients"
+                  ? "Ảnh tham chiếu thành phần"
+                  : "Nguồn ảnh khung"
+              }
+              width="min-w-[200px]"
+              items={
+                (n.videoSubMode ?? "frames") === "ingredients"
+                  ? [
+                      ...(connectedSources.length > 0
+                        ? [{ value: "__clear__", label: "Bỏ tất cả ảnh tham chiếu", hint: "Chỉ dùng prompt" }]
+                        : []),
+                      ...availableOptions.map((src) => ({
+                        value: src.id,
+                        label: `+ ${sourceLabel(src)}`,
+                        hint: src.type === "ref" ? "Upload" : "Ảnh",
+                      })),
+                      { value: "__drawer__", label: "Mở Cấu hình nguồn…", hint: "Drawer" },
+                    ]
+                  : frameSourceItems
+              }
+              selectedValue={
+                (n.videoSubMode ?? "frames") === "ingredients"
+                  ? ""
+                  : (n.sourceImageId ?? "")
+              }
+              onSelect={(val) => {
+                if ((n.videoSubMode ?? "frames") === "ingredients") {
+                  if (val === "__clear__") {
+                    actions.onSourcesChange([]);
+                  } else if (val === "__drawer__") {
+                    actions.onOpenDrawer(n.id, "sources");
+                  } else if (val) {
+                    const next = [...sources.currentSids, String(val)];
+                    actions.onSourcesChange(next);
+                  }
+                } else {
+                  actions.onSourceChange(String(val));
+                }
+              }}
             />
           </>
         )}

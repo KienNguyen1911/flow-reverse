@@ -822,22 +822,23 @@ class MediaService:
             raise ValueError("prompt rỗng")
         prompt = (prompt or "").strip()
 
-        # Collect & resolve all reference image paths
+        # Collect & resolve all reference image paths (only in ingredients mode)
         actual_ref_paths: list[Path] = []
-        if reference_image_paths:
-            for rp in reference_image_paths:
-                if rp:
-                    p = resolve_input_path(rp)
-                    if p.is_file() and p.resolve() not in actual_ref_paths:
-                        actual_ref_paths.append(p.resolve())
-        if reference_image_path:
-            p = resolve_input_path(reference_image_path)
-            if p.is_file() and p.resolve() not in actual_ref_paths:
-                actual_ref_paths.insert(0, p.resolve())
-        if frame_path:
-            p = resolve_input_path(frame_path)
-            if p.is_file() and p.resolve() not in actual_ref_paths:
-                actual_ref_paths.append(p.resolve())
+        if sub == "ingredients":
+            if reference_image_paths:
+                for rp in reference_image_paths:
+                    if rp:
+                        p = resolve_input_path(rp)
+                        if p.is_file() and p.resolve() not in actual_ref_paths:
+                            actual_ref_paths.append(p.resolve())
+            if reference_image_path:
+                p = resolve_input_path(reference_image_path)
+                if p.is_file() and p.resolve() not in actual_ref_paths:
+                    actual_ref_paths.insert(0, p.resolve())
+            if frame_path:
+                p = resolve_input_path(frame_path)
+                if p.is_file() and p.resolve() not in actual_ref_paths:
+                    actual_ref_paths.append(p.resolve())
 
         with self._lock:
             project = self.resolve_project(project_id, on_event=on_event)

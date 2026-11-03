@@ -142,9 +142,10 @@ export function useNodeRunner(params: {
         } else if (n.type === "video") {
           const subMode = n.videoSubMode ?? "frames";
           const needsFrame = subMode === "frames";
+          const isIngredients = subMode === "ingredients";
           const framePath = needsFrame ? srcRes.url : undefined;
           const autoImage = needsFrame && !framePath;
-          const refPaths = srcRes.urls && srcRes.urls.length > 0 ? srcRes.urls : undefined;
+          const refPaths = isIngredients && srcRes.urls && srcRes.urls.length > 0 ? srcRes.urls : undefined;
           promise = api.nodeVideo({
             prompt: n.prompt.trim(),
             aspect_ratio: n.videoRatio,
@@ -153,8 +154,8 @@ export function useNodeRunner(params: {
             count: n.videoCount ?? 1,
             agent_mode: !!n.agentMode,
             frame_path: framePath,
-            reference_image_path: refPaths?.[0] ?? undefined,
-            reference_image_paths: refPaths,
+            reference_image_path: isIngredients ? (refPaths?.[0] ?? undefined) : undefined,
+            reference_image_paths: isIngredients ? refPaths : undefined,
             auto_image: autoImage,
             image_prompt: autoImage && n.autoImagePrompt.trim() ? n.autoImagePrompt.trim() : undefined,
             image_aspect_ratio: autoImage ? n.imageAspectRatio : undefined,

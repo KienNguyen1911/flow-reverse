@@ -402,6 +402,7 @@ def test_video_node_ingredients_is_text_to_video(tmp_path):
     assert res.status == "ok"
     assert res.sub_mode == "ingredients"
     assert res.frame_source is None
+    assert res.reference_image_paths is None
     assert res.model_key == "veo_3_1_t2v_portrait"
     assert image.calls == [], "ingredients must not generate a starting frame"
     assert video.calls == [], "ingredients must not use the image→video RPC"
@@ -450,6 +451,7 @@ def test_video_node_omni_360p_and_duration(tmp_path):
         remove_watermark=False,
     )
     assert res.model_key == "abra_i2v_4s_360p"
+    assert res.reference_image_paths is None
     call = video.calls[0]
     assert call["resolution"] == "360p"
     assert call["capture_resolution"] == "360p"
