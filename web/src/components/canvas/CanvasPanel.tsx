@@ -3,7 +3,7 @@ import { api } from "../../api";
 import type { LibraryItem, NodeMediaOptions } from "../../types";
 import { useLimits, useScriptClips } from "../../hooks";
 import { CanvasDrawer } from "../CanvasDrawer";
-import { PromptEditorModal } from "../canvasNodeBits";
+import { PromptEditorModal } from "../prompt/PromptBits";
 import { DeliveryModal } from "../DeliveryModal";
 import { MediaPreviewModal, type PreviewMediaItem } from "../MediaPreviewModal";
 import { CanvasContextMenu } from "./CanvasContextMenu";

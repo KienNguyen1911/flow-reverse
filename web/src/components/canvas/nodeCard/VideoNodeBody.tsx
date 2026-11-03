@@ -1,5 +1,6 @@
 import { useMemo } from "react";
-import { NodeDropdownPill, PromptPreviewCard } from "../../canvasNodeBits";
+import { NodeDropdownPill } from "../../node-badge/NodeBadges";
+import { PromptPreviewCard } from "../../prompt/PromptBits";
 import type { CanvasNode } from "../types";
 import { PromptAgentRow } from "./PromptAgentRow";
 import { sourceLabel, type NodeSources } from "./nodeSources";

@@ -1,6 +1,6 @@
 import { useState, type RefObject } from "react";
 import { CaretDown, CaretUp, Image as ImageIcon, X } from "@phosphor-icons/react";
-import { OrderBadge } from "../canvasNodeBits";
+import { OrderBadge } from "../node-badge/NodeBadges";
 import type { CanvasDrawerNode } from "./types";
 
 interface Props {

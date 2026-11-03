@@ -23,9 +23,9 @@
       "useDrawerJob and hooks.useJob use the same terminal set",
       "tsc and vite build pass"
     ],
-    "verify": "cd web && npx tsc --noEmit -p tsconfig.json && npm run build",
-    "passes": false,
-    "evidence": ""
+    "verify": "cd web && npm run typecheck && npm test && npm run build",
+    "passes": true,
+    "evidence": "`rg 'for \\(;;\\)|setTimeout\\(r, 400\\)|for \\(let i = 0; i < 120' web/src` -> only the doc comment in jobLifecycle.ts and its own loop; both blocking loops gone. `rg '\"succeeded\", \"failed\", \"rejected\"' web/src` -> only a prose string in ApiDocsPanel. npm test -> 13 pass / 0 fail. npx tsc --noEmit -> exit 0. npm run build -> built in 1.58s."
   },
   {
     "id": "F-003",

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { ImageSquare, Timer } from "@phosphor-icons/react";
-import { PromptEditor } from "../canvasNodeBits";
+import { PromptEditor } from "../prompt/PromptBits";
 import type { NodeMediaOptions } from "../../types";
 import { AiPrompterPanel } from "./AiPrompterPanel";
 import { ImageParams, VideoParams } from "./ComposerParams";

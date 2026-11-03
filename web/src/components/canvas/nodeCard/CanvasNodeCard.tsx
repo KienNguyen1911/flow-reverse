@@ -11,7 +11,7 @@ import {
   VideoCamera,
   Warning,
 } from "@phosphor-icons/react";
-import { OrderBadge } from "../../canvasNodeBits";
+import { OrderBadge } from "../../node-badge/NodeBadges";
 import { Spinner } from "../../ui";
 import { NODE_W } from "../constants";
 import { getNodeSourceIds } from "../graph";

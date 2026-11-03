@@ -4,9 +4,9 @@ import type { ItemScope, LibraryItem } from "../../../types";
 import {
   NodeDropdownPill,
   OrderBadge,
-  PromptPreviewCard,
   SeedDropdownPill,
-} from "../../canvasNodeBits";
+} from "../../node-badge/NodeBadges";
+import { PromptPreviewCard } from "../../prompt/PromptBits";
 import { ITEM_SCOPE_OPTIONS } from "../constants";
 import type { CanvasNode, FocusLink, HoverRefInfo } from "../types";
 import { PromptAgentRow } from "./PromptAgentRow";

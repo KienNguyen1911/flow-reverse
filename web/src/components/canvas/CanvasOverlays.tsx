@@ -10,7 +10,7 @@ import {
   Plus,
   X,
 } from "@phosphor-icons/react";
-import { OrderBadge } from "../canvasNodeBits";
+import { OrderBadge } from "../node-badge/NodeBadges";
 import { clamp } from "./geometry";
 import type { CanvasGroup, HoverRefInfo, ToastInfo, View } from "./types";
 
