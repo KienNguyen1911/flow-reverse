@@ -25,7 +25,9 @@ export function UpstreamSources({ node, allNodes, anchorRef, onUpdateNode }: Pro
     .map((id) => allNodes.find((x) => x.id === id))
     .filter(Boolean) as CanvasDrawerNode[];
 
-  const isImageNode = node.type === "image";
+  const canMultiRef =
+    node.type === "image" ||
+    (node.type === "video" && (node.videoSubMode ?? "frames") === "ingredients");
 
   /** Ghi lại danh sách nguồn đã sắp xếp — `sourceImageId` luôn = phần tử đầu. */
   const commitSources = (sids: string[]) => {
@@ -88,20 +90,20 @@ export function UpstreamSources({ node, allNodes, anchorRef, onUpdateNode }: Pro
       {upstreams.map((up, idx) => (
         <div
           key={up.id}
-          draggable={isImageNode}
+          draggable={canMultiRef}
           onDragStart={(e) => {
-            if (!isImageNode) return;
+            if (!canMultiRef) return;
             e.dataTransfer.setData("text/plain", String(idx));
             e.dataTransfer.effectAllowed = "move";
             setDragIdx(idx);
           }}
           onDragOver={(e) => {
-            if (!isImageNode) return;
+            if (!canMultiRef) return;
             e.preventDefault();
             e.dataTransfer.dropEffect = "move";
           }}
           onDrop={(e) => {
-            if (!isImageNode) return;
+            if (!canMultiRef) return;
             e.preventDefault();
             const from = Number(e.dataTransfer.getData("text/plain"));
             const to = idx;
@@ -117,9 +119,9 @@ export function UpstreamSources({ node, allNodes, anchorRef, onUpdateNode }: Pro
               : hoverUpId === up.id
                 ? "border-warn/50 bg-warn/5"
                 : "border-line2 bg-panel"
-          } ${isImageNode ? "cursor-grab active:cursor-grabbing" : ""}`}
+          } ${canMultiRef ? "cursor-grab active:cursor-grabbing" : ""}`}
         >
-          {isImageNode ? <OrderBadge index={idx + 1} size="sm" /> : null}
+          {canMultiRef ? <OrderBadge index={idx + 1} size="sm" /> : null}
           {up.fileUrl ? (
             <img
               src={up.fileUrl}
@@ -146,7 +148,7 @@ export function UpstreamSources({ node, allNodes, anchorRef, onUpdateNode }: Pro
               {!up.fileUrl && up.status !== "succeeded" ? " · chưa có kết quả" : ""}
             </span>
           </div>
-          {isImageNode && (
+          {canMultiRef && (
             <div className="flex items-center gap-0.5 shrink-0">
               <button
                 type="button"
@@ -179,7 +181,7 @@ export function UpstreamSources({ node, allNodes, anchorRef, onUpdateNode }: Pro
         </div>
       ))}
 
-      {isImageNode && addableSources.length > 0 && (
+      {canMultiRef && addableSources.length > 0 && (
         <select
           value=""
           onChange={(e) => {

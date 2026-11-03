@@ -1,7 +1,8 @@
 import { useMemo } from "react";
-import { NodeDropdownPill } from "../../node-badge/NodeBadges";
+import { Image as ImageIcon, Plus } from "@phosphor-icons/react";
+import { NodeDropdownPill, OrderBadge } from "../../node-badge/NodeBadges";
 import { PromptPreviewCard } from "../../prompt/PromptBits";
-import type { CanvasNode } from "../types";
+import type { CanvasNode, FocusLink, HoverRefInfo } from "../types";
 import { PromptAgentRow } from "./PromptAgentRow";
 import { sourceLabel, type NodeSources } from "./nodeSources";
 import type { NodeOptionLists } from "./optionLists";
@@ -18,6 +19,9 @@ export function VideoNodeBody({
   wfBusy,
   aiGeneratingId,
   onGenerateAiPrompt,
+  focusLink,
+  onFocusLink,
+  onHoverRef,
 }: {
   n: CanvasNode;
   options: NodeOptionLists;
@@ -28,6 +32,9 @@ export function VideoNodeBody({
   wfBusy: boolean;
   aiGeneratingId?: string | null;
   onGenerateAiPrompt?: (id: string) => void;
+  focusLink?: FocusLink | null;
+  onFocusLink?: (link: FocusLink | null) => void;
+  onHoverRef?: (info: HoverRefInfo | null) => void;
 }) {
   const {
     videoRatios,
@@ -37,7 +44,14 @@ export function VideoNodeBody({
     videoDefaultModel,
     videoSubModeLabels,
   } = options;
-  const { sourceOptions, upstream, textToVideo, sourceBlocked } = sources;
+  const {
+    sourceOptions,
+    upstream,
+    textToVideo,
+    sourceBlocked,
+    connectedSources,
+    availableOptions,
+  } = sources;
 
   const activeVideoModel = useMemo(() => {
     if (!videoModels.length) return null;
@@ -54,7 +68,7 @@ export function VideoNodeBody({
       {
         value: "ingredients",
         label: videoSubModeLabels["ingredients"] ?? "Thành phần",
-        hint: "Prompt → Video",
+        hint: "Prompt / Ref → Video",
       },
     ];
   }, [videoSubModeLabels]);
@@ -130,12 +144,84 @@ export function VideoNodeBody({
 
   return (
     <>
-      {/* "Thành phần" = text→video (`YhhmEf`): không có ô chọn ảnh khung vì Flow
-          không gửi frame nào trong payload của sub-mode này. */}
       {textToVideo ? (
-        <p className="text-[10px] text-mut leading-snug">
-          Thành phần (text→video): chỉ cần prompt, không dùng ảnh khung.
-        </p>
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[10px] font-semibold text-mut truncate">
+              Ảnh tham chiếu thành phần ({connectedSources.length})
+            </span>
+            {connectedSources.length > 0 && (
+              <button
+                type="button"
+                onClick={() => actions.onSourcesChange([])}
+                className="text-[9.5px] text-mut hover:text-err cursor-pointer shrink-0 whitespace-nowrap"
+                title="Bỏ tất cả ảnh tham chiếu"
+              >
+                Xóa hết
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-1 flex-wrap">
+            {connectedSources.map((src, idx) => (
+              <div
+                key={src.id}
+                className="group/ref relative shrink-0"
+                onMouseEnter={(e) => {
+                  onFocusLink?.({ from: src.id, to: n.id });
+                  const r = e.currentTarget.getBoundingClientRect();
+                  onHoverRef?.({ src, index: idx + 1, x: r.left, y: r.bottom });
+                }}
+                onMouseLeave={() => {
+                  onFocusLink?.(null);
+                  onHoverRef?.(null);
+                }}
+              >
+                <div
+                  className={`inline-flex items-center gap-1 h-6 pl-1 pr-1.5 rounded-full border text-[10px] font-semibold transition-colors ${
+                    focusLink?.from === src.id && focusLink?.to === n.id
+                      ? "border-warn/70 bg-warn/20 text-warn"
+                      : "border-line2 bg-panel2 text-dim hover:border-warn/50 hover:text-fg"
+                  }`}
+                  title={
+                    src.type === "ref"
+                      ? `${src.fileName ?? src.id} — Ingredient ${idx + 1}`
+                      : `${sourceLabel(src)} — Ingredient ${idx + 1}`
+                  }
+                >
+                  <OrderBadge index={idx + 1} size="xs" />
+                  {src.fileUrl ? (
+                    <img src={src.fileUrl} alt="" className="size-4 rounded-[3px] object-cover" />
+                  ) : (
+                    <ImageIcon size={11} className="text-mut" />
+                  )}
+                </div>
+              </div>
+            ))}
+            {availableOptions.length > 0 && (
+              <button
+                type="button"
+                onClick={() => actions.onOpenDrawer(n.id, "sources")}
+                className="shrink-0 grid place-items-center size-6 rounded-full border border-dashed border-line2 text-mut hover:border-acc hover:text-acc transition-colors cursor-pointer"
+                title="Nối thêm ảnh tham chiếu thành phần (mở Cấu hình)"
+              >
+                <Plus size={11} weight="bold" />
+              </button>
+            )}
+            {connectedSources.length === 0 && availableOptions.length === 0 && (
+              <span className="text-[9.5px] text-mut">Chưa có ảnh nào (tùy chọn)</span>
+            )}
+          </div>
+          {connectedSources.length === 0 && (
+            <p className="text-[10px] text-mut leading-snug">
+              Thành phần: có thể nối ảnh tham chiếu hoặc chỉ dùng prompt.
+            </p>
+          )}
+          {sourceBlocked && (
+            <p className="text-[10px] text-warn leading-snug">
+              Node nguồn chưa chạy xong — video sẽ chờ/bỏ qua khi chạy workflow.
+            </p>
+          )}
+        </div>
       ) : (
         <>
           <label className="flex flex-col gap-0.5">

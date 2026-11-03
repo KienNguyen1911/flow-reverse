@@ -116,7 +116,7 @@ export function CanvasNodeCard(props: CanvasNodeCardProps) {
   const refOrders = useMemo(() => {
     const out: { to: string; index: number }[] = [];
     for (const other of allNodes) {
-      if (other.type !== "image") continue;
+      if (other.type !== "image" && !(other.type === "video" && other.videoSubMode === "ingredients")) continue;
       const idx = getNodeSourceIds(other).indexOf(n.id);
       if (idx >= 0) out.push({ to: other.id, index: idx + 1 });
     }
@@ -303,6 +303,9 @@ export function CanvasNodeCard(props: CanvasNodeCardProps) {
             wfBusy={wfBusy}
             aiGeneratingId={aiGeneratingId}
             onGenerateAiPrompt={onGenerateAiPrompt}
+            focusLink={props.focusLink}
+            onFocusLink={props.onFocusLink}
+            onHoverRef={props.onHoverRef}
           />
         )}
 

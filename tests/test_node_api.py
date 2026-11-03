@@ -149,6 +149,64 @@ def test_node_video_ingredients_needs_no_frame(client: TestClient):
     assert body["model_key"] == "abra_t2v_8s"
 
 
+def test_node_video_ingredients_accepts_reference_images(client: TestClient, tmp_path: Path):
+    """'Thành phần' with reference images returns frame_source='provided' and accepts valid files."""
+    ref1 = tmp_path / "ref1.png"
+    ref1.write_bytes(b"png1")
+    ref2 = tmp_path / "ref2.jpg"
+    ref2.write_bytes(b"jpg2")
+    r = client.post(
+        "/api/node/video",
+        json={
+            "prompt": "x",
+            "sub_mode": "ingredients",
+            "reference_image_paths": [str(ref1), str(ref2)],
+            "aspect_ratio": "9:16",
+            "dry_run": True,
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["sub_mode"] == "ingredients"
+    assert body["frame_source"] == "provided"
+
+
+def test_node_video_ingredients_validates_reference_images(client: TestClient):
+    """'Thành phần' validates that attached reference images actually exist on disk."""
+    r = client.post(
+        "/api/node/video",
+        json={
+            "prompt": "x",
+            "sub_mode": "ingredients",
+            "reference_image_paths": ["nonexistent_ref_image_12345.png"],
+            "aspect_ratio": "9:16",
+            "dry_run": True,
+        },
+    )
+    assert r.status_code == 400
+    assert "Không tìm thấy ảnh đính kèm" in r.json()["detail"]
+
+
+def test_node_video_ingredients_accepts_single_reference_path(client: TestClient, tmp_path: Path):
+    """'Thành phần' also accepts reference_image_path as a single string."""
+    ref = tmp_path / "single_ref.png"
+    ref.write_bytes(b"png")
+    r = client.post(
+        "/api/node/video",
+        json={
+            "prompt": "x",
+            "sub_mode": "ingredients",
+            "reference_image_path": str(ref),
+            "aspect_ratio": "9:16",
+            "dry_run": True,
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["sub_mode"] == "ingredients"
+    assert body["frame_source"] == "provided"
+
+
 def test_node_video_rejects_bad_ratio_and_duration(client: TestClient):
     r = client.post("/api/node/video", json={"prompt": "x", "aspect_ratio": "1:1", "dry_run": True})
     assert r.status_code == 400

@@ -99,6 +99,36 @@ class StartingFrameMixin:
         info = bridge.attach_reference(frame_path)
         return bool(info.get("preview_seen"))
 
+    def attach_video_ingredient_via_paste(
+        self,
+        bridge: FlowBridge,
+        file_path: Path,
+        settle_s: float = 0.5,
+    ) -> dict:
+        """Attach a reference image as an ingredient chip via synthetic paste."""
+        return bridge.attach_reference_paste(
+            file_path,
+            timeout_s=90.0,
+            settle_s=settle_s,
+            clear_existing=False,
+        )
+
+    def attach_video_ingredients(
+        self,
+        bridge: FlowBridge,
+        file_paths: list[Path],
+        settle_s: float = 3.0,
+    ) -> list[dict]:
+        """Attach multiple reference images as ingredients sequentially."""
+        bridge.clear_reference_chips()
+        results = []
+        for p in file_paths:
+            res = self.attach_video_ingredient_via_paste(bridge, p, settle_s=0.5)
+            results.append(res)
+        if settle_s > 0:
+            time.sleep(settle_s)
+        return results
+
     def _attach_starting_frame_ui_fallback(self, page: Any, frame_p: Path) -> None:
         """Fallback UI attachment when synthetic paste does not mount flow-image-ingredient-chip (bilingual VI/EN)."""
         start_btn = page.query_selector('//button[contains(., "Bắt đầu") or contains(., "Start")]')

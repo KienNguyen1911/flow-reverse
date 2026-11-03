@@ -409,6 +409,32 @@ def test_video_node_ingredients_is_text_to_video(tmp_path):
     assert video.text_calls[0]["prompt_text"] == "ocean at sunrise"
 
 
+def test_video_node_ingredients_with_reference_images(tmp_path):
+    """'Thành phần' with reference images forwards reference_paths to generate_text_video_flow."""
+    svc, image, video = _service(tmp_path)
+    ref1 = tmp_path / "ref1.png"
+    ref1.write_bytes(b"ref1")
+    ref2 = tmp_path / "ref2.jpg"
+    ref2.write_bytes(b"ref2")
+    res = svc.generate_video(
+        prompt="character walking in forest",
+        reference_image_paths=[str(ref1), str(ref2)],
+        sub_mode="ingredients",
+        aspect_ratio="9:16",
+        model="omni_1_1_flash",
+        remove_watermark=False,
+    )
+    assert res.status == "ok"
+    assert res.sub_mode == "ingredients"
+    assert res.frame_source == "provided"
+    assert res.reference_image_paths == [str(ref1.resolve()), str(ref2.resolve())]
+    assert image.calls == []
+    assert len(video.text_calls) == 1
+    call = video.text_calls[0]
+    assert call["reference_paths"] == [ref1.resolve(), ref2.resolve()]
+    assert call["prompt_text"] == "character walking in forest"
+
+
 def test_video_node_omni_360p_and_duration(tmp_path):
     svc, _image, video = _service(tmp_path)
     frame = tmp_path / "frame.png"

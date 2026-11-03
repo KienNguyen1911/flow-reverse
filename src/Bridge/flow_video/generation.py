@@ -301,6 +301,7 @@ class VideoGenerationMixin:
         seed: Optional[int] = None,
         resolution: str = "1080p",
         *,
+        reference_paths: Optional[list[Path | str]] = None,
         model_key: Optional[str] = None,
         model_label: Optional[str] = None,
         count: int = 1,
@@ -308,16 +309,21 @@ class VideoGenerationMixin:
         offer_duration: bool = True,
         capture_resolution: str = "720p",
     ) -> Path:
-        """Text→video via the composer's "Thành phần" sub-mode (``YhhmEf``), 0 frame needed.
+        """Text/ingredients→video via the composer's "Thành phần" sub-mode (``YhhmEf``).
 
-        Captured 0-credit on 2026-11-03 (``traces/submit_bodies/t2v_*``): the composer sends
-        ``YhhmEf`` with a model key prefixed ``abra_t2v_*`` / ``veo_3_1_t2v*`` and an empty
-        starting-frame slot at ``spec[4]``. This is the path the node uses when no image is
-        attached, so a video node no longer has to generate a throwaway frame first.
+        Supports prompt-only generation as well as attaching reference images as ingredient
+        chips (flow-image-ingredient-chip) via synthetic paste into div.ProseMirror.
         """
         dest_p = Path(dest_path).resolve()
         dest_p.parent.mkdir(parents=True, exist_ok=True)
         target_aspect = "9:16" if "9:16" in str(aspect_ratio) else "16:9"
+
+        actual_ref_paths: list[Path] = []
+        if reference_paths:
+            for p in reference_paths:
+                resolved = Path(p).resolve()
+                if resolved.is_file() and resolved not in actual_ref_paths:
+                    actual_ref_paths.append(resolved)
 
         with FlowBridge(self.cdp_url, log=lambda m: self._log("info", m)) as br:
             page = br.page
@@ -344,10 +350,11 @@ class VideoGenerationMixin:
                 clean_prompt = sanitize_video_prompt(prompt_text, aggressive=aggressive_sanitize or is_retry)
                 seed_to_use = new_seed() if (seed is None or is_retry) else int(seed)
 
+                ref_log = f" ({len(actual_ref_paths)} refs)" if actual_ref_paths else ""
                 self._log(
                     "step",
                     f"[Text→Video {attempt + 1}/{max_protocol_attempts}] {duration_s}s {target_aspect} "
-                    f"seed={seed_to_use} model={model_label or 'app'} x{count}",
+                    f"seed={seed_to_use} model={model_label or 'app'} x{count}{ref_log}",
                 )
 
                 self._ensure_recaptcha_ready(br, active_pid)
@@ -364,6 +371,24 @@ class VideoGenerationMixin:
                     offer_duration=offer_duration,
                 )
 
+                # Clear previous reference chips
+                br.clear_reference_chips()
+
+                # Attach ingredient reference images if provided
+                if actual_ref_paths:
+                    if len(actual_ref_paths) == 1:
+                        self._log("step", f"Đính ảnh tham chiếu thành phần: {actual_ref_paths[0].name} (chờ upload 100% + 3s)...")
+                        paste_info = br.attach_reference_paste(actual_ref_paths[0], settle_s=3.0, clear_existing=False)
+                        self._log("info", f"Upload ảnh tham chiếu thành phần hoàn tất ({paste_info.get('upload_s', 0)}s) + 3s chờ ổn định")
+                    else:
+                        self._log("step", f"Đính {len(actual_ref_paths)} ảnh tham chiếu thành phần lần lượt...")
+                        for idx, rpath in enumerate(actual_ref_paths, 1):
+                            self._log("step", f"Đính ảnh tham chiếu thành phần #{idx}/{len(actual_ref_paths)}: {rpath.name}...")
+                            paste_info = br.attach_reference_paste(rpath, settle_s=0.5, clear_existing=False)
+                            self._log("info", f"Upload ảnh #{idx} ({rpath.name}) hoàn tất ({paste_info.get('upload_s', 0)}s)")
+                        self._log("info", "Chờ tất cả ảnh tham chiếu thành phần ổn định (3s)...")
+                        time.sleep(3.0)
+
                 br._eval("window.__videoHook.cap = null; window.__blockVideoGen = true;")
                 br.type_prompt(clean_prompt)
                 time.sleep(jitter(0.4, 0.1, 0.2))
@@ -373,8 +398,8 @@ class VideoGenerationMixin:
                     cap = self.wait_video_capture(br, timeout_s=25.0)
                     self.disarm_video_hook(br)
                     app_reqid = extract_app_reqid(cap["url"])
-                    token, at_param, _app_args, cap_rpcid = parse_video_app_capture(cap["body"])
-                    if cap_rpcid != VIDEO_TEXT_SUBMIT_RPC:
+                    token, at_param, app_args, cap_rpcid = parse_video_app_capture(cap["body"])
+                    if cap_rpcid not in (VIDEO_TEXT_SUBMIT_RPC, VIDEO_SUBMIT_RPC):
                         br.reload(settle_s=4.0)
                         raise BridgeError(
                             f"Request mồi là {cap_rpcid} thay vì {VIDEO_TEXT_SUBMIT_RPC} "
@@ -393,28 +418,77 @@ class VideoGenerationMixin:
                 u2 = str(uuid.uuid4()).upper()
                 gen_id = str(uuid.uuid4()).upper()
 
-                our_args = build_text_video_args(
-                    project_id=active_pid,
-                    prompt=clean_prompt,
-                    recaptcha_token=token,
-                    aspect_ratio=target_aspect,
-                    seed=seed_to_use,
-                    model_key=model_key or "abra_t2v_8s",
-                    u1=u1,
-                    u2=u2,
-                    gen_id=gen_id,
-                    count=count,
-                    resolution=capture_resolution,
-                )
-                our_body = encode_video_batchexecute_form(VIDEO_TEXT_SUBMIT_RPC, our_args, at_param)
+                if actual_ref_paths and isinstance(app_args, list) and app_args and isinstance(app_args[0], list) and app_args[0]:
+                    try:
+                        import copy
+                        base_spec = copy.deepcopy(app_args[0][0])
+                        specs = []
+                        eff_model_key = model_key or (base_spec[1] if len(base_spec) > 1 and isinstance(base_spec[1], str) else "abra_t2v_8s")
+                        is_360 = str(capture_resolution or "").strip().lower().startswith("360")
+                        if eff_model_key and is_360 and not eff_model_key.endswith("_360p"):
+                            eff_model_key = f"{eff_model_key}_360p"
+
+                        aspect_val = 1 if "9:16" in target_aspect else 2
+                        for i in range(max(1, int(count))):
+                            s = copy.deepcopy(base_spec)
+                            if len(s) > 0 and isinstance(s[0], list):
+                                s[0] = [None, None, [[[clean_prompt]]]]
+                            if len(s) > 1:
+                                s[1] = eff_model_key
+                            if len(s) > 2:
+                                s[2] = int(aspect_val)
+                            if len(s) > 3:
+                                s[3] = int(seed_to_use) if i == 0 else new_seed()
+                            if len(s) > 4 and isinstance(s[4], list) and len(s[4]) >= 6:
+                                s[4][4] = u1 if i == 0 else str(uuid.uuid4()).upper()
+                                s[4][5] = u2 if i == 0 else str(uuid.uuid4()).upper()
+                            specs.append(s)
+
+                        our_args = copy.deepcopy(app_args)
+                        our_args[0] = specs
+                        if len(our_args) > 2 and isinstance(our_args[2], list) and our_args[2]:
+                            our_args[2][0] = gen_id
+                        self._log("info", f"ingredients live capture: đính kèm {len(actual_ref_paths)} ảnh, seed={seed_to_use}, model={eff_model_key}, x{count}")
+                    except Exception as exc:
+                        self._log("warn", f"Không đọc được spec từ app_args ({exc}) — dùng fallback build_text_video_args")
+                        our_args = build_text_video_args(
+                            project_id=active_pid,
+                            prompt=clean_prompt,
+                            recaptcha_token=token,
+                            aspect_ratio=target_aspect,
+                            seed=seed_to_use,
+                            model_key=model_key or "abra_t2v_8s",
+                            u1=u1,
+                            u2=u2,
+                            gen_id=gen_id,
+                            count=count,
+                            resolution=capture_resolution,
+                        )
+                else:
+                    our_args = build_text_video_args(
+                        project_id=active_pid,
+                        prompt=clean_prompt,
+                        recaptcha_token=token,
+                        aspect_ratio=target_aspect,
+                        seed=seed_to_use,
+                        model_key=model_key or "abra_t2v_8s",
+                        u1=u1,
+                        u2=u2,
+                        gen_id=gen_id,
+                        count=count,
+                        resolution=capture_resolution,
+                    )
+
+                submit_rpc = cap_rpcid if cap_rpcid in (VIDEO_TEXT_SUBMIT_RPC, VIDEO_SUBMIT_RPC) else VIDEO_TEXT_SUBMIT_RPC
+                our_body = encode_video_batchexecute_form(submit_rpc, our_args, at_param)
                 new_reqid = (app_reqid + 100000) if app_reqid is not None else 990001
-                fire_url = build_rpc_url_from_template(cap["url"], VIDEO_TEXT_SUBMIT_RPC, new_reqid)
+                fire_url = build_rpc_url_from_template(cap["url"], submit_rpc, new_reqid)
 
                 fr = br.fire(fire_url, our_body, timeout_s=60.0, poll_s=1.0)
                 parsed_submit = parse_batchexecute_text(fr.text)
                 if not parsed_submit.get("ok"):
                     kind, hint = describe_reject(parsed_submit.get("grpc_code"), parsed_submit.get("detail") or "")
-                    raise BridgeError(f"{VIDEO_TEXT_SUBMIT_RPC} bị từ chối ({kind}, 0 credit): {hint}")
+                    raise BridgeError(f"{submit_rpc} bị từ chối ({kind}, 0 credit): {hint}")
 
                 video_media_id = extract_video_submit_media_id(
                     parsed_submit.get("data"),
@@ -423,9 +497,9 @@ class VideoGenerationMixin:
                 )
                 if not video_media_id:
                     raise BridgeError(
-                        f"{VIDEO_TEXT_SUBMIT_RPC} thành công nhưng không thấy video_media_id: {fr.text[:250]}"
+                        f"{submit_rpc} thành công nhưng không thấy video_media_id: {fr.text[:250]}"
                     )
-                self._log("info", f"{VIDEO_TEXT_SUBMIT_RPC} nhận job: video_media_id={video_media_id}")
+                self._log("info", f"{submit_rpc} nhận job: video_media_id={video_media_id}")
 
                 poll_res = self.poll_video_rpc(
                     br,

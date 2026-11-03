@@ -210,7 +210,10 @@ export function useNodeActions(params: {
       } else if (isDownstream(nodes, dst.id, src.id)) {
         showToast("Không thể nối vòng lặp.", "err");
       } else {
-        if (dst.type === "image") {
+        const canMulti =
+          dst.type === "image" ||
+          (dst.type === "video" && (dst.videoSubMode ?? "frames") === "ingredients");
+        if (canMulti) {
           const currentSids = getNodeSourceIds(dst);
           if (currentSids.includes(src.id)) {
             showToast("Node này đã được nối làm ảnh tham chiếu.", "info");
@@ -222,7 +225,9 @@ export function useNodeActions(params: {
               status: "idle",
               reason: null,
             });
-            showToast(`Đã nối thêm ảnh tham chiếu (${nextSids.length} ảnh) → node ảnh.`, "ok");
+            const typeLabel =
+              dst.type === "image" ? "node ảnh" : "node video (thành phần)";
+            showToast(`Đã nối thêm ảnh tham chiếu (${nextSids.length} ảnh) → ${typeLabel}.`, "ok");
           }
         } else {
           patchNode(dst.id, { sourceImageId: src.id, sourceImageIds: [src.id], status: "idle", reason: null });

@@ -112,12 +112,7 @@ export function useNodeRunner(params: {
       try {
         if (n.type === "ref") return { ok: !!n.fileUrl, fileUrl: n.fileUrl };
 
-        // "Thành phần" (ingredients) là text→video: prompt là đủ, không cần frame,
-        // nên không được chặn node chỉ vì ảnh nguồn chưa chạy xong.
-        const isTextToVideo = n.type === "video" && (n.videoSubMode ?? "frames") === "ingredients";
-        const srcRes: SourceResult = isTextToVideo
-          ? { ok: true, url: null, urls: [] }
-          : resolveSource(nodesRef.current, n, dry);
+        const srcRes: SourceResult = resolveSource(nodesRef.current, n, dry);
         if (!srcRes.ok) {
           patchNode(nodeId, { status: "failed", reason: srcRes.reason });
           showToast(`Lỗi node: ${srcRes.reason}`, "err", nodeId);
@@ -145,12 +140,11 @@ export function useNodeRunner(params: {
             confirm: !dry,
           });
         } else if (n.type === "video") {
-          const framePath = srcRes.url;
-          // "Thành phần" (ingredients) là text→video thật: không cần frame, không cần
-          // auto_image. "Khung hình" (frames) cần frame, có thể sinh ảnh trước.
           const subMode = n.videoSubMode ?? "frames";
           const needsFrame = subMode === "frames";
+          const framePath = needsFrame ? srcRes.url : undefined;
           const autoImage = needsFrame && !framePath;
+          const refPaths = srcRes.urls && srcRes.urls.length > 0 ? srcRes.urls : undefined;
           promise = api.nodeVideo({
             prompt: n.prompt.trim(),
             aspect_ratio: n.videoRatio,
@@ -158,7 +152,9 @@ export function useNodeRunner(params: {
             model: n.videoModel ?? undefined,
             count: n.videoCount ?? 1,
             agent_mode: !!n.agentMode,
-            frame_path: needsFrame ? framePath : undefined,
+            frame_path: framePath,
+            reference_image_path: refPaths?.[0] ?? undefined,
+            reference_image_paths: refPaths,
             auto_image: autoImage,
             image_prompt: autoImage && n.autoImagePrompt.trim() ? n.autoImagePrompt.trim() : undefined,
             image_aspect_ratio: autoImage ? n.imageAspectRatio : undefined,

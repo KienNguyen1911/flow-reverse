@@ -80,6 +80,8 @@ class NodeVideoBody(BaseModel):
     #: model/aspect/resolution/duration/count control, so user values are not applied.
     agent_mode: bool = False
     frame_path: Optional[str] = None        # attached image (path or /api/... URL)
+    reference_image_path: Optional[str] = None
+    reference_image_paths: Optional[list[str]] = None
     image_prompt: Optional[str] = None      # used only when auto_image generates the frame
     image_aspect_ratio: str = "16:9"        # frame image ratio
     auto_image: bool = True
@@ -184,6 +186,21 @@ def build_router(ctx: AppContext) -> APIRouter:
             image_ratio, _image_enum = resolve_image_aspect(body.image_aspect_ratio)
         except (AspectNotVerifiedError, UnsupportedOptionError, ValueError) as e:
             raise HTTPException(status_code=400, detail=str(e))
+        # Collect & validate all reference image paths
+        all_refs: list[str] = []
+        if body.reference_image_paths:
+            for rp in body.reference_image_paths:
+                if rp and rp not in all_refs:
+                    all_refs.append(rp)
+        if body.reference_image_path and body.reference_image_path not in all_refs:
+            all_refs.insert(0, body.reference_image_path)
+        if sub_mode == "ingredients" and body.frame_path and body.frame_path not in all_refs:
+            all_refs.append(body.frame_path)
+
+        for ref_p in all_refs:
+            if not resolve_input_path(ref_p).is_file():
+                raise HTTPException(status_code=400, detail=f"Không tìm thấy ảnh đính kèm: {ref_p}")
+
         if sub_mode == "frames" and not body.frame_path and not body.auto_image:
             raise HTTPException(
                 status_code=400,
@@ -191,7 +208,7 @@ def build_router(ctx: AppContext) -> APIRouter:
                        "bật auto_image=true để tạo ảnh khung hình trước. Dùng sub_mode='ingredients' "
                        "nếu chỉ muốn text→video từ câu lệnh.",
             )
-        if body.frame_path and not resolve_input_path(body.frame_path).is_file():
+        if sub_mode == "frames" and body.frame_path and not resolve_input_path(body.frame_path).is_file():
             raise HTTPException(status_code=400, detail=f"Không tìm thấy ảnh đính kèm: {body.frame_path}")
         if not body.dry_run:
             if not body.confirm:
@@ -203,6 +220,8 @@ def build_router(ctx: AppContext) -> APIRouter:
         job = manager.submit("node_video", {
             "prompt": body.prompt.strip(),
             "frame_path": body.frame_path,
+            "reference_image_path": all_refs[0] if all_refs else None,
+            "reference_image_paths": all_refs if all_refs else None,
             "image_prompt": body.image_prompt,
             "image_aspect_ratio": image_ratio,
             "auto_image": body.auto_image,
@@ -220,7 +239,7 @@ def build_router(ctx: AppContext) -> APIRouter:
             "remove_watermark": body.remove_watermark,
         })
         frame_source = (
-            "none" if sub_mode == "ingredients"
+            ("provided" if (body.frame_path or all_refs) else "none") if sub_mode == "ingredients"
             else ("provided" if body.frame_path else "generated")
         )
         return {

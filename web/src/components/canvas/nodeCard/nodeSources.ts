@@ -31,7 +31,6 @@ export function deriveNodeSources(n: CanvasNode, allNodes: CanvasNode[]): NodeSo
   const textToVideo = isVid && (n.videoSubMode ?? "frames") === "ingredients";
   const sourceBlocked =
     !isRef &&
-    !textToVideo &&
     connectedSources.length > 0 &&
     connectedSources.some((src) => {
       if (isLastFrame) return src.status !== "succeeded" || !src.videoUrl;

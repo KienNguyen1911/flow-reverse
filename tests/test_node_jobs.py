@@ -148,6 +148,40 @@ def test_node_video_job_forwards_composer_config(tmp_path):
     assert job.result["count"] == 2
 
 
+def test_node_video_job_forwards_reference_image_paths(tmp_path):
+    seen: dict = {}
+
+    class RecordingService(FakeService):
+        def generate_video(self, **kwargs):
+            seen.update(kwargs)
+            return NodeVideoResult(
+                status="dry_run",
+                prompt="walk",
+                aspect_ratio="9:16",
+                run_id="r2",
+                run_dir=str(tmp_path / "r2"),
+                sub_mode="ingredients",
+                reference_image_paths=kwargs.get("reference_image_paths"),
+            )
+
+    manager = _manager(tmp_path, RecordingService())
+    job = Job(
+        "node_video",
+        {
+            "prompt": "walk",
+            "sub_mode": "ingredients",
+            "reference_image_path": "a.png",
+            "reference_image_paths": ["a.png", "b.png"],
+            "dry_run": True,
+        },
+    )
+    manager._run_node_video(job)
+
+    assert job.state == "succeeded"
+    assert seen["reference_image_path"] == "a.png"
+    assert seen["reference_image_paths"] == ["a.png", "b.png"]
+
+
 def test_node_image_job_forwards_model_and_count(tmp_path):
     seen: dict = {}
 

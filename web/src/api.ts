@@ -227,7 +227,7 @@ export const api = {
         aspect_ratio: string;
         resolution: string;
         duration_s: number;
-        frame_source: "provided" | "generated";
+        frame_source: "none" | "provided" | "generated";
       }>,
     ),
 

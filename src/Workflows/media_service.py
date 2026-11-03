@@ -360,6 +360,7 @@ class NodeVideoResult:
     duration_s: int = VIDEO_DURATION_S
     frame_path: Optional[str] = None
     frame_source: Optional[Literal["provided", "generated"]] = None
+    reference_image_paths: Optional[list[str]] = None
     image_prompt: Optional[str] = None
     watermark_removed: bool = False
     dry_run: bool = False
@@ -719,9 +720,10 @@ class MediaService:
         timeout_s: float = 300.0,
         model: Optional[str] = None,
         count: int = 1,
+        reference_paths: Optional[list[Path | str]] = None,
         on_event: Optional[Callable[..., None]] = None,
     ) -> Path:
-        """Bridge-level text→video call (``YhhmEf``, sub-mode "Thành phần") under the lock."""
+        """Bridge-level text/ingredients video call (``YhhmEf``, sub-mode "Thành phần") under the lock."""
         plan = plan_video_submit(
             aspect_ratio=aspect_ratio,
             model=model,
@@ -748,6 +750,7 @@ class MediaService:
                 aspect_ratio=ratio,
                 seed=seed,
                 resolution=res_label,
+                reference_paths=reference_paths,
                 model_key=key,
                 model_label=model_info.label,
                 count=n,
@@ -762,6 +765,8 @@ class MediaService:
         *,
         prompt: str,
         frame_path: Optional[Path | str] = None,
+        reference_image_path: Optional[Path | str] = None,
+        reference_image_paths: Optional[list[Path | str]] = None,
         aspect_ratio: str = "9:16",
         seed: Optional[int] = None,
         resolution: str = "1080p",
@@ -786,8 +791,8 @@ class MediaService:
         * ``sub_mode="frames"`` (Khung hình / image→video, ``eb1hJf``): needs a starting
           frame; when ``frame_path`` is omitted and ``auto_image`` is true an image is
           generated first.
-        * ``sub_mode="ingredients"`` (Thành phần / text→video, ``YhhmEf``): the prompt is
-          enough, no frame is uploaded.
+        * ``sub_mode="ingredients"`` (Thành phần / text→video, ``YhhmEf``): prompt-driven,
+          with optional reference images uploaded as ingredient chips into the composer.
 
         ``agent_mode`` mirrors the composer's "Tác nhân" chip: Flow hides the
         model/sub-mode/aspect/resolution/duration/count controls, so the catalog
@@ -817,6 +822,23 @@ class MediaService:
             raise ValueError("prompt rỗng")
         prompt = (prompt or "").strip()
 
+        # Collect & resolve all reference image paths
+        actual_ref_paths: list[Path] = []
+        if reference_image_paths:
+            for rp in reference_image_paths:
+                if rp:
+                    p = resolve_input_path(rp)
+                    if p.is_file() and p.resolve() not in actual_ref_paths:
+                        actual_ref_paths.append(p.resolve())
+        if reference_image_path:
+            p = resolve_input_path(reference_image_path)
+            if p.is_file() and p.resolve() not in actual_ref_paths:
+                actual_ref_paths.insert(0, p.resolve())
+        if frame_path:
+            p = resolve_input_path(frame_path)
+            if p.is_file() and p.resolve() not in actual_ref_paths:
+                actual_ref_paths.append(p.resolve())
+
         with self._lock:
             project = self.resolve_project(project_id, on_event=on_event)
             run_id, run_dir = _unique_run_dir(self.out_root, "video")
@@ -825,14 +847,21 @@ class MediaService:
             planned_image_prompt: Optional[str] = None
             image_status: Optional[str] = None
 
-            # "Thành phần" (ingredients) is a real text→video submit (`YhhmEf`): the prompt
-            # alone is enough, so no frame is prepared and no auto-image chain runs.
             if sub == "ingredients":
-                if frame_path:
+                if actual_ref_paths:
+                    frame = actual_ref_paths[0]
+                    frame_source = "provided"
                     self._emit(
                         on_event,
                         "info",
-                        "Sub-mode 'Thành phần' không dùng ảnh — bỏ qua ảnh đính kèm.",
+                        f"Dùng {len(actual_ref_paths)} ảnh tham chiếu làm thành phần (ingredients): "
+                        f"{', '.join(p.name for p in actual_ref_paths)}",
+                    )
+                else:
+                    self._emit(
+                        on_event,
+                        "info",
+                        "Sub-mode 'Thành phần' tạo video từ câu lệnh (không kèm ảnh tham chiếu).",
                     )
             elif frame_path:
                 src = resolve_input_path(frame_path)
@@ -882,6 +911,7 @@ class MediaService:
                 duration_s=duration,
                 frame_path=str(frame) if frame else None,
                 frame_source=frame_source,
+                reference_image_paths=[str(p) for p in actual_ref_paths] if actual_ref_paths else None,
                 image_prompt=planned_image_prompt,
                 dry_run=dry_run,
                 model=model_info.id,
@@ -908,11 +938,12 @@ class MediaService:
 
             video_path = run_dir / "video.mp4"
             if sub == "ingredients":
+                ref_desc = f"kèm {len(actual_ref_paths)} ảnh tham chiếu" if actual_ref_paths else "không cần frame"
                 self._emit(
                     on_event,
                     "step",
                     f"Tạo video text→video {ratio} {res_label} {duration}s "
-                    f"({model_info.label} · {model_key} · x{n}) — không cần frame",
+                    f"({model_info.label} · {model_key} · x{n}) — {ref_desc}",
                 )
                 self.generate_text_video(
                     prompt=prompt,
@@ -925,6 +956,7 @@ class MediaService:
                     timeout_s=timeout_s,
                     model=model_info.id,
                     count=n,
+                    reference_paths=actual_ref_paths if actual_ref_paths else None,
                     on_event=on_event,
                 )
             else:

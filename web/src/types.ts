@@ -428,6 +428,8 @@ export interface NodeVideoRequest {
   /** Flow đang ở chế độ "Tác nhân": bỏ qua cấu hình do user chọn. */
   agent_mode?: boolean;
   frame_path?: string | null;
+  reference_image_path?: string | null;
+  reference_image_paths?: string[];
   image_prompt?: string | null;
   image_aspect_ratio?: string;
   auto_image?: boolean;

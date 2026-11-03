@@ -55,7 +55,7 @@ VIDEO_SUB_MODE_LABELS: dict[str, str] = {
 }
 VIDEO_SUB_MODE_DESCRIPTIONS: dict[str, str] = {
     "frames": "Ảnh → video: cần ảnh khung hình bắt đầu (RPC eb1hJf).",
-    "ingredients": "Câu lệnh → video: không cần ảnh (RPC YhhmEf).",
+    "ingredients": "Thành phần: prompt và ảnh tham chiếu tuỳ chọn (RPC YhhmEf).",
 }
 
 COUNTS: tuple[int, ...] = (1, 2, 3, 4)
