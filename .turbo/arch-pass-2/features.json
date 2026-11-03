@@ -1,0 +1,53 @@
+[
+  {
+    "id": "F-001",
+    "title": "Panel accepts section attributes so the TryOn drop zone type-checks",
+    "priority": 1,
+    "acceptance": [
+      "Panel forwards all section props (onDragOver/onDragLeave/onDrop) to the DOM node",
+      "npx tsc --noEmit exits 0"
+    ],
+    "verify": "cd web && npx tsc --noEmit -p tsconfig.json",
+    "passes": true,
+    "evidence": "npx tsc --noEmit -p tsconfig.json -> exit 0, no output (was 4 errors: TS2322 + 3x TS7006 in tryon/SetupStudio.tsx)"
+  },
+  {
+    "id": "F-002",
+    "title": "delivery module becomes a package with one concept per submodule",
+    "priority": 2,
+    "acceptance": [
+      "src/Workflows/delivery/ exists with models, frames, plate, clips, items, readme, builder submodules",
+      "src/Workflows/delivery.py is gone",
+      "Every pre-existing import path still resolves: RunRef, ItemRef, DeliveryResult, DeliveryError, build_delivery, list_deliveries, detect_baked_ui_panel, detect_edge_strip, find_ui_clean_point, DEFAULT_DELIVERY_ROOT",
+      "Private names used by tests still resolve on the package: _resolve_item_image, _frame_is_clean, _render_readme",
+      "monkeypatching delivery.ROOT still redirects relative-path resolution",
+      "monkeypatching delivery.extract_clean_plate still disables plate salvage"
+    ],
+    "verify": "python -m pytest tests/test_delivery.py tests/test_raw_video_qa.py -q",
+    "passes": true,
+    "evidence": "python -m pytest tests/test_delivery.py tests/test_raw_video_qa.py -q -> 60 passed. Separate behavioural checks: `import src.Workflows.delivery` resolves build_delivery/RunRef/ItemRef/DeliveryResult/DeliveryError/list_deliveries/detect_baked_ui_panel/detect_edge_strip/find_ui_clean_point/_frame_is_clean/_render_readme/_resolve_item_image/DEFAULT_DELIVERY_ROOT (\"imports ok\"); dv.ROOT -> D:\\Dev\\rev-flow; dv.extract_clean_plate.__module__ -> src.Workflows.delivery.frames; src.WebUI.jobs.runners_workflow and src.Workflows.raw_video_qa import cleanly."
+  },
+  {
+    "id": "F-003",
+    "title": "Untracked scratch split script removed from the working tree",
+    "priority": 3,
+    "acceptance": [
+      "git status --short shows no untracked files"
+    ],
+    "verify": "git status --short",
+    "passes": true,
+    "evidence": "git status --short -> only ` D src/Workflows/delivery.py`, ` M web/src/components/ui.tsx`, `?? .turbo/arch-pass-2/`, `?? src/Workflows/delivery/`. src/Workflows/delivery_split_tmp.py and the splitter used to generate the package were removed."
+  },
+  {
+    "id": "F-004",
+    "title": "Full suite matches baseline after the split",
+    "priority": 4,
+    "acceptance": [
+      "449 passed",
+      "Only the 3 pre-existing test_account_pool failures"
+    ],
+    "verify": "python -m pytest tests -q",
+    "passes": true,
+    "evidence": "python -m pytest tests -q -> `3 failed, 449 passed in 85.62s`. The 3 failures are the pre-existing tests/test_account_pool.py ones (test_allocation_zero_when_all_cooldown, test_allocation_shrinks_when_one_cooldown, test_captured_args_has_reference_detects_t2i_baseline) recorded in .turbo/node-config-parity/decisions.md D-007. Also `cd web && npx tsc --noEmit -p tsconfig.json` -> exit 0 and `npm run build` -> built in 2.10s."
+  }
+]
