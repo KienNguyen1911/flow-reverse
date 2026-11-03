@@ -50,27 +50,31 @@ from .account_pool import ReferenceMediaRegistry, sha256_file
 from .flow_client import FlowClient
 from .flow_models import GenerationResult, ReferenceTemplate, parse_project_ref
 from .limits import load_limits
+from .media_options import (
+    UnsupportedOptionError,
+    VIDEO_DURATIONS_S,
+    VIDEO_DURATION_S,
+    VIDEO_RATIOS,
+    VIDEO_RESOLUTIONS,
+    VideoSubmitPlan,
+    normalize_ratio_label,
+    normalize_video_ratio,
+    normalize_video_resolution,
+    plan_video_submit,
+    validate_video_duration,
+)
 from .media_probe import probe_video
 from .watermark_remover import remove_video_watermark
 from .flow_catalog import (
-    COUNTS,
     IMAGE_ASPECT_ENUM,
     IMAGE_ASPECT_ORDER,
-    VIDEO_ASPECT_ORDER,
-    VIDEO_SUB_MODES,
-    CatalogError,
     MediaModel,
     agent_mode_catalog,
-    capture_resolution,
     image_catalog,
     image_model_key,
     normalize_count,
     resolve_image_model,
-    resolve_video_model,
     video_catalog,
-    video_durations,
-    video_model_key,
-    video_resolutions,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -85,28 +89,8 @@ IMAGE_ASPECT_CONFIG = ROOT / "configs" / "image_aspect_enums.json"
 #: Kept in sync with :mod:`src.Workflows.flow_catalog` (single source of truth).
 VERIFIED_IMAGE_ASPECTS: dict[str, int] = dict(IMAGE_ASPECT_ENUM)
 
-#: Free-form aliases accepted by :func:`resolve_image_aspect`.
-RATIO_ALIASES: dict[str, str] = {
-    "portrait": "9:16",
-    "vertical": "9:16",
-    "landscape": "16:9",
-    "horizontal": "16:9",
-    "wide": "16:9",
-    "square": "1:1",
-}
-
-VIDEO_RATIOS: tuple[str, ...] = VIDEO_ASPECT_ORDER
-VIDEO_RESOLUTIONS: tuple[str, ...] = ("360p", "720p", "1080p")
-VIDEO_DURATIONS_S: tuple[int, ...] = (4, 6, 8, 10)
-VIDEO_DURATION_S = 8  # legacy default (Omni 8s); per-model options live in flow_catalog
-
-
 class AspectNotVerifiedError(ValueError):
     """Raised when a ratio has no captured enum value yet."""
-
-
-class UnsupportedOptionError(ValueError):
-    """Raised for options the Flow protocol does not support."""
 
 
 # --------------------------------------------------------------------------- #
@@ -139,10 +123,8 @@ def load_image_aspects(config_path: Optional[Path | str] = None) -> dict[str, in
 
 
 def _normalize_ratio_label(value: str) -> str:
-    s = str(value or "").strip().lower().replace(" ", "")
-    s = s.replace("x", ":").replace("/", ":")
-    s = RATIO_ALIASES.get(s, s)
-    return s
+    """Kept as a local alias so image-aspect call sites read the same as before."""
+    return normalize_ratio_label(value)
 
 
 def resolve_image_aspect(
@@ -183,51 +165,6 @@ def resolve_image_aspect(
             f"để ghi configs/image_aspect_enums.json, hoặc truyền `aspect` (int) đã capture thủ công."
         )
     return label, ratios[label]
-
-
-def normalize_video_ratio(value: Optional[str]) -> str:
-    label = _normalize_ratio_label(value or "9:16")
-    if label not in VIDEO_RATIOS:
-        raise UnsupportedOptionError(
-            f"Video chỉ hỗ trợ tỷ lệ {', '.join(VIDEO_RATIOS)} (nhận {value!r})."
-        )
-    return label
-
-
-def normalize_video_resolution(value: Optional[str], *, model: Optional[str] = None) -> str:
-    """Normalize a resolution label; with ``model`` also check Flow offers it."""
-    v = str(value or "720p").strip().lower()
-    if v in ("720", "720p", "hd"):
-        label = "720p"
-    elif v in ("1080", "1080p", "fullhd", "full-hd"):
-        label = "1080p"
-    elif v in ("360", "360p"):
-        label = "360p"
-    else:
-        raise UnsupportedOptionError(
-            f"Độ phân giải video chỉ hỗ trợ 360p/720p/1080p (nhận {value!r})."
-        )
-    if model:
-        m = resolve_video_model(model)
-        if label not in video_resolutions(m):
-            raise UnsupportedOptionError(
-                f"{m.label} không hỗ trợ {label}. Chọn: {', '.join(video_resolutions(m))}."
-            )
-    return label
-
-
-def validate_video_duration(duration_s: int, *, model: Optional[str] = None) -> int:
-    """Normalize a duration; with ``model`` also check Flow offers it."""
-    d = int(duration_s)
-    allowed = video_durations(model) if model else VIDEO_DURATIONS_S
-    if d not in allowed:
-        hint = (
-            f"{resolve_video_model(model).label} cố định {allowed[0]}s."
-            if len(allowed) == 1
-            else f"Chọn: {', '.join(f'{x}s' for x in allowed)}."
-        )
-        raise UnsupportedOptionError(f"Video không hỗ trợ {d}s. {hint}")
-    return d
 
 
 def node_options(config_path: Optional[Path | str] = None) -> dict:
@@ -730,23 +667,24 @@ class MediaService:
         Used by :meth:`generate_video` and by multi-step workflows (try-on chain)
         that own their output paths and post-processing.
         """
-        ratio = normalize_video_ratio(aspect_ratio)
-        model_info = resolve_video_model(model)
-        res_label = normalize_video_resolution(resolution, model=model_info.id)
-        duration = validate_video_duration(duration_s, model=model_info.id)
-        n = normalize_count(count)
-        capture_res = capture_resolution(model_info, res_label)
-        prompt = (prompt or "").strip()
-        if not prompt:
+        plan = plan_video_submit(
+            aspect_ratio=aspect_ratio,
+            model=model,
+            sub_mode="frames",
+            resolution=resolution,
+            duration_s=duration_s,
+            count=count,
+        )
+        model_info, ratio = plan.model, plan.ratio
+        res_label, duration = plan.resolution, plan.duration_s
+        n, capture_res, key = plan.count, plan.capture_res, plan.model_key
+        if not (prompt or "").strip():
             raise ValueError("prompt rỗng")
+        prompt = (prompt or "").strip()
         frame = resolve_input_path(frame_path)
         if not frame.is_file():
             raise FileNotFoundError(f"Không tìm thấy ảnh đính kèm: {frame_path}")
         dest = Path(dest_path)
-        key = video_model_key(
-            model_info, sub_mode="frames", duration_s=duration,
-            resolution=capture_res, aspect_ratio=ratio,
-        )
         with self._lock:
             project = self.resolve_project(project_id, on_event=on_event)
             self.video.generate_video_flow(
@@ -784,20 +722,21 @@ class MediaService:
         on_event: Optional[Callable[..., None]] = None,
     ) -> Path:
         """Bridge-level text→video call (``YhhmEf``, sub-mode "Thành phần") under the lock."""
-        ratio = normalize_video_ratio(aspect_ratio)
-        model_info = resolve_video_model(model)
-        res_label = normalize_video_resolution(resolution, model=model_info.id)
-        duration = validate_video_duration(duration_s, model=model_info.id)
-        n = normalize_count(count)
-        capture_res = capture_resolution(model_info, res_label)
-        prompt = (prompt or "").strip()
-        if not prompt:
-            raise ValueError("prompt rỗng")
-        dest = Path(dest_path)
-        key = video_model_key(
-            model_info, sub_mode="ingredients", duration_s=duration,
-            resolution=capture_res, aspect_ratio=ratio,
+        plan = plan_video_submit(
+            aspect_ratio=aspect_ratio,
+            model=model,
+            sub_mode="ingredients",
+            resolution=resolution,
+            duration_s=duration_s,
+            count=count,
         )
+        model_info, ratio = plan.model, plan.ratio
+        res_label, duration = plan.resolution, plan.duration_s
+        n, capture_res, key = plan.count, plan.capture_res, plan.model_key
+        if not (prompt or "").strip():
+            raise ValueError("prompt rỗng")
+        prompt = (prompt or "").strip()
+        dest = Path(dest_path)
         with self._lock:
             project = self.resolve_project(project_id, on_event=on_event)
             self.video.generate_text_video_flow(
@@ -855,35 +794,28 @@ class MediaService:
         defaults are used and the result says so.
         """
         t0 = time.time()
+        plan = plan_video_submit(
+            aspect_ratio=aspect_ratio,
+            model=model,
+            sub_mode=sub_mode,
+            resolution=resolution,
+            duration_s=duration_s,
+            count=count,
+            agent_mode=agent_mode,
+        )
+        ratio, model_info, sub = plan.ratio, plan.model, plan.sub_mode
+        res_label, duration = plan.resolution, plan.duration_s
+        n, capture_res, model_key = plan.count, plan.capture_res, plan.model_key
         if agent_mode:
-            model, aspect_ratio, resolution, duration_s, count = (
-                None, "9:16", "1080p", VIDEO_DURATION_S, 1,
-            )
-            default_model = resolve_video_model(None)
             self._emit(
                 on_event,
                 "info",
-                f"Tác nhân bật: dùng mặc định {default_model.label} · {default_model.fixed_resolution} · "
-                f"{default_model.fixed_duration_s}s · 9:16 · x1 (Flow ẩn cấu hình).",
+                f"Tác nhân bật: dùng mặc định {model_info.label} · {model_info.fixed_resolution} · "
+                f"{model_info.fixed_duration_s}s · {ratio} · x{n} (Flow ẩn cấu hình).",
             )
-        ratio = normalize_video_ratio(aspect_ratio)
-        model_info = resolve_video_model(model)
-        sub = str(sub_mode or "frames").strip().lower()
-        if sub not in VIDEO_SUB_MODES:
-            raise UnsupportedOptionError(
-                f"Sub-mode video {sub_mode!r} không hợp lệ. Chọn: {', '.join(VIDEO_SUB_MODES)}."
-            )
-        res_label = normalize_video_resolution(resolution, model=model_info.id)
-        duration = validate_video_duration(duration_s, model=model_info.id)
-        n = normalize_count(count)
-        capture_res = capture_resolution(model_info, res_label)
-        model_key = video_model_key(
-            model_info, sub_mode=sub, duration_s=duration,
-            resolution=capture_res, aspect_ratio=ratio,
-        )
-        prompt = (prompt or "").strip()
-        if not prompt:
+        if not (prompt or "").strip():
             raise ValueError("prompt rỗng")
+        prompt = (prompt or "").strip()
 
         with self._lock:
             project = self.resolve_project(project_id, on_event=on_event)
@@ -1072,6 +1004,7 @@ __all__ = [
     "IMAGE_ASPECT_CONFIG",
     "VIDEO_RATIOS",
     "VIDEO_RESOLUTIONS",
+    "VIDEO_DURATIONS_S",
     "VIDEO_DURATION_S",
     "VERIFIED_IMAGE_ASPECTS",
     "cdp_lock",
@@ -1079,6 +1012,7 @@ __all__ = [
     "node_options",
     "normalize_video_ratio",
     "normalize_video_resolution",
+    "plan_video_submit",
     "resolve_image_aspect",
     "resolve_input_path",
     "validate_video_duration",

@@ -52,9 +52,9 @@
       "canvas and canvas-drawer both consume the single declaration",
       "tsc and vite build pass"
     ],
-    "verify": "cd web && npx tsc --noEmit -p tsconfig.json && npm run build",
-    "passes": false,
-    "evidence": ""
+    "verify": "cd web && npm run typecheck && npm test && npm run build",
+    "passes": true,
+    "evidence": "`rg 'export interface CanvasNodeState' web/src` -> none; it is `export type CanvasNodeState = CanvasDrawerNode`. The duplicate had drifted by 2 fields (runId, itemScope). runId was the real bug: canvasStateToGraph rebuilds nodes field by field and never restored it, so after a reload CanvasPanel.tsx:206 read undefined and the delivery export lost its clips. CanvasStats second declaration in TopBar.tsx removed (re-exported from canvas/types). Field-restore checker: 37 declared / 37 restored. tsc exit 0; vite build OK; npm test 13 pass."
   },
   {
     "id": "F-005",
@@ -67,9 +67,9 @@
       "hardcoded BASE has one home",
       "tsc and vite build pass"
     ],
-    "verify": "cd web && npx tsc --noEmit -p tsconfig.json && npm run build",
-    "passes": false,
-    "evidence": ""
+    "verify": "cd web && npm run typecheck && npm test && npm run build",
+    "passes": true,
+    "evidence": "ApiDocsPanel.tsx 858 -> 182 lines. New api-docs/{base,types,CodeBlock,quickstart,catalog}; catalog.tsx holds the 510-line GROUPS literal with no rendering. All 63 template literals of the pre-split file found byte-identical in the new modules (`python check_apidocs.py` -> 0 unexpected missing). `rg '127.0.0.1:4000' web/src` -> only base.ts. TERMINAL_STATES + JOB_POLL_MS now imported from jobLifecycle; verify-snippets.mjs asserts they render the old text and was confirmed to fail (exit 1) when a 4th state is injected. tsc exit 0; vite build OK; npm test 13 pass + 3 snippet checks."
   },
   {
     "id": "F-006",
@@ -83,8 +83,8 @@
       "pytest baseline unchanged"
     ],
     "verify": "python -m pytest tests -q && python -m pytest tests/test_media_service.py -q",
-    "passes": false,
-    "evidence": ""
+    "passes": true,
+    "evidence": "media_options.py (251 lines) owns plan_video_submit + VideoSubmitPlan; media_service.py (-125/+59) delegates animate_frame, generate_text_video, and generate_video to plan_video_submit. VIDEO_RESOLUTIONS/VIDEO_DURATIONS_S derived from flow_catalog. python -m pytest tests/test_media_service.py -q -> 22 passed. Baseline pytest tests -q -> 449 passed, 3 failed in test_account_pool.py."
   },
   {
     "id": "F-007",
