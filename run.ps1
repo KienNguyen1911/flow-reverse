@@ -69,7 +69,7 @@ function Test-Web {
     } catch { return $false }
 }
 
-# Tìm PID đang lắng nghe một cổng (dự phòng khi không có pid file)
+# Tìm PID đang lắng nghe một cổng (dự phòng khi không có pid file hoặc pid file bị cũ)
 function Get-PortPid {
     param([int]$Port)
     $c = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
@@ -84,7 +84,7 @@ function Read-PidFile {
         $raw = (Get-Content $File -Raw -ErrorAction SilentlyContinue)
         if ($raw) {
             $parsed = 0
-            if ([int]::TryParse($raw.Trim(), [ref]$parsed)) { return $parsed }
+            if ([int]::TryParse($raw.Trim(), [ref]$parsed) -and $parsed -gt 0) { return $parsed }
         }
     }
     return $null
@@ -95,18 +95,33 @@ function Read-PidFile {
 # ---------------------------------------------------------------------------
 function Start-Browser {
     if ($NoBrowser) { Write-Host "[skip] -NoBrowser: bỏ qua CloakBrowser." -ForegroundColor DarkGray; return }
-    if (Test-Cdp)   { Write-Host "[skip] Browser CDP đã sẵn sàng tại cổng $CdpPort." -ForegroundColor DarkYellow; return }
+    if (Test-Cdp) {
+        Ensure-RunDir
+        $portPid = Get-PortPid -Port $CdpPort
+        if ($portPid) { $portPid | Out-File -Encoding ascii $BrowserPidFile }
+        Write-Host "[skip] Browser CDP đã sẵn sàng tại cổng $CdpPort." -ForegroundColor DarkYellow
+        return
+    }
 
     Ensure-RunDir
     Write-Host "[start] Khởi động CloakBrowser (profile=$Profile, CDP=$CdpPort)..." -ForegroundColor Cyan
     & $Python (Join-Path $Root "src\BrowserHost\launch_profile.py") `
         --profile $Profile --port $CdpPort --wait --pid-file $BrowserPidFile
     if ($LASTEXITCODE -ne 0) { throw "Khởi động browser thất bại (exit code $LASTEXITCODE)." }
+    
+    $portPid = Get-PortPid -Port $CdpPort
+    if ($portPid) { $portPid | Out-File -Encoding ascii $BrowserPidFile }
     Write-Host "[ok] Browser PID: $(Read-PidFile $BrowserPidFile)" -ForegroundColor Green
 }
 
 function Start-Web {
-    if (Test-Web) { Write-Host "[skip] WebUI đã chạy tại cổng $WebPort." -ForegroundColor DarkYellow; return }
+    if (Test-Web) {
+        Ensure-RunDir
+        $portPid = Get-PortPid -Port $WebPort
+        if ($portPid) { $portPid | Out-File -Encoding ascii $WebPidFile }
+        Write-Host "[skip] WebUI đã chạy tại cổng $WebPort." -ForegroundColor DarkYellow
+        return
+    }
 
     $dist = Join-Path $Root "web\dist\index.html"
     if (-not (Test-Path $dist)) {
@@ -132,7 +147,9 @@ function Start-Web {
         if (Test-Web) { $ok = $true; break }
     }
     if ($ok) {
-        Write-Host "[ok] WebUI sẵn sàng: http://127.0.0.1:$WebPort  (PID $($p.Id))" -ForegroundColor Green
+        $portPid = Get-PortPid -Port $WebPort
+        if ($portPid) { $portPid | Out-File -Encoding ascii $WebPidFile }
+        Write-Host "[ok] WebUI sẵn sàng: http://127.0.0.1:$WebPort  (PID $(Read-PidFile $WebPidFile))" -ForegroundColor Green
     } else {
         Write-Warning "WebUI chưa phản hồi sau 30s. Xem log: $WebLog  và  $WebErrLog"
     }
@@ -141,35 +158,75 @@ function Start-Web {
 # ---------------------------------------------------------------------------
 # Stop
 # ---------------------------------------------------------------------------
-function Stop-Web {
-    $procId = Read-PidFile $WebPidFile
-    if (-not $procId) { $procId = Get-PortPid -Port $WebPort }
+function Stop-TargetProcess {
+    param(
+        [string]$Name,
+        [string]$PidFile,
+        [int]$Port,
+        [string[]]$AllowedProcessNames
+    )
 
-    if ($procId -and (Get-Process -Id $procId -ErrorAction SilentlyContinue)) {
-        Write-Host "[stop ] Dừng WebUI (PID $procId)..." -ForegroundColor Cyan
-        taskkill /PID $procId /T /F 2>$null | Out-Null
-        Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
-        Write-Host "[ok] Đã dừng WebUI." -ForegroundColor Green
-    } else {
-        Write-Host "[skip] WebUI không đang chạy." -ForegroundColor DarkGray
+    $pidsToKill = [System.Collections.Generic.HashSet[int]]::new()
+
+    # 1. Tìm PID đang lắng nghe trên cổng (nguồn chính xác nhất)
+    $portPid = Get-PortPid -Port $Port
+    if ($portPid) {
+        $pidsToKill.Add($portPid) | Out-Null
     }
-    Remove-Item $WebPidFile -ErrorAction SilentlyContinue
+
+    # 2. Đọc PID từ file (dự phòng)
+    $filePid = Read-PidFile $PidFile
+    if ($filePid) {
+        $proc = Get-Process -Id $filePid -ErrorAction SilentlyContinue
+        if ($proc) {
+            # Chỉ dừng nếu tên tiến trình hợp lệ, tránh đụng vào Windows Service khi PID bị tái sử dụng
+            $procName = $proc.ProcessName.ToLower()
+            $match = $false
+            foreach ($allowed in $AllowedProcessNames) {
+                if ($procName -like "*$($allowed.ToLower())*") {
+                    $match = $true
+                    break
+                }
+            }
+            if ($match) {
+                $pidsToKill.Add($filePid) | Out-Null
+            } else {
+                Write-Host "[warn] PID $filePid trong $(Split-Path $PidFile -Leaf) là '$($proc.ProcessName)' (không phải $Name). Bỏ qua PID này." -ForegroundColor DarkYellow
+            }
+        }
+    }
+
+    try {
+        if ($pidsToKill.Count -gt 0) {
+            foreach ($pidToKill in $pidsToKill) {
+                Write-Host "[stop ] Dừng $Name (PID $pidToKill)..." -ForegroundColor Cyan
+                # Dùng cmd /c để taskkill không ném NativeCommandError vào PowerShell khi ErrorActionPreference=Stop
+                cmd.exe /c "taskkill /PID $pidToKill /T /F >nul 2>&1"
+                Stop-Process -Id $pidToKill -Force -ErrorAction SilentlyContinue
+            }
+
+            # Chờ giải phóng port tối đa 3s
+            for ($i = 0; $i -lt 6; $i++) {
+                if (-not (Get-PortPid -Port $Port)) { break }
+                Start-Sleep -Milliseconds 500
+            }
+
+            Write-Host "[ok] Đã dừng $Name." -ForegroundColor Green
+        } else {
+            Write-Host "[skip] $Name không đang chạy." -ForegroundColor DarkGray
+        }
+    } finally {
+        Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Stop-Web {
+    Stop-TargetProcess -Name "WebUI" -PidFile $WebPidFile -Port $WebPort -AllowedProcessNames @("python", "pythonw")
 }
 
 function Stop-Browser {
     if ($NoBrowser) { Write-Host "[skip] -NoBrowser: bỏ qua đóng browser." -ForegroundColor DarkGray; return }
-
-    $procId = Read-PidFile $BrowserPidFile
-    if (-not $procId) { $procId = Get-PortPid -Port $CdpPort }
-
-    if ($procId -and (Get-Process -Id $procId -ErrorAction SilentlyContinue)) {
-        Write-Host "[stop ] Đóng CloakBrowser (PID $procId)..." -ForegroundColor Cyan
-        taskkill /PID $procId /T /F 2>$null | Out-Null
-        Write-Host "[ok] Đã đóng browser." -ForegroundColor Green
-    } else {
-        Write-Host "[skip] Browser không đang chạy." -ForegroundColor DarkGray
-    }
-    Remove-Item $BrowserPidFile -ErrorAction SilentlyContinue
+    Stop-TargetProcess -Name "CloakBrowser" -PidFile $BrowserPidFile -Port $CdpPort -AllowedProcessNames @("chrome", "msedge", "brave", "chromium", "python", "pythonw")
 }
 
 # ---------------------------------------------------------------------------

@@ -38,6 +38,8 @@ import {
   PromptEditorModal,
   PromptPreviewCard,
   SummaryPill,
+  NodeDropdownPill,
+  SeedDropdownPill,
   highlightPrompt,
 } from "./canvasNodeBits";
 import { Chip, Spinner } from "./ui";
@@ -3281,6 +3283,139 @@ function CanvasNodeCard(props: {
   };
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
+  const [openDropdown, setOpenDropdown] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!openDropdown) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as HTMLElement;
+      const activeEl = cardRef.current?.querySelector(`[data-dropdown-id="${openDropdown}"]`);
+      if (activeEl && activeEl.contains(target)) return;
+      setOpenDropdown(null);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpenDropdown(null);
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [openDropdown]);
+
+  const activeVideoModel = useMemo(() => {
+    if (!videoModels.length) return null;
+    return videoModels.find((m) => m.id === (n.videoModel ?? "")) ?? videoModels[0] ?? null;
+  }, [videoModels, n.videoModel]);
+
+  const ratioItems = useMemo(() => {
+    const base = imageRatios.length ? imageRatios : ["16:9", "4:3", "1:1", "3:4", "9:16"];
+    const list = base.includes(n.aspectRatio) ? base : [n.aspectRatio, ...base];
+    const hints: Record<string, string> = {
+      "9:16": "Dọc (TikTok, Shorts)",
+      "16:9": "Ngang (YouTube)",
+      "1:1": "Vuông (Instagram)",
+      "4:3": "Ngang cổ điển",
+      "3:4": "Dọc chân dung",
+    };
+    return list.map((r) => ({
+      value: r,
+      label: r,
+      hint: hints[r],
+    }));
+  }, [imageRatios, n.aspectRatio]);
+
+  const imageModelItems = useMemo(() => {
+    return imageModels.map((m) => ({
+      value: m.id,
+      label: m.label,
+      hint: m.id === imageDefaultModel ? "Mặc định" : undefined,
+    }));
+  }, [imageModels, imageDefaultModel]);
+
+  const imageCountItems = useMemo(() => {
+    const list = imageCounts.length ? imageCounts : [1, 2, 3, 4];
+    return list.map((c) => ({
+      value: c,
+      label: `${c} ảnh`,
+      hint: `x${c}`,
+    }));
+  }, [imageCounts]);
+
+  const itemScopeItems = useMemo(() => {
+    return ITEM_SCOPE_OPTIONS.map((opt) => ({
+      value: opt.value,
+      label: opt.label,
+      hint: opt.hint,
+    }));
+  }, []);
+
+  const videoSubModeItems = useMemo(() => {
+    return [
+      {
+        value: "frames",
+        label: videoSubModeLabels["frames"] ?? "Khung hình",
+        hint: "Ảnh → Video",
+      },
+      {
+        value: "ingredients",
+        label: videoSubModeLabels["ingredients"] ?? "Thành phần",
+        hint: "Prompt → Video",
+      },
+    ];
+  }, [videoSubModeLabels]);
+
+  const videoModelItems = useMemo(() => {
+    return videoModels.map((m) => ({
+      value: m.id,
+      label: m.label,
+      hint: m.id === videoDefaultModel ? "Mặc định" : undefined,
+    }));
+  }, [videoModels, videoDefaultModel]);
+
+  const videoRatioItems = useMemo(() => {
+    const base = activeVideoModel?.aspect_ratios ?? (videoRatios.length ? videoRatios : ["16:9", "9:16"]);
+    const list = base.includes(n.videoRatio) ? base : [n.videoRatio, ...base];
+    const hints: Record<string, string> = {
+      "9:16": "Dọc (TikTok, Shorts)",
+      "16:9": "Ngang (YouTube)",
+      "1:1": "Vuông (Instagram)",
+    };
+    return list.map((r) => ({
+      value: r,
+      label: r,
+      hint: hints[r],
+    }));
+  }, [activeVideoModel, videoRatios, n.videoRatio]);
+
+  const resolutionItems = useMemo(() => {
+    const base = activeVideoModel?.resolutions ?? (resolutions.length ? resolutions : ["720p", "1080p"]);
+    const list = base.includes(n.resolution) ? base : [n.resolution, ...base];
+    return list.map((r) => ({
+      value: r,
+      label: r,
+      hint: r === "1080p" ? "Full HD" : r === "720p" ? "HD" : undefined,
+    }));
+  }, [activeVideoModel, resolutions, n.resolution]);
+
+  const videoDurationItems = useMemo(() => {
+    const list = activeVideoModel?.durations_s ?? [4, 6, 8, 10];
+    return list.map((d) => ({
+      value: d,
+      label: `${d} giây`,
+      hint: `${d}s`,
+    }));
+  }, [activeVideoModel]);
+
+  const videoCountItems = useMemo(() => {
+    const list = videoCounts.length ? videoCounts : [1, 2, 3, 4];
+    return list.map((c) => ({
+      value: c,
+      label: `${c} video`,
+      hint: `x${c}`,
+    }));
+  }, [videoCounts]);
 
   // Report card height so group frames can wrap nodes tightly.
   // offsetHeight is layout-space (unaffected by the canvas scale transform).
@@ -3346,6 +3481,24 @@ function CanvasNodeCard(props: {
     return c.prompt ? `Ảnh: ${c.prompt.slice(0, 24)}…` : `Ảnh (${c.id})`;
   };
 
+  const frameSourceItems = useMemo(() => {
+    const items = [
+      {
+        value: "",
+        label: "Tự tạo ảnh khung",
+        hint: "Auto",
+      },
+    ];
+    for (const src of sourceOptions) {
+      items.push({
+        value: src.id,
+        label: sourceLabel(src),
+        hint: src.type === "last_frame" ? "Nối tiếp" : "Ảnh",
+      });
+    }
+    return items;
+  }, [sourceOptions]);
+
   const nodeTitle =
     n.label ||
     (isRef
@@ -3391,7 +3544,9 @@ function CanvasNodeCard(props: {
       ref={cardRef}
       className={`canvas-node-card absolute rounded-panel border-2 bg-panel shadow-xl ${st.border} ${
         selected ? "ring-2 ring-acc ring-offset-2 ring-offset-ink" : ""
-      } ${isFocusSource || isFocusTarget ? "canvas-node-focus" : ""}`}
+      } ${isFocusSource || isFocusTarget ? "canvas-node-focus" : ""} ${
+        openDropdown ? "z-30" : ""
+      }`}
       style={{ left: n.x, top: n.y, width: NODE_W }}
       onPointerDown={(e) => {
         e.stopPropagation();
@@ -3726,23 +3881,42 @@ function CanvasNodeCard(props: {
               onExpand={() => props.onOpenPromptEditor(n.id)}
             />
 
-            {/* Summary pills thay cho dropdown Tỷ lệ + ô Seed: 1 hàng, bấm → Drawer. */}
+            {/* Summary pills: Bấm mở dropdown chọn option trực tiếp thay vì mở drawer */}
             <div className="flex items-center gap-1 flex-wrap">
               {n.agentMode ? (
-                <SummaryPill
+                <NodeDropdownPill
                   tone="warn"
                   value="Tác nhân quyết định"
-                  title="Flow đang bật 'Tác nhân': composer ẩn model/tỷ lệ/số lượng nên node chỉ gửi prompt — bấm để tắt trong Cấu hình"
-                  onClick={() => props.onOpenDrawer(n.id, "config")}
+                  title="Flow đang bật 'Tác nhân' — bấm để tắt hoặc mở Cấu hình"
+                  id="agent"
+                  isOpen={openDropdown === "agent"}
+                  onToggle={() => setOpenDropdown((cur) => (cur === "agent" ? null : "agent"))}
+                  onClose={() => setOpenDropdown(null)}
+                  header="Tác nhân"
+                  items={[
+                    { value: "off", label: "Tắt Tác nhân", hint: "Tự chọn model & thông số" },
+                    { value: "drawer", label: "Mở Cấu hình", hint: "Xem trong Drawer" },
+                  ]}
+                  onSelect={(val) => {
+                    if (val === "off") props.onFieldChange({ agentMode: false });
+                    else props.onOpenDrawer(n.id, "config");
+                  }}
                 />
               ) : (
                 <>
-                  <SummaryPill
+                  <NodeDropdownPill
                     value={n.aspectRatio}
                     title={`Tỷ lệ khung hình: ${n.aspectRatio} — bấm để đổi`}
-                    onClick={() => props.onOpenDrawer(n.id, "config")}
+                    id="aspectRatio"
+                    isOpen={openDropdown === "aspectRatio"}
+                    onToggle={() => setOpenDropdown((cur) => (cur === "aspectRatio" ? null : "aspectRatio"))}
+                    onClose={() => setOpenDropdown(null)}
+                    header="Tỷ lệ khung hình"
+                    items={ratioItems}
+                    selectedValue={n.aspectRatio}
+                    onSelect={(val) => props.onFieldChange({ aspectRatio: String(val) })}
                   />
-                  <SummaryPill
+                  <NodeDropdownPill
                     label="Model"
                     value={
                       imageModels.find((m) => m.id === (n.imageModel ?? ""))?.label ??
@@ -3752,26 +3926,54 @@ function CanvasNodeCard(props: {
                       "—"
                     }
                     title="Model ảnh của composer Flow — bấm để đổi"
-                    onClick={() => props.onOpenDrawer(n.id, "config")}
+                    id="imageModel"
+                    isOpen={openDropdown === "imageModel"}
+                    onToggle={() => setOpenDropdown((cur) => (cur === "imageModel" ? null : "imageModel"))}
+                    onClose={() => setOpenDropdown(null)}
+                    header="Chọn Model ảnh"
+                    width="min-w-[190px]"
+                    items={imageModelItems}
+                    selectedValue={n.imageModel ?? imageDefaultModel ?? imageModels[0]?.id}
+                    onSelect={(val) => props.onFieldChange({ imageModel: String(val) })}
                   />
-                  <SummaryPill
+                  <NodeDropdownPill
                     value={`x${n.imageCount ?? 1}`}
-                    title="Số ảnh mỗi lần chạy (x1..x4 như composer) — bấm để đổi"
-                    onClick={() => props.onOpenDrawer(n.id, "config")}
+                    title="Số ảnh mỗi lần chạy (x1..x4) — bấm để đổi"
+                    id="imageCount"
+                    isOpen={openDropdown === "imageCount"}
+                    onToggle={() => setOpenDropdown((cur) => (cur === "imageCount" ? null : "imageCount"))}
+                    onClose={() => setOpenDropdown(null)}
+                    header="Số lượng ảnh"
+                    align="right"
+                    width="min-w-[120px]"
+                    items={imageCountItems}
+                    selectedValue={n.imageCount ?? 1}
+                    onSelect={(val) => props.onFieldChange({ imageCount: Number(val) })}
                   />
-                  <SummaryPill
-                    value={`Seed: ${n.seed ?? "random"}`}
-                    title="Seed — bấm để đổi trong Cấu hình"
-                    onClick={() => props.onOpenDrawer(n.id, "config")}
+                  <SeedDropdownPill
+                    seed={n.seed}
+                    id="seed"
+                    isOpen={openDropdown === "seed"}
+                    onToggle={() => setOpenDropdown((cur) => (cur === "seed" ? null : "seed"))}
+                    onClose={() => setOpenDropdown(null)}
+                    onChangeSeed={(val) => props.onFieldChange({ seed: val })}
+                    onOpenDrawer={() => props.onOpenDrawer(n.id, "config")}
                   />
                 </>
               )}
               {n.isItem && (
-                <SummaryPill
+                <NodeDropdownPill
                   tone="warn"
                   value={`Sản phẩm · ${ITEM_SCOPE_OPTIONS.find((o) => o.value === (n.itemScope ?? "top"))?.label ?? "Áo"}`}
-                  title="Ảnh sản phẩm lưu vào thư viện items/ — bấm để sửa"
-                  onClick={() => props.onOpenDrawer(n.id, "config")}
+                  title="Ảnh sản phẩm lưu vào thư viện items/ — bấm để đổi phạm vi"
+                  id="itemScope"
+                  isOpen={openDropdown === "itemScope"}
+                  onToggle={() => setOpenDropdown((cur) => (cur === "itemScope" ? null : "itemScope"))}
+                  onClose={() => setOpenDropdown(null)}
+                  header="Phạm vi sản phẩm"
+                  items={itemScopeItems}
+                  selectedValue={n.itemScope ?? "top"}
+                  onSelect={(val) => props.onFieldChange({ itemScope: val as ItemScope })}
                 />
               )}
             </div>
@@ -3860,28 +4062,46 @@ function CanvasNodeCard(props: {
               onExpand={() => props.onOpenPromptEditor(n.id)}
             />
 
-            {/* Summary pills: Sub-mode • Model • Tỷ lệ • Độ phân giải • Thời lượng • Số lượng
-                — giống chip tóm tắt của composer Flow; chỉnh chi tiết trong Drawer. */}
+            {/* Summary pills: Bấm mở dropdown chọn option trực tiếp thay vì mở drawer */}
             <div className="flex items-center gap-1 flex-wrap">
               {n.agentMode ? (
-                <SummaryPill
+                <NodeDropdownPill
                   tone="warn"
                   value="Tác nhân quyết định"
-                  title="Flow đang bật 'Tác nhân': composer ẩn model/tỷ lệ/độ phân giải/thời lượng/số lượng nên node chỉ gửi prompt — bấm để tắt trong Cấu hình"
-                  onClick={() => props.onOpenDrawer(n.id, "config")}
+                  title="Flow đang bật 'Tác nhân' — bấm để tắt hoặc mở Cấu hình"
+                  isOpen={openDropdown === "agent"}
+                  onToggle={() => setOpenDropdown((cur) => (cur === "agent" ? null : "agent"))}
+                  onClose={() => setOpenDropdown(null)}
+                  header="Tác nhân"
+                  items={[
+                    { value: "off", label: "Tắt Tác nhân", hint: "Tự chọn model & thông số" },
+                    { value: "drawer", label: "Mở Cấu hình", hint: "Xem trong Drawer" },
+                  ]}
+                  onSelect={(val) => {
+                    if (val === "off") props.onFieldChange({ agentMode: false });
+                    else props.onOpenDrawer(n.id, "config");
+                  }}
                 />
               ) : (
                 <>
-                  <SummaryPill
+                  <NodeDropdownPill
                     label="Sub"
                     value={
                       videoSubModeLabels[n.videoSubMode ?? "frames"] ??
                       (n.videoSubMode === "ingredients" ? "Thành phần" : "Khung hình")
                     }
-                    title="Sub-mode video: Khung hình (ảnh→video) hay Thành phần (câu lệnh→video)"
-                    onClick={() => props.onOpenDrawer(n.id, "config")}
+                    title="Sub-mode video — bấm để đổi"
+                    id="videoSubMode"
+                    isOpen={openDropdown === "videoSubMode"}
+                    onToggle={() => setOpenDropdown((cur) => (cur === "videoSubMode" ? null : "videoSubMode"))}
+                    onClose={() => setOpenDropdown(null)}
+                    header="Chế độ video"
+                    width="min-w-[180px]"
+                    items={videoSubModeItems}
+                    selectedValue={n.videoSubMode ?? "frames"}
+                    onSelect={(val) => props.onFieldChange({ videoSubMode: String(val) })}
                   />
-                  <SummaryPill
+                  <NodeDropdownPill
                     label="Model"
                     value={
                       videoModels.find((m) => m.id === (n.videoModel ?? ""))?.label ??
@@ -3891,29 +4111,100 @@ function CanvasNodeCard(props: {
                       "—"
                     }
                     title="Model video của composer Flow — bấm để đổi"
-                    onClick={() => props.onOpenDrawer(n.id, "config")}
+                    id="videoModel"
+                    isOpen={openDropdown === "videoModel"}
+                    onToggle={() => setOpenDropdown((cur) => (cur === "videoModel" ? null : "videoModel"))}
+                    onClose={() => setOpenDropdown(null)}
+                    header="Chọn Model video"
+                    width="min-w-[190px]"
+                    items={videoModelItems}
+                    selectedValue={n.videoModel ?? videoDefaultModel ?? videoModels[0]?.id}
+                    onSelect={(nextId) => {
+                      const nextModel = videoModels.find((m) => m.id === nextId);
+                      const patch: Partial<CanvasNode> = { videoModel: String(nextId) };
+                      if (nextModel) {
+                        if (!nextModel.has_resolution) {
+                          patch.resolution = nextModel.resolutions[1] ?? nextModel.resolutions[0] ?? "720p";
+                        } else if (!nextModel.resolutions.includes(n.resolution)) {
+                          patch.resolution = nextModel.resolutions[0];
+                        }
+                        if (!nextModel.has_duration) {
+                          patch.videoDurationS = nextModel.durations_s[0] ?? 8;
+                        } else if (!nextModel.durations_s.includes(n.videoDurationS ?? 8)) {
+                          patch.videoDurationS = nextModel.durations_s[0];
+                        }
+                        if (!nextModel.aspect_ratios.includes(n.videoRatio)) {
+                          patch.videoRatio = nextModel.aspect_ratios[0];
+                        }
+                      }
+                      props.onFieldChange(patch);
+                    }}
                   />
-                  <SummaryPill
+                  <NodeDropdownPill
                     value={n.videoRatio}
                     title={`Tỷ lệ video: ${n.videoRatio} — bấm để đổi`}
-                    onClick={() => props.onOpenDrawer(n.id, "config")}
+                    id="videoRatio"
+                    isOpen={openDropdown === "videoRatio"}
+                    onToggle={() => setOpenDropdown((cur) => (cur === "videoRatio" ? null : "videoRatio"))}
+                    onClose={() => setOpenDropdown(null)}
+                    header="Tỷ lệ video"
+                    items={videoRatioItems}
+                    selectedValue={n.videoRatio}
+                    onSelect={(val) => props.onFieldChange({ videoRatio: String(val) })}
                   />
-                  <SummaryPill
+                  <NodeDropdownPill
                     value={n.resolution}
-                    title={`Độ phân giải: ${n.resolution} — bấm để đổi`}
-                    onClick={() => props.onOpenDrawer(n.id, "config")}
+                    title={
+                      activeVideoModel && !activeVideoModel.has_resolution
+                        ? `Model ${activeVideoModel.label} cố định độ phân giải (${n.resolution})`
+                        : `Độ phân giải: ${n.resolution} — bấm để đổi`
+                    }
+                    id="resolution"
+                    isOpen={openDropdown === "resolution"}
+                    onToggle={() => {
+                      if (activeVideoModel && !activeVideoModel.has_resolution) return;
+                      setOpenDropdown((cur) => (cur === "resolution" ? null : "resolution"));
+                    }}
+                    onClose={() => setOpenDropdown(null)}
+                    header="Độ phân giải"
+                    items={resolutionItems}
+                    selectedValue={n.resolution}
+                    onSelect={(val) => props.onFieldChange({ resolution: String(val) })}
                   />
-                  <SummaryPill
+                  <NodeDropdownPill
                     value={`${n.videoDurationS ?? 8}s`}
-                    title="Thời lượng mỗi video — bấm để đổi"
-                    onClick={() => props.onOpenDrawer(n.id, "config")}
+                    title={
+                      activeVideoModel && !activeVideoModel.has_duration
+                        ? `Model ${activeVideoModel.label} cố định thời lượng (${n.videoDurationS ?? 8}s)`
+                        : "Thời lượng mỗi video — bấm để đổi"
+                    }
+                    id="videoDuration"
+                    isOpen={openDropdown === "videoDuration"}
+                    onToggle={() => {
+                      if (activeVideoModel && !activeVideoModel.has_duration) return;
+                      setOpenDropdown((cur) => (cur === "videoDuration" ? null : "videoDuration"));
+                    }}
+                    onClose={() => setOpenDropdown(null)}
+                    header="Thời lượng video"
+                    items={videoDurationItems}
+                    selectedValue={n.videoDurationS ?? 8}
+                    onSelect={(val) => props.onFieldChange({ videoDurationS: Number(val) })}
                   />
-                  <SummaryPill
+                  <NodeDropdownPill
                     value={`x${n.videoCount ?? 1}`}
-                    title="Số video mỗi lần chạy (x1..x4 như composer) — bấm để đổi"
-                    onClick={() => props.onOpenDrawer(n.id, "config")}
+                    title="Số video mỗi lần chạy (x1..x4) — bấm để đổi"
+                    id="videoCount"
+                    isOpen={openDropdown === "videoCount"}
+                    onToggle={() => setOpenDropdown((cur) => (cur === "videoCount" ? null : "videoCount"))}
+                    onClose={() => setOpenDropdown(null)}
+                    header="Số lượng video"
+                    align="right"
+                    width="min-w-[120px]"
+                    items={videoCountItems}
+                    selectedValue={n.videoCount ?? 1}
+                    onSelect={(val) => props.onFieldChange({ videoCount: Number(val) })}
                   />
-                  <SummaryPill
+                  <NodeDropdownPill
                     label="Frame"
                     value={
                       (n.videoSubMode ?? "frames") === "ingredients"
@@ -3922,8 +4213,19 @@ function CanvasNodeCard(props: {
                           ? (upstream.type === "last_frame" ? "Nối tiếp" : "Node Ảnh")
                           : "Auto"
                     }
-                    title="Ảnh khung nguồn — bấm để đổi trong Cấu hình"
-                    onClick={() => props.onOpenDrawer(n.id, "config")}
+                    title="Ảnh khung nguồn — bấm để chọn nguồn"
+                    id="frameSource"
+                    isOpen={openDropdown === "frameSource"}
+                    onToggle={() => {
+                      if ((n.videoSubMode ?? "frames") === "ingredients") return;
+                      setOpenDropdown((cur) => (cur === "frameSource" ? null : "frameSource"));
+                    }}
+                    onClose={() => setOpenDropdown(null)}
+                    header="Nguồn ảnh khung"
+                    width="min-w-[190px]"
+                    items={frameSourceItems}
+                    selectedValue={n.sourceImageId ?? ""}
+                    onSelect={(val) => props.onSourceChange(String(val))}
                   />
                 </>
               )}

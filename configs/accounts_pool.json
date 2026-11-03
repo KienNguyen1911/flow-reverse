@@ -20,7 +20,7 @@
       "id": "aaaaa",
       "profile_id": "aaaaa",
       "cdp_port": 4023,
-      "enabled": false
+      "enabled": true
     }
   ]
 }

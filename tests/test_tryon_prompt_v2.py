@@ -22,8 +22,14 @@ ROOT = Path(__file__).resolve().parents[1]
 SKILL = ROOT / "prompt-skills" / "try-on-image-prompter.md"
 
 #: Ngân sách mềm cho một prompt try-on. V1 (mẫu người dùng dán) dài ~7.000 ký tự sau khi điền tên
-#: món đồ; V2 phải ngắn hơn mà không mất mốc định lượng. 6.000 là trần của template chưa điền.
-TEMPLATE_MAX_CHARS = 6000
+#: món đồ; V2 xuống 5.237; V3 cắt phần diễn giải trong khối Height và đổi khối Negative dài thành
+#: `Constraints:` khẳng định ⇒ 3.391. 3.600 là trần của template chưa điền, chừa ~200 ký tự headroom
+#: cho tên món đồ mà test `test_template_fits_soft_budget` vẫn bắt được nếu ai đó nhét lại phần đã cắt.
+TEMPLATE_MAX_CHARS = 3600
+
+#: Cụm mô tả một khuôn mặt cụ thể — không được nằm trong template vì template dùng cho mọi người mẫu
+#: và Ảnh 1 đã là nguồn duy nhất. Xem §2.2.3 "Identity Lock không mô tả khuôn mặt".
+FACE_CATALOGUE = ("east asian", "high bun", "wispy", "honey-brown", "freckles", "chestnut")
 
 
 def _text() -> str:
@@ -56,7 +62,7 @@ def test_template_has_seven_modules_in_priority_order():
         "[HEIGHT & PROPORTION OPTIMIZATION]",
         "[ENVIRONMENT & LIGHTING]",
         "[PHOTOGRAPHY AESTHETICS]",
-        "Negative:",
+        "Constraints:",
     ]
     positions = []
     for marker in order:
@@ -143,7 +149,7 @@ def test_logo_rule_is_conditional_not_absolute():
 
 
 def test_negative_does_not_repeat_positive_instructions():
-    """Negative chỉ để chặn lỗi. Một ý đã nằm ở module 1–6 thì không lặp lại ở đây."""
+    """Khối chặn lỗi chỉ để chặn lỗi. Một ý đã nằm ở module 1–6 thì không lặp lại ở đây."""
     neg = _negative().lower()
     tpl = _template().lower()
     for repeated in ("no tall and slim", "no slimmer waist", "no wide-legged stance"):
@@ -154,9 +160,47 @@ def test_negative_does_not_repeat_positive_instructions():
 
 def test_negative_is_grouped_into_five_families():
     text = _text()
-    section = text.split("Negative — 5 nhóm")[-1][:2500]
+    section = text.split("Constraints — 5 nhóm")[-1][:2500]
     for group in ("1. Identity", "2. Garment", "3. Anatomy", "4. Framing", "5. Graphics"):
-        assert group in section, f"thiếu nhóm Negative {group}"
+        assert group in section, f"thiếu nhóm Constraints {group}"
+
+
+def test_constraints_report_names_the_five_groups():
+    """Phiên bản cũ của test này khớp tên mục; đổi tên mục là nó lặng lẽ pass sai lý do."""
+    tpl = _template().lower()
+    tail = tpl.split("constraints:")[-1]
+    # Mỗi nhóm phải có ít nhất một cụm đại diện trong câu Constraints thật của template.
+    for needle in (
+        "altered facial identity",
+        "garment redesign",
+        "overlapping thighs",
+        "cropped head or feet",
+        "no ui",
+    ):
+        assert needle in tail, f"Constraints thiếu '{needle}'"
+
+
+def test_template_has_no_negative_clause():
+    """Flow không có trường negative: prompt ảnh là một chuỗi duy nhất trong args `ogiZ0b`
+    (`docs/api_specs/flow_create_image.md` §3.1). Khối `Negative:` chỉ là văn xuôi thường gửi
+    tới Gemini image, và các cụm danh từ trong đó có thể làm tăng khả năng chúng xuất hiện.
+    V3 thay bằng `Constraints:` khẳng định — đừng quay lại.
+    """
+    tpl = _template()
+    assert "Negative:" not in tpl, "template còn khối Negative: — Flow không có kênh negative"
+    assert "Constraints:" in tpl
+    # Và không được dán lại danh sách cấm dạng thô của §2.3
+    assert "text, letters, words, numbers, typography" not in tpl
+
+
+def test_identity_lock_does_not_catalogue_a_face():
+    """Template dùng cho mọi người mẫu; mô tả mặt cụ thể tạo nguồn tham chiếu thứ hai
+    đối kháng với pixel của Ảnh 1 (xem §2.2.3)."""
+    tpl = _template().lower()
+    for phrase in FACE_CATALOGUE:
+        assert phrase not in tpl, f"Identity Lock còn mô tả khuôn mặt cụ thể: '{phrase}'"
+    assert "image 1 is the sole identity reference" in tpl
+    assert "do not beautify" in tpl
 
 
 # --------------------------------------------------------------------------- #
@@ -236,6 +280,8 @@ def test_template_passes_image_lint():
     result = lint_image_prompt(_template())
     assert result.ok, [w.to_dict() for w in result.warnings]
     assert not [w for w in result.warnings if w.code == "anatomy_rewrite"]
+    # Template phải nằm dưới trần ký tự, nếu không thì chính skill tự dạy agent viết prompt quá dài.
+    assert not [w for w in result.warnings if w.code == "image_prompt_too_long"]
 
 
 def test_plate_mode_does_not_swap_the_shoes():
@@ -244,3 +290,19 @@ def test_plate_mode_does_not_swap_the_shoes():
     section = text.split("**2.5.4")[-1][:1200]
     assert "elongating footwear" not in section.lower(), "còn câu positive đổi giày"
     assert "không bao giờ đổi sản phẩm" in section.lower()
+
+
+def test_linter_flags_prompt_that_grows_back_to_v1_size():
+    """Guardrail: prompt phình lại cỡ V1 (~7.000 ký tự) phải bị cảnh báo, nếu không sáu tháng nữa
+    không ai phát hiện. Đây là warn chứ không phải error — outfit nhiều món thật sự cần dài hơn."""
+    from src.Workflows.prompt_lint import IMAGE_PROMPT_MAX_CHARS
+
+    tpl = _template()
+    assert len(tpl) < IMAGE_PROMPT_MAX_CHARS
+
+    bloated = tpl + "\nAdditional styling notes: " + ("extra redundant instruction. " * 400)
+    codes = {w.code for w in lint_image_prompt(bloated).warnings}
+    assert "image_prompt_too_long" in codes
+    # ... và vẫn là warn, không chặn
+    assert lint_image_prompt(bloated).ok
+

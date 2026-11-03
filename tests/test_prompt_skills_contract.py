@@ -306,16 +306,21 @@ def test_tryon_template_has_no_leg_collapse_instructions():
             assert "no " in tpl[max(0, idx - 6):idx], f"'{bad}' xuất hiện ngoài negative"
 
 
-def test_tryon_template_negative_covers_legs_and_garment():
-    """Negative phải gom đủ 4 nhóm: UI, phối cảnh, giải phẫu, chân + garment drift."""
+def test_tryon_template_constraints_cover_legs_and_garment():
+    """Khối chặn lỗi phải gom đủ 4 nhóm: UI, phối cảnh, giải phẫu, chân + garment drift.
+
+    Đọc theo marker `constraints:` chứ không phải `negative:` — Flow không có trường negative
+    (`docs/api_specs/flow_create_image.md` §3.1), nên từ V3 khối này là câu khẳng định.
+    """
     tpl = _tryon_template().lower()
-    negative = tpl.split("negative:")[-1]
+    assert "constraints:" in tpl, "template thiếu khối Constraints"
+    tail = tpl.split("constraints:")[-1]
     for needle in (
         "overlapping thighs", "crossed legs", "legs merging",
         "high-angle", "wide-angle", "artificial body stretching",
         "garment redesign", "altered facial identity",
     ):
-        assert needle in negative, f"negative thiếu '{needle}'"
+        assert needle in tail, f"Constraints thiếu '{needle}'"
 
 
 def test_height_block_never_orders_anatomy_redraw():

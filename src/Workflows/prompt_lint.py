@@ -128,6 +128,13 @@ IMAGE_RESTATE_TERMS = (
 VIDEO_MAX_WORDS = 120
 VIDEO_MIN_WORDS = 40
 
+#: Trần ký tự cho prompt ảnh try-on. Template V3 trong skill đo được 3.451 ký tự; sau khi agent điền
+#: tên món đồ và chèn `prompt_core` của pose thì thực tế rơi vào 3.800–4.200. 4.500 là mốc để phát
+#: hiện prompt phình trở lại: bản V1 người dùng dán dài ~7.000 ký tự và phần lớn trong đó là diễn giải
+#: lặp — chính thứ đã bị cắt ở V3. Đây là **warn**, không phải error: có outfit nhiều món thật sự cần
+#: mô tả dài, và linter không đủ khôn để phân biệt.
+IMAGE_PROMPT_MAX_CHARS = 4500
+
 
 def _word_count(text: str) -> int:
     return len(text.split())
@@ -306,6 +313,14 @@ def lint_image_prompt(prompt: str) -> LintResult:
             "missing_height_block", "warn",
             "Prompt ảnh try-on thiếu khối [HEIGHT & PROPORTION OPTIMIZATION] (§2.2.2) — "
             "tỷ lệ hình thể sẽ lệch giữa các ảnh trong cùng lookbook. Chèn nguyên văn khối cố định.",
+        ))
+
+    if len(text) > IMAGE_PROMPT_MAX_CHARS:
+        warnings.append(PromptWarning(
+            "image_prompt_too_long", "warn",
+            f"Prompt {len(text)} ký tự, vượt {IMAGE_PROMPT_MAX_CHARS}. Prompt dài không làm ảnh "
+            "chính xác hơn — V1 dài ~7.000 ký tự mà vẫn lệch tỷ lệ. Cắt phần diễn giải lặp "
+            "(§2.2.2a) trước khi thêm mô tả mới.",
         ))
 
     for term in _find_affirmed_terms(text, IMAGE_ANATOMY_REWRITES):

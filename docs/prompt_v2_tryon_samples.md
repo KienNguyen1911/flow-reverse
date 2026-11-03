@@ -1,6 +1,16 @@
 # Mẫu prompt try-on V2 để test
 
+> **Trạng thái: lưu trữ — đã bị V3 thay thế.** File này giữ nguyên văn bản V2 để làm **mốc so sánh**
+> khi test A/B. Ba mẫu dưới đây vẫn chạy được, nhưng **đừng copy vào workflow**: chúng còn khối
+> `Negative:` dài và còn catalogue khuôn mặt trong `[IDENTITY LOCK]`, hai thứ V3 đã bỏ. Template
+> hiện hành nằm ở `prompt-skills/try-on-image-prompter.md` §2.2.3.
+>
+> Khác biệt khi so sánh V2 ↔ V3: template 5.237 → 3.451 ký tự (−34%); khối `Negative:` 947 ký tự →
+> `Constraints:` khẳng định; `[IDENTITY LOCK]` không còn mô tả mặt; khối Height 2.200 → 1.129 ký tự
+> nhưng **giữ đủ 7 nhóm và 3 mốc** `76%` / `50mm` / `horizon level`.
+
 Ba biến thể, cùng một bộ trang phục (áo knit lệch vai + chân váy bong bóng + tất cao cổ + sneaker).
+
 Dùng đúng thứ tự ảnh: **Ảnh 1 = model (identity)**, **Ảnh 2 = garment**, **Ảnh 3 = background** (tuỳ chọn).
 
 Sinh mỗi biến thể 2–3 lần, giữ nguyên model/thiết lập, rồi chấm theo thứ tự: identity → garment →
