@@ -1,0 +1,116 @@
+[
+  {
+    "id": "F-001",
+    "title": "Delete the unreachable AccountManagerModal",
+    "priority": 1,
+    "acceptance": [
+      "AccountManagerModal.tsx no longer exists",
+      "rg 'AccountManagerModal' web/src returns nothing",
+      "tsc and vite build still pass"
+    ],
+    "verify": "cd web && npx tsc --noEmit -p tsconfig.json && npm run build",
+    "passes": true,
+    "evidence": "git rm web/src/components/AccountManagerModal.tsx -> 758 lines deleted. `rg 'AccountManager' web/src` before deletion returned only its own declaration at :29 (zero render sites). After: npx tsc --noEmit -> exit 0; npm run build -> built in 2.05s."
+  },
+  {
+    "id": "F-002",
+    "title": "One job-watcher module; DeliveryModal and useNodeRunner stop blocking",
+    "priority": 2,
+    "acceptance": [
+      "A single module owns poll cadence, terminal transitions and cancellation",
+      "DeliveryModal uses it; its 120-iteration blocking loop is gone",
+      "useNodeRunner uses it; its for(;;) + sleep inside the click handler is gone",
+      "useDrawerJob and hooks.useJob use the same terminal set",
+      "tsc and vite build pass"
+    ],
+    "verify": "cd web && npx tsc --noEmit -p tsconfig.json && npm run build",
+    "passes": false,
+    "evidence": ""
+  },
+  {
+    "id": "F-003",
+    "title": "Split canvasNodeBits into prompt/ and node-badge/",
+    "priority": 3,
+    "acceptance": [
+      "canvasNodeBits.tsx is gone or reduced to a re-export shim",
+      "Prompt editor, preview, highlight and copy hook live in one module",
+      "OrderBadge, SummaryPill and the dropdown pills live in another",
+      "every existing import path still resolves",
+      "tsc and vite build pass"
+    ],
+    "verify": "cd web && npx tsc --noEmit -p tsconfig.json && npm run build",
+    "passes": false,
+    "evidence": ""
+  },
+  {
+    "id": "F-004",
+    "title": "One canvas node shape: CanvasNodeState derived from CanvasDrawerNode",
+    "priority": 4,
+    "acceptance": [
+      "The 40-field node shape is declared once",
+      "CanvasStats is declared once",
+      "canvas and canvas-drawer both consume the single declaration",
+      "tsc and vite build pass"
+    ],
+    "verify": "cd web && npx tsc --noEmit -p tsconfig.json && npm run build",
+    "passes": false,
+    "evidence": ""
+  },
+  {
+    "id": "F-005",
+    "title": "Extract the API catalogue out of ApiDocsPanel",
+    "priority": 5,
+    "acceptance": [
+      "Endpoint data lives in a data module, not inside the component",
+      "ApiDocsPanel renders the catalogue",
+      "the terminal-state tuple is imported, not re-declared",
+      "hardcoded BASE has one home",
+      "tsc and vite build pass"
+    ],
+    "verify": "cd web && npx tsc --noEmit -p tsconfig.json && npm run build",
+    "passes": false,
+    "evidence": ""
+  },
+  {
+    "id": "F-006",
+    "title": "Deep video-submit plan in media_service; one source of truth for options",
+    "priority": 6,
+    "acceptance": [
+      "The 6-step config derivation exists once, not three times",
+      "animate_frame, generate_text_video and generate_video all consume the plan",
+      "VIDEO_RESOLUTIONS / VIDEO_DURATIONS_S come from flow_catalog or are removed",
+      "plan has its own tests",
+      "pytest baseline unchanged"
+    ],
+    "verify": "python -m pytest tests -q && python -m pytest tests/test_media_service.py -q",
+    "passes": false,
+    "evidence": ""
+  },
+  {
+    "id": "F-007",
+    "title": "Split AutoTryOnPipeline.run into staged modules",
+    "priority": 7,
+    "acceptance": [
+      "run() is orchestration, not 590 lines of inline stages",
+      "each stage is separately callable",
+      "all 28 tests in tests/test_auto_tryon.py still pass unmodified",
+      "pytest baseline unchanged"
+    ],
+    "verify": "python -m pytest tests -q",
+    "passes": false,
+    "evidence": ""
+  },
+  {
+    "id": "F-008",
+    "title": "Full suite and build match baseline after all seven",
+    "priority": 8,
+    "acceptance": [
+      "pytest: 3 failed, 449 passed",
+      "tsc: exit 0",
+      "build: OK"
+    ],
+    "verify": "python -m pytest tests -q",
+    "passes": false,
+    "evidence": ""
+  }
+]

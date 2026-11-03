@@ -20,7 +20,12 @@ export const GROUP_COLORS = ["#7c9cff", "#4ade80", "#f59e0b", "#c084fc", "#f472b
 export const STORAGE_KEY = "fb_canvas_graph_v1";
 export const TEMPLATES_KEY = "fb_custom_templates_v1";
 
-export const TERMINAL = new Set(["succeeded", "failed", "rejected"]);
+/**
+ * Job lifecycle lives in `web/src/jobWatcher.ts` — it owns the terminal set, so this module
+ * re-exports it instead of keeping a second copy that can drift.
+ */
+export { TERMINAL_STATES, isTerminal } from "../../jobWatcher";
+
 export const ACTIVE = new Set(["queued", "running"]);
 
 /**

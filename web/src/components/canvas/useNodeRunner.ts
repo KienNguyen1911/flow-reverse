@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
+import { useCallback, useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import { api } from "../../api";
-import type { Job } from "../../types";
-import { ACTIVE, TERMINAL } from "./constants";
+import { isTerminal, waitForJob } from "../../jobWatcher";
+import { ACTIVE } from "./constants";
 import { getNodeSourceIds, isVideoContinuation, resolveSource, type SourceResult } from "./graph";
 import { buildPromptRequest, jobPatch } from "./jobs";
 import { buildRunUnits, unitMembers } from "./runPlan";
@@ -39,6 +39,17 @@ export function useNodeRunner(params: {
   const [wfBusy, setWfBusy] = useState(false);
   const [aiGeneratingId, setAiGeneratingId] = useState<string | null>(null);
   const [jitPromptEnabled, setJitPromptEnabled] = useState<boolean>(true);
+
+  //: One abort handle per in-flight node run, so a run can be cancelled (or dropped on unmount)
+  //: instead of a click handler staying pinned until the job finishes.
+  const runSignals = useRef(new Map<string, AbortController>());
+  useEffect(() => {
+    const signals = runSignals.current;
+    return () => {
+      for (const c of signals.values()) c.abort();
+      signals.clear();
+    };
+  }, []);
 
   // -- poll jobs for nodes with an active job --------------------------------- //
   const activeJobKey = nodes
@@ -95,6 +106,9 @@ export function useNodeRunner(params: {
       }
 
       patchNode(nodeId, { status: "queued", reason: null });
+      const controller = new AbortController();
+      runSignals.current.get(nodeId)?.abort();
+      runSignals.current.set(nodeId, controller);
       try {
         if (n.type === "ref") return { ok: !!n.fileUrl, fileUrl: n.fileUrl };
 
@@ -177,16 +191,15 @@ export function useNodeRunner(params: {
         patchNode(nodeId, { jobId: job_id, status: "queued" });
 
         // await terminal state
-        let final: Job | null = null;
-        for (;;) {
-          const j = await api.job(job_id);
-          if (TERMINAL.has(j.state)) {
-            final = j;
-            break;
-          }
-          patchNode(nodeId, { status: j.state === "running" ? "running" : "queued" });
-          await new Promise((r) => setTimeout(r, 1200));
-        }
+        const final = await waitForJob(job_id, {
+          intervalMs: 1200,
+          signal: controller.signal,
+          onState: (j) => {
+            if (!isTerminal(j.state)) {
+              patchNode(nodeId, { status: j.state === "running" ? "running" : "queued" });
+            }
+          },
+        });
         const patch = jobPatch(n, final);
         patchNode(nodeId, patch);
         Object.assign(n, patch);
@@ -207,6 +220,9 @@ export function useNodeRunner(params: {
         }
         return { ok, fileUrl: patch.fileUrl };
       } catch (e) {
+        // A run aborted by the caller (unmount, retry, explicit cancel) is not a failure: leave the
+        // node to whoever aborted it rather than painting an error the user did not cause.
+        if (e instanceof DOMException && e.name === "AbortError") return { ok: false };
         const errText =
           e instanceof Error ? e.message : typeof e === "object" ? JSON.stringify(e) : String(e);
         patchNode(nodeId, {
@@ -215,6 +231,8 @@ export function useNodeRunner(params: {
         });
         showToast(errText || "Lỗi khi gửi job", "err", nodeId);
         return { ok: false };
+      } finally {
+        if (runSignals.current.get(nodeId) === controller) runSignals.current.delete(nodeId);
       }
     },
     [patchNode, showToast],

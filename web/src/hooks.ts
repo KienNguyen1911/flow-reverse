@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import { useJob, useJobs } from "./jobWatcher";
 import type {
   GalleryRun,
-  Job,
   NodeMediaOptions,
   PoolInfo,
   Project,
@@ -14,7 +14,7 @@ import type {
   WorkspaceProject,
 } from "./types";
 
-const TERMINAL: ReadonlySet<string> = new Set(["succeeded", "failed", "rejected"]);
+export { useJob, useJobs } from "./jobWatcher";
 
 /** Fallback khi chưa gọi được `/api/node/options` — khớp default trong
  *  `src/Workflows/limits.py`. Chỉ là lưới an toàn cho UI, không phải nguồn chân lý. */
@@ -184,82 +184,6 @@ export function usePool(intervalMs = 4000) {
   }, [intervalMs]);
 
   return { pool, error, refresh: tick };
-}
-
-/** Poll one job until it reaches a terminal state. */
-export function useJob(activeJobId: string | null, onTerminal?: (job: Job) => void) {
-  const [job, setJob] = useState<Job | null>(null);
-  const onTerminalRef = useRef(onTerminal);
-  onTerminalRef.current = onTerminal;
-
-  useEffect(() => {
-    if (!activeJobId) return;
-    let stop = false;
-    let timer: number | undefined;
-    let fired = false;
-
-    const tick = async () => {
-      try {
-        const j = await api.job(activeJobId);
-        if (stop) return;
-        setJob(j);
-        if (TERMINAL.has(j.state)) {
-          if (timer) window.clearInterval(timer);
-          if (!fired) {
-            fired = true;
-            onTerminalRef.current?.(j);
-          }
-        }
-      } catch {
-        /* transient fetch error; keep polling */
-      }
-    };
-
-    setJob(null);
-    tick();
-    timer = window.setInterval(tick, 800);
-    return () => {
-      stop = true;
-      if (timer) window.clearInterval(timer);
-    };
-  }, [activeJobId]);
-
-  return job;
-}
-
-/** Poll list of jobs periodically. */
-export function useJobs(intervalMs = 3000) {
-  const [jobs, setJobs] = useState<Job[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const refresh = async () => {
-    try {
-      const res = await api.jobs(50);
-      setJobs(res.jobs);
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    let stop = false;
-    const run = async () => {
-      if (stop) return;
-      await refresh();
-    };
-    run();
-    const t = window.setInterval(run, intervalMs);
-    return () => {
-      stop = true;
-      window.clearInterval(t);
-    };
-  }, [intervalMs]);
-
-  return { jobs, loading, error, refresh };
 }
 
 /** Project registry. */

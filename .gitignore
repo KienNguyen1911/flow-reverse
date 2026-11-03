@@ -22,6 +22,7 @@ configs/reference_media_cache.json
 # ==== Web ===================================================================
 web/node_modules/
 web/dist/
+.test-dist/
 *.tsbuildinfo
 
 # ==== Khác ==================================================================

@@ -9,6 +9,7 @@ import {
   Info,
 } from "@phosphor-icons/react";
 import { api } from "../api";
+import { waitForJob } from "../jobWatcher";
 import type { DeliveryItemRef, DeliveryListItem } from "../types";
 import { Modal } from "./Modal";
 import { Btn, Chip, Spinner } from "./ui";
@@ -89,19 +90,12 @@ export function DeliveryModal({
         item_refs: itemsByNode,
         overwrite: true,
       });
-      // Chờ job xong — build chỉ copy + ffprobe nên thường <2s.
-      for (let i = 0; i < 120; i += 1) {
-        const job = await api.job(res.job_id);
-        if (job.state === "succeeded") {
-          setNotice(`Đã xuất: ${res.dest_dir}`);
-          setActiveSlug(res.slug);
-          break;
-        }
-        if (job.state === "failed") {
-          throw new Error(job.error || "job xuất thất bại");
-        }
-        await new Promise((r) => setTimeout(r, 400));
-      }
+      // Build chỉ copy + ffprobe nên thường <2s. `waitForJob` giữ đúng hành vi cũ (chờ tới khi
+      // xong) nhưng có timeout và không còn tự viết vòng đếm 120 lần.
+      const job = await waitForJob(res.job_id, { intervalMs: 400, timeoutMs: 60_000 });
+      if (job.state !== "succeeded") throw new Error(job.error || "job xuất thất bại");
+      setNotice(`Đã xuất: ${res.dest_dir}`);
+      setActiveSlug(res.slug);
       await refresh();
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));

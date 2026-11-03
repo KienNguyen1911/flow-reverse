@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
+import { isTerminal } from "../../jobWatcher";
 import type { Job } from "../../types";
 import type { CanvasDrawerNode } from "./types";
 
@@ -33,7 +34,10 @@ export function useDrawerJob(node: CanvasDrawerNode | null) {
 
     fetchJob();
 
-    const isRunning = node.status === "running" || node.status === "queued";
+    // `isTerminal` comes from the shared lifecycle, so the drawer stops polling on exactly the
+    // states the node runner treats as done.
+    const isRunning =
+      (node.status === "running" || node.status === "queued") && !isTerminal(job?.state);
     if (isRunning) {
       const t = window.setInterval(fetchJob, 1200);
       return () => {
@@ -44,7 +48,7 @@ export function useDrawerJob(node: CanvasDrawerNode | null) {
     return () => {
       stop = true;
     };
-  }, [node?.jobId, node?.status]);
+  }, [node?.jobId, node?.status, job?.state]);
 
   // auto scroll logs
   useEffect(() => {
