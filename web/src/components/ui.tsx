@@ -1,8 +1,16 @@
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import type { ButtonHTMLAttributes, ComponentPropsWithoutRef, ReactNode } from "react";
 import { CircleNotch, Info } from "@phosphor-icons/react";
 
-export function Panel({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <section className={`rounded-panel border border-line bg-panel ${className}`}>{children}</section>;
+export function Panel({
+  children,
+  className = "",
+  ...rest
+}: ComponentPropsWithoutRef<"section">) {
+  return (
+    <section className={`rounded-panel border border-line bg-panel ${className}`} {...rest}>
+      {children}
+    </section>
+  );
 }
 
 export type BtnVariant = "primary" | "ghost" | "solid" | "danger";
