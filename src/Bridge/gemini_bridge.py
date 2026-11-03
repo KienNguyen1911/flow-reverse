@@ -246,58 +246,66 @@ class GeminiNotebookBridge:
         self._pw = sync_playwright().start()
         try:
             self.browser = self._pw.chromium.connect_over_cdp(self.cdp_url)
+
+            # Find existing tab or navigate to notebook
+            target_page = None
+            for ctx in self.browser.contexts:
+                for p in ctx.pages:
+                    if "gemini.google.com" in p.url:
+                        target_page = p
+                        break
+                if target_page:
+                    break
+
+            if target_page is None:
+                ctx = self.browser.contexts[0] if self.browser.contexts else None
+                if not ctx:
+                    raise GeminiBridgeError("Trình duyệt không có context nào.")
+                target_page = ctx.new_page()
+                self._log("step", f"Điều hướng tới Gemini notebook: {self.notebook_url}")
+                target_page.goto(self.notebook_url, wait_until="domcontentloaded", timeout=45000)
+                time.sleep(4.0)
+            else:
+                if self.notebook_url not in target_page.url:
+                    self._log("step", f"Mở notebook: {self.notebook_url}")
+                    target_page.goto(self.notebook_url, wait_until="domcontentloaded", timeout=45000)
+                    time.sleep(3.0)
+
+            self.page = target_page
+            self.page.bring_to_front()
+            # Wait for input area to be hydrated and ready
+            try:
+                self.page.wait_for_selector("input-area-v2, div.ql-editor, rich-textarea", timeout=20000)
+                time.sleep(1.0)
+            except Exception:
+                pass
+            self._log("info", f"Đã kết nối Gemini tab: {self.page.url}")
+            return self
         except Exception as e:
-            self._stop_pw()
+            self.close()
+            if isinstance(e, GeminiBridgeError):
+                raise
             raise GeminiBridgeError(
                 f"Không thể kết nối CDP tại {self.cdp_url}. Trình duyệt đã mở chưa? ({e})"
             ) from e
-
-        # Find existing tab or navigate to notebook
-        target_page = None
-        for ctx in self.browser.contexts:
-            for p in ctx.pages:
-                if "gemini.google.com" in p.url:
-                    target_page = p
-                    break
-            if target_page:
-                break
-
-        if target_page is None:
-            ctx = self.browser.contexts[0] if self.browser.contexts else None
-            if not ctx:
-                raise GeminiBridgeError("Trình duyệt không có context nào.")
-            target_page = ctx.new_page()
-            self._log("step", f"Điều hướng tới Gemini notebook: {self.notebook_url}")
-            target_page.goto(self.notebook_url, wait_until="domcontentloaded", timeout=45000)
-            time.sleep(4.0)
-        else:
-            if self.notebook_url not in target_page.url:
-                self._log("step", f"Mở notebook: {self.notebook_url}")
-                target_page.goto(self.notebook_url, wait_until="domcontentloaded", timeout=45000)
-                time.sleep(3.0)
-
-        self.page = target_page
-        self.page.bring_to_front()
-        # Wait for input area to be hydrated and ready
-        try:
-            self.page.wait_for_selector("input-area-v2, div.ql-editor, rich-textarea", timeout=20000)
-            time.sleep(1.0)
-        except Exception:
-            pass
-        self._log("info", f"Đã kết nối Gemini tab: {self.page.url}")
-        return self
 
     def close(self) -> None:
         """Disconnect CDP cleanly without closing the browser process."""
         self._stop_pw()
 
     def _stop_pw(self) -> None:
-        if self._pw is not None:
-            try:
+        try:
+            if self._pw is not None:
                 self._pw.stop()
+        except Exception:
+            pass
+        finally:
+            self._pw = None
+            try:
+                import asyncio
+                asyncio.set_event_loop(None)
             except Exception:
                 pass
-            self._pw = None
 
     def _find_upload_button_selector(self) -> Optional[str]:
         """Locate working CSS selector for the upload / plus button."""

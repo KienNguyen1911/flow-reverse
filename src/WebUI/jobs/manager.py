@@ -141,6 +141,11 @@ class JobManager(SingleJobsMixin, NodeJobsMixin, WorkflowJobsMixin):
                 if job.state == "running":
                     job.set_state("failed")
                 self._current_id = None
+                try:
+                    import asyncio
+                    asyncio.set_event_loop(None)
+                except Exception:
+                    pass
                 if self.queue_depth() > 0:
                     time.sleep(jitter(6.0, 2.0, 2.0))
 

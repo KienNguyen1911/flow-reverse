@@ -30,13 +30,15 @@ class SessionMixin:
         self._pw = sync_playwright().start()
         try:
             self.browser = self._pw.chromium.connect_over_cdp(self.cdp_url)
-        except Exception as e:  # noqa: BLE001
-            self._stop_pw()
+            self._attach_page()
+            return self
+        except Exception as e:
+            self.close()
+            if isinstance(e, BridgeError):
+                raise
             raise BridgeError(
                 f"Không kết nối được CDP tại {self.cdp_url}. CloakBrowser đã chạy chưa? ({e})"
             ) from e
-        self._attach_page()
-        return self
 
     def _attach_page(self) -> Page:
         ctx, pg = None, None
@@ -51,15 +53,30 @@ class SessionMixin:
             if pg is not None:
                 break
         if pg is None:
-            if not self.allow_new_tab:
-                raise NoFlowTabError(
-                    "Không tìm thấy tab flow.google.com. Hãy mở flow.google.com trong CloakBrowser."
-                )
             if not self.browser.contexts:
                 raise NoFlowTabError("Browser không có context nào.")
             ctx = self.browser.contexts[0]
-            pg = ctx.new_page()
-            pg.goto(FLOW_ORIGIN, wait_until="domcontentloaded", timeout=self.page_timeout_ms)
+            candidate = None
+            for p in ctx.pages:
+                try:
+                    u = p.url
+                    if "flow.google.com" in u:
+                        pg = p
+                        break
+                    if u in ("about:blank", "chrome://newtab/"):
+                        candidate = p
+                except Exception:
+                    pass
+            if pg is None:
+                if candidate is not None:
+                    pg = candidate
+                else:
+                    if not self.allow_new_tab:
+                        raise NoFlowTabError(
+                            "Không tìm thấy tab flow.google.com. Hãy mở flow.google.com trong CloakBrowser."
+                        )
+                    pg = ctx.new_page()
+                pg.goto(FLOW_ORIGIN, wait_until="domcontentloaded", timeout=self.page_timeout_ms)
         self.context = ctx
         self.page = pg
         try:
@@ -106,7 +123,13 @@ class SessionMixin:
                 self._pw.stop()
         except Exception:  # noqa: BLE001
             pass
-        self._pw = None
+        finally:
+            self._pw = None
+            try:
+                import asyncio
+                asyncio.set_event_loop(None)
+            except Exception:
+                pass
 
     def __enter__(self) -> "FlowBridge":
         return self.open()
