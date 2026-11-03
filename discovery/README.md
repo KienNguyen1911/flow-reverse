@@ -70,7 +70,7 @@ python discovery/payload_differ.py traces/raw_trace_<A>.jsonl traces/raw_trace_<
 - Body nhị phân/protobuf → size, content-type, **offset byte khác đầu tiên**, preview ~100 bytes hex (kèm text preview nếu là UTF-8).
 - `--url-contains` thu hẹp phạm vi (nên lọc theo endpoint nhóm `batchexecute` / `api` để diff sạch); `--out` xuất report JSON đầy đủ để agent chính đọc và viết đặc tả.
 
-Sau bước 4, kết quả phân tích được chốt thành tài liệu tại `docs/api_specs/<feature>.md` kèm DTO — rồi chuyển sang Pha 4 (đóng gói module thực thi cố định trong `src/Workflows`, `src/Bridge`; **đã hoàn tất**: xem `docs/phase4_report.md` §5 và `docs/playground.md`).
+Sau bước 4, kết quả phân tích được chốt thành tài liệu tại `docs/api_specs/<feature>.md` kèm DTO — rồi chuyển sang Pha 4 (đóng gói module thực thi cố định trong `src/Workflows`, `src/Bridge`; **đã hoàn tất**: xem `docs/playground.md`).
 
 ---
 
@@ -79,7 +79,6 @@ Sau bước 4, kết quả phân tích được chốt thành tài liệu tại 
 | File | Vai trò |
 | :--- | :--- |
 | `decode_batchexecute.py` | Giải mã request/response `batchexecute` (form-encoded + chunked XSSI) từ trace JSONL → JSON pretty trong `traces/decoded/`. Dùng: `python discovery/decode_batchexecute.py traces/raw_trace_<UTC>.jsonl` |
-| `test_generate_2_images.py` | Script test bridge mode đời đầu (R2, 2 ảnh, có `--dry-run`), chạy qua CLI `browser-harness` (**legacy**). Bản production thay thế: `python -m src.Workflows.flow_client generate ...` (Playwright thuần, `src/Bridge/flow_bridge.py`) |
 
 ---
 

@@ -215,5 +215,5 @@ curl -X POST http://127.0.0.1:4000/api/batch -H "Content-Type: application/json"
 - Ảnh test UI (QA): `out/ui_shots/` — chụp lại bằng `python traces/phase4/shot_webui.py`
   và `python traces/phase4/ui_dry_run.py` (e2e dry-run qua chính UI, 0 credit).
 
-Xem thêm: `docs/phase4_report.md` (§3 bridge mode, §5 module), `docs/api_specs/flow_create_image.md`,
-`docs/api_specs/flow_image2image.md`, `docs/upgrade_plan_n_account_pool.md`.
+Xem thêm: `docs/api_specs/flow_transport.md` (bridge mode), `docs/api_specs/flow_create_image.md`,
+`docs/api_specs/flow_image2image.md`, `src/Workflows/account_pool.py` (N-account pool).

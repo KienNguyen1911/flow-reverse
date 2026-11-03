@@ -2,8 +2,8 @@
 
 Tài liệu này là **hướng dẫn thao tác**, đi kèm hai tài liệu đã có:
 
-- `docs/lookbook_hyperframes_plan.md` — plan gốc (mục tiêu, timeline, nghệ thuật).
-- `docs/lookbook_hyperframes_analysis.md` — đối chiếu source hiện tại vs plan, kèm PoC đã render.
+- `docs/hyperframes/lookbook_hyperframes_plan.md` — plan gốc (mục tiêu, timeline, nghệ thuật).
+- `docs/lookbook_pipeline.md` — hợp đồng hiện hành giữa script, Flow và HyperFrames.
 
 Lượt này **không tích hợp HyperFrames vào source**. Deliverable là 3 skill đã sửa + tài liệu này.
 Các bước dưới đây xếp theo **thứ tự phụ thuộc thật**: bước sau cần đầu ra của bước trước.

@@ -1,6 +1,6 @@
 """PoolSupervisor — wake / hibernate CloakBrowser profiles on demand (Task 1).
 
-Part of the N-account pool (docs/upgrade_plan_n_account_pool.md §4):
+Part of the N-account pool (see src/Workflows/account_pool.py):
 
     * The pool decides WHICH accounts are in the working set (N_alloc).
     * This module only knows how to bring a profile's browser UP

@@ -105,7 +105,7 @@ def trip_breaker(tmp_path: Path, account_id: str, seconds: float) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Allocation math — docs/upgrade_plan_n_account_pool.md §1.1/§1.2
+# Allocation math (threshold allocation)
 # --------------------------------------------------------------------------- #
 
 

@@ -1,6 +1,6 @@
 """FlowClient — high-level Google Flow API client + CLI (production, Python).
 
-Wraps the proven Bridge Mode (docs/phase4_report.md §3, api_specs §7.5):
+Wraps the proven Bridge Mode (docs/api_specs/flow_transport.md, flow_create_image.md §7.5):
   with FlowClient() as client:
       client.status()
       client.list_projects()                      # UpteDb   — 0 credit

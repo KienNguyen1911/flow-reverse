@@ -1,6 +1,6 @@
 """AccountPoolManager — Dynamic N-Account pool with demand-based allocation.
 
-Implements docs/upgrade_plan_n_account_pool.md (Phần 1–2, Task 3):
+Dynamic N-account pool (threshold allocation + cooldown):
 
     N_alloc(J) = min(N, M_RAM, max(1, ceil(J / Q_target)))
 

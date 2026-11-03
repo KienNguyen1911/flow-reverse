@@ -69,7 +69,7 @@ curl -X POST http://127.0.0.1:4000/api/deliveries -H "content-type: application/
   -d '{"script_path":"configs/lookbook_script.json","run_refs":[],"overwrite":true}'
 ```
 
-Tài liệu: [cẩm nang học tập reverse API](docs/reverse_api_study_guide.md) · [đặc tả protocol](docs/api_specs/) · [Node Media API](docs/api_specs/node_media_api.md) · [hướng dẫn playground](docs/playground.md) · [báo cáo tổng hợp](docs/phase4_report.md) · [pipeline lookbook → HyperFrames](docs/lookbook_pipeline.md)
+Tài liệu: [cẩm nang học tập reverse API](docs/reverse_api_study_guide.md) · [đặc tả protocol](docs/api_specs/) · [Node Media API](docs/api_specs/node_media_api.md) · [hướng dẫn playground](docs/playground.md) · [pipeline lookbook → HyperFrames](docs/lookbook_pipeline.md)
 
 ## 5. Miễn trừ trách nhiệm
 

@@ -203,8 +203,7 @@ python discovery/payload_differ.py traces/raw_trace_<A>.jsonl traces/raw_trace_<
 
 - Điều khiển UI bằng LLM trong pha khám phá cần `browser-use` (tuỳ chọn): `python -m pip install browser-use`,
   attach vào CDP `http://127.0.0.1:4022`. **Không** đưa vào vòng lặp production (AGENTS.md mục 1).
-- Chi tiết quy trình: `discovery/README.md`. Script `discovery/test_generate_2_images.py` là bản legacy
-  (dùng browser-harness) — không cần cài để vận hành.
+- Chi tiết quy trình: `discovery/README.md`. Các script one-off đời đầu (browser-harness) đã gỡ khỏi repo.
 
 ## 11. Xử lý sự cố
 

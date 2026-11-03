@@ -266,7 +266,7 @@ Sau khi nhấn nút sinh ảnh, trình duyệt gửi thêm một request tới R
 
 ## 6. Giai Đoạn 4: Chuỗi Thí Nghiệm & Báo Cáo Thực Nghiệm Vượt Rào (E0 → E8, R1 → R2, jHPbke)
 
-Chuỗi thí nghiệm ghi lại toàn bộ hành trình thử nghiệm thực tế từ [`docs/phase4_report.md`](file:///D:/Dev/rev-flow/docs/phase4_report.md):
+Chuỗi thí nghiệm ghi lại toàn bộ hành trình thử nghiệm thực tế (báo cáo Phase 4 gốc đã gỡ khỏi repo, xem git history):
 
 ```text
 E0 (ngNC2 Replay)      ──▶ Khắc phục lỗi Double-Encoding URL của token XSRF 'at'
@@ -557,7 +557,7 @@ def build_args_from_template(
 ```
 
 ### 8.2. Kiến trúc Cụm N-Account Pool Co Giãn ([`src/Workflows/account_pool.py`](file:///D:/Dev/rev-flow/src/Workflows/account_pool.py))
-Tham khảo tài liệu thiết kế tại [`docs/upgrade_plan_n_account_pool.md`](file:///D:/Dev/rev-flow/docs/upgrade_plan_n_account_pool.md).
+Mã nguồn tại [`src/Workflows/account_pool.py`](file:///D:/Dev/rev-flow/src/Workflows/account_pool.py).
 
 Khi sản xuất số lượng lớn (ví dụ storyboard 100 ảnh), việc mở đồng loạt tất cả trình duyệt sẽ gây tràn RAM (mỗi browser chiếm ~500 MB). Hệ thống áp dụng công thức cấp phát theo nhu cầu thực tế:
 
@@ -667,8 +667,6 @@ Bản đồ liên kết trực tiếp tới các module và tài liệu trong kh
 - [`docs/api_specs/flow_create_image.md`](file:///D:/Dev/rev-flow/docs/api_specs/flow_create_image.md) — Toàn văn đặc tả RPC sinh ảnh `ogiZ0b`, phân tích diff 2 run và các quy tắc bắt buộc.
 - [`docs/api_specs/flow_create_project.md`](file:///D:/Dev/rev-flow/docs/api_specs/flow_create_project.md) — Đặc tả RPC tạo dự án `jHPbke` và đọc dự án `UpteDb`.
 - [`docs/api_specs/flow_image2image.md`](file:///D:/Dev/rev-flow/docs/api_specs/flow_image2image.md) — Thiết kế cơ chế i2i Template-Replay không cần đảo ngược RPC upload.
-- [`docs/phase4_report.md`](file:///D:/Dev/rev-flow/docs/phase4_report.md) — Báo cáo nhật ký thực nghiệm chi tiết các mốc E0 → E8 và R1/R2.
-- [`docs/upgrade_plan_n_account_pool.md`](file:///D:/Dev/rev-flow/docs/upgrade_plan_n_account_pool.md) — Kế hoạch kiến trúc cụm N tài khoản và công thức toán học cấp phát tài nguyên.
 - [`docs/playground.md`](file:///D:/Dev/rev-flow/docs/playground.md) — Hướng dẫn vận hành Web UI playground (Flow Bench).
 
 ### Công Cụ Khám Phá (Discovery Tools)

@@ -290,7 +290,7 @@ args = [None, [spec], 1, ref, [gen]]           # u1,u2,gen = UUID4 .upper()
 
 ### 7.5.5. Real run đầu tiên bằng test script (2026-10-18 tối)
 
-Script `discovery/test_generate_2_images.py` (bridge mode + retry type + `--dry-run`):
+Script test đời đầu (bridge mode + retry type + `--dry-run`, đã gỡ khỏi repo — xem git history):
 
 - Dry-run 2/2 PASS (0 credit).
 - **R1 (18:49):** seed `2905577744` > 2³¹ → **REJECT `[3]` INVALID_ARGUMENT** (0 credit) → phát hiện constraint int32 của seed (bảng §7.5.2 #14).
@@ -303,7 +303,7 @@ Script `discovery/test_generate_2_images.py` (bridge mode + retry type + `--dry-
 
 > **Production (kế tiếp R2):** quy trình này đã được port sang module Python thuần
 > (`src/Bridge/flow_bridge.py` + `src/Workflows/flow_client.py`, không dùng browser-harness/browser-use)
-> và playground web Flow Bench. Xem `docs/phase4_report.md` §5 và `docs/playground.md`.
+> và playground web Flow Bench. Xem `docs/playground.md`.
 
 ## 8. Câu hỏi mở (Phase 4)
 

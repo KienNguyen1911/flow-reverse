@@ -22,7 +22,7 @@ Serves:
   /                      the built playground UI (web/dist)
 
 Browsers are woken on demand by the pool (AccountPoolManager) — the server
-never launches all profiles at startup (plan docs/upgrade_plan_n_account_pool.md).
+never launches all profiles at startup (see src/Workflows/account_pool.py).
 """
 
 from __future__ import annotations
