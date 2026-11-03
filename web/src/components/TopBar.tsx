@@ -1,19 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { CaretDown, FloppyDisk, FolderSimple, Gear, Play, Plus, Sparkle, Trash, X } from "@phosphor-icons/react";
 import { Chip, Spinner } from "./ui";
+import type { CanvasStats } from "./canvas/types";
 
-export interface CanvasStats {
-  imageCount: number;
-  videoCount: number;
-  lastFrameCount: number;
-  nRunning: number;
-  nDone: number;
-  nPending: number;
-  groupCount: number;
-  selectedCount: number;
-  wfBusy: boolean;
-  linking: boolean;
-}
+/** Re-exported so existing `import { CanvasStats } from "./TopBar"` keeps working. */
+export type { CanvasStats };
 
 export function TopBar({
   onLoadTemplate,

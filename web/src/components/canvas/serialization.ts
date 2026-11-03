@@ -136,6 +136,9 @@ export function canvasStateToGraph(state?: WorkspaceCanvasState | null): {
       agentSkillId: optionalStr(r.agentSkillId),
       agentCustomHint: optionalStr(r.agentCustomHint),
       clipId: optionalStr(r.clipId),
+      // `runId` is what the delivery export joins clip → file on (CanvasPanel reads it off
+      // `lb_video_*`). It used to be dropped here, so a reload silently emptied the export.
+      runId: optionalStr(r.runId),
       isItem: typeof r.isItem === "boolean" ? r.isItem : false,
       itemName: optionalStr(r.itemName),
       itemScope: ITEM_SCOPES.includes(String(r.itemScope) as ItemScope)

@@ -38,9 +38,9 @@
       "every existing import path still resolves",
       "tsc and vite build pass"
     ],
-    "verify": "cd web && npx tsc --noEmit -p tsconfig.json && npm run build",
-    "passes": false,
-    "evidence": ""
+    "verify": "cd web && npm run typecheck && npm run build",
+    "passes": true,
+    "evidence": "canvasNodeBits.tsx deleted. Prompt block (lines 333-end, 10774 bytes) and badge block (14-332, 9999 bytes) verified byte-identical to `git show HEAD:...` by substring match. All 7 call sites updated (CanvasOverlays, CanvasPanel, ConfigTab, ImageNodeBody, CanvasNodeCard, UpstreamSources, VideoNodeBody); `rg canvasNodeBits web/src` -> none. tsc exit 0; vite build built in 1.47s; npm test 13 pass."
   },
   {
     "id": "F-004",
