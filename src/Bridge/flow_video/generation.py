@@ -19,7 +19,7 @@ from ..flow_bridge import (
     new_seed,
     parse_batchexecute_text,
 )
-from .constants import VIDEO_MODEL_KEY, VIDEO_SUBMIT_RPC, VIDEO_TEXT_SUBMIT_RPC
+from .constants import VIDEO_MODEL_KEY, VIDEO_SUBMIT_RPC, VIDEO_TEXT_SUBMIT_RPC, VIDEO_INGREDIENTS_SUBMIT_RPC
 from .media_tools import strip_video_audio
 from .parsing import (
     extract_starting_frame_from_eb1hjf_args,
@@ -371,14 +371,18 @@ class VideoGenerationMixin:
                     offer_duration=offer_duration,
                 )
 
-                # Attach ingredient reference images if provided
-                if actual_ref_paths:
-                    self.attach_video_ingredients(br, actual_ref_paths, settle_s=3.0)
-                else:
-                    br.clear_reference_chips()
+                # 1. Clear previous reference chips
+                br.clear_reference_chips()
 
+                # 2. Type prompt into composer first (before chips, so selectAll never touches chips)
                 br._eval("window.__videoHook.cap = null; window.__blockVideoGen = true;")
                 br.type_prompt(clean_prompt)
+                time.sleep(jitter(0.4, 0.1, 0.2))
+
+                # 3. Attach ingredient reference images if provided
+                if actual_ref_paths:
+                    self.attach_video_ingredients(br, actual_ref_paths, settle_s=3.0)
+
                 time.sleep(jitter(0.4, 0.1, 0.2))
                 br.click_generate(timeout_s=15.0, expected_mode="video")
 
@@ -387,10 +391,10 @@ class VideoGenerationMixin:
                     self.disarm_video_hook(br)
                     app_reqid = extract_app_reqid(cap["url"])
                     token, at_param, app_args, cap_rpcid = parse_video_app_capture(cap["body"])
-                    if cap_rpcid not in (VIDEO_TEXT_SUBMIT_RPC, VIDEO_SUBMIT_RPC):
+                    if cap_rpcid not in (VIDEO_TEXT_SUBMIT_RPC, VIDEO_SUBMIT_RPC, VIDEO_INGREDIENTS_SUBMIT_RPC):
                         br.reload(settle_s=4.0)
                         raise BridgeError(
-                            f"Request mồi là {cap_rpcid} thay vì {VIDEO_TEXT_SUBMIT_RPC} "
+                            f"Request mồi là {cap_rpcid} thay vì {VIDEO_TEXT_SUBMIT_RPC}/{VIDEO_INGREDIENTS_SUBMIT_RPC} "
                             "(composer không ở sub-mode 'Thành phần') — hủy submit."
                         )
                 except (TokenParseError, CaptureTimeoutError) as cap_err:
@@ -417,16 +421,31 @@ class VideoGenerationMixin:
                             eff_model_key = f"{eff_model_key}_360p"
 
                         aspect_val = 1 if "9:16" in target_aspect else 2
+                        is_ingredients_spec = (
+                            cap_rpcid == VIDEO_INGREDIENTS_SUBMIT_RPC
+                            or (len(base_spec) > 1 and isinstance(base_spec[1], list))
+                        )
                         for i in range(max(1, int(count))):
                             s = copy.deepcopy(base_spec)
                             if len(s) > 0 and isinstance(s[0], list):
                                 s[0] = [None, None, [[[clean_prompt]]]]
-                            if len(s) > 1:
-                                s[1] = eff_model_key
-                            if len(s) > 2:
-                                s[2] = int(aspect_val)
-                            if len(s) > 3:
-                                s[3] = int(seed_to_use) if i == 0 else new_seed()
+                            if is_ingredients_spec:
+                                # MZZa6b: s[0]=prompt, s[1]=ingredients list, s[2]=model_key, s[3]=aspect, s[4]=seed, s[5]=uuid_slot
+                                r2v_model_key = eff_model_key.replace("abra_t2v", "abra_r2v") if "abra_t2v" in eff_model_key else eff_model_key
+                                if len(s) > 2:
+                                    s[2] = r2v_model_key
+                                if len(s) > 3:
+                                    s[3] = int(aspect_val)
+                                if len(s) > 4 and s[4] is not None:
+                                    s[4] = int(seed_to_use) if i == 0 else new_seed()
+                            else:
+                                # YhhmEf: s[0]=prompt, s[1]=model_key, s[2]=aspect, s[3]=seed, s[4]=uuid_slot
+                                if len(s) > 1:
+                                    s[1] = eff_model_key
+                                if len(s) > 2:
+                                    s[2] = int(aspect_val)
+                                if len(s) > 3:
+                                    s[3] = int(seed_to_use) if i == 0 else new_seed()
                             uuid_idx = None
                             for idx in range(len(s) - 1, 3, -1):
                                 slot = s[idx]
@@ -434,9 +453,9 @@ class VideoGenerationMixin:
                                     if slot[0] is None and slot[1] is None and slot[2] is None and slot[3] is None:
                                         uuid_idx = idx
                                         break
-                            if uuid_idx is None and len(s) > 4 and isinstance(s[4], list) and len(s[4]) >= 6:
-                                uuid_idx = 4
-                            if uuid_idx is not None:
+                            if uuid_idx is None:
+                                uuid_idx = 5 if is_ingredients_spec else 4
+                            if uuid_idx < len(s) and isinstance(s[uuid_idx], list) and len(s[uuid_idx]) >= 6:
                                 s[uuid_idx][4] = u1 if i == 0 else str(uuid.uuid4()).upper()
                                 s[uuid_idx][5] = u2 if i == 0 else str(uuid.uuid4()).upper()
                             specs.append(s)
@@ -480,7 +499,7 @@ class VideoGenerationMixin:
                         resolution=capture_resolution,
                     )
 
-                submit_rpc = cap_rpcid if cap_rpcid in (VIDEO_TEXT_SUBMIT_RPC, VIDEO_SUBMIT_RPC) else VIDEO_TEXT_SUBMIT_RPC
+                submit_rpc = cap_rpcid if cap_rpcid in (VIDEO_TEXT_SUBMIT_RPC, VIDEO_SUBMIT_RPC, VIDEO_INGREDIENTS_SUBMIT_RPC) else (VIDEO_INGREDIENTS_SUBMIT_RPC if actual_ref_paths else VIDEO_TEXT_SUBMIT_RPC)
                 our_body = encode_video_batchexecute_form(submit_rpc, our_args, at_param)
                 new_reqid = (app_reqid + 100000) if app_reqid is not None else 990001
                 fire_url = build_rpc_url_from_template(cap["url"], submit_rpc, new_reqid)

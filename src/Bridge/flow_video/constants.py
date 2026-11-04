@@ -15,6 +15,7 @@ VIDEO_SUBMIT_RPC = "eb1hJf"
 #: Text→video submit RPC, used by the composer's "Thành phần" (ingredients) sub-mode.
 #: Captured 0-credit 2026-11-03: traces/submit_bodies/t2v_omni_8s_720p_summary.json.
 VIDEO_TEXT_SUBMIT_RPC = "YhhmEf"
+VIDEO_INGREDIENTS_SUBMIT_RPC = "MZZa6b"
 VIDEO_UPSAMPLE_RPC = "p0UkFb"
 VIDEO_POLL_RPC = "jwpduf"
 VIDEO_MEDIA_URL_RPC = "as29s"

@@ -61,6 +61,7 @@ def build_context(
     )
     manager = JobManager(pool=pool, store=store, out_root=out_root)
     manager.asset_meta = asset_meta
+    manager.workspace = workspace
 
     # One-time migration: with no workspace project, create the default one and
     # claim every pre-existing asset so no upload/output is lost.

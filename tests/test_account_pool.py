@@ -380,3 +380,27 @@ def test_remove_account(tmp_path):
     assert res["ok"] is True
     assert [a.id for a in pool.accounts] == ["acc_02"]
 
+
+def test_acquire_single_preferred_account(tmp_path):
+    pool = make_pool(tmp_path, n_accounts=3)
+
+    # 1. Preferred account available -> picks preferred
+    acc = pool.acquire_single(preferred_account_id="acc_02")
+    assert acc.config.id == "acc_02"
+
+    # 2. Preferred account disabled -> fallback to wear-leveling (acc_01 or acc_03)
+    pool.update_account("acc_02", enabled=False)
+    acc2 = pool.acquire_single(preferred_account_id="acc_02")
+    assert acc2.config.id in ("acc_01", "acc_03")
+
+    # 3. Preferred account on cooldown -> fallback to available
+    pool.update_account("acc_02", enabled=True)
+    pool._breaker("acc_02").trip(600.0, "test rate-limit")
+    assert pool.cooldown_remaining_s("acc_02") > 0
+    acc3 = pool.acquire_single(preferred_account_id="acc_02")
+    assert acc3.config.id in ("acc_01", "acc_03")
+
+    # 4. Preferred is None -> wear-leveling
+    acc4 = pool.acquire_single(preferred_account_id=None)
+    assert acc4.config.id in ("acc_01", "acc_03")
+

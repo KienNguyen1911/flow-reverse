@@ -407,6 +407,7 @@ export interface NodeImageRequest {
   reference_image_paths?: string[];
   project_id?: string | null;
   workspace_project_id?: string | null;
+  preferred_account_id?: string | null;
   /** Ảnh này là ảnh sản phẩm ⇒ chép vào thư viện `items/` của project sau khi sinh. */
   is_item?: boolean;
   /** Tên món để đặt tên file (bỏ dấu, thường hoá). */
@@ -438,6 +439,7 @@ export interface NodeVideoRequest {
   duration_s?: number;
   project_id?: string | null;
   workspace_project_id?: string | null;
+  preferred_account_id?: string | null;
   dry_run?: boolean;
   remove_watermark?: boolean;
   confirm?: boolean;
@@ -737,6 +739,7 @@ export interface WorkspaceProject {
   createdAt: number;
   updatedAt: number;
   canvasState: WorkspaceCanvasState;
+  flowProjects?: Record<string, string>;
   nodeCount?: number;
   assetCount?: number;
 }

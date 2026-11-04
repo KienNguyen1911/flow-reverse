@@ -90,7 +90,11 @@ export function useNodeRunner(params: {
 
   // -- run one node (submit + await terminal) --------------------------------- //
   const runNodeNow = useCallback(
-    async (nodeId: string, dry: boolean): Promise<{ ok: boolean; fileUrl?: string | null }> => {
+    async (
+      nodeId: string,
+      dry: boolean,
+      opts?: { preferredAccountId?: string | null },
+    ): Promise<{ ok: boolean; fileUrl?: string | null; accountId?: string | null }> => {
       const n = nodesRef.current.find((x) => x.id === nodeId);
       if (!n) return { ok: false };
 
@@ -132,6 +136,7 @@ export function useNodeRunner(params: {
             reference_image_paths: srcRes.urls,
             project_id: undefined,
             workspace_project_id: params.workspaceProjectId ?? null,
+            preferred_account_id: opts?.preferredAccountId ?? null,
             // Server chép ảnh vào `out/items/<project>/` ngay sau khi sinh xong — không
             // phải đợi tới lúc xuất bộ dựng phim mới copy tay.
             is_item: !!n.isItem,
@@ -164,6 +169,7 @@ export function useNodeRunner(params: {
             duration_s: n.videoDurationS ?? 8,
             project_id: undefined,
             workspace_project_id: params.workspaceProjectId ?? null,
+            preferred_account_id: opts?.preferredAccountId ?? null,
             dry_run: dry,
             confirm: !dry,
           });
@@ -204,6 +210,7 @@ export function useNodeRunner(params: {
           nodesRef.current = nodesRef.current.map((x) => (x.id === nodeId ? { ...x, ...patch } : x));
         }
         const ok = final.state === "succeeded";
+        const accountId = (final.result as any)?.account_id as string | undefined;
         if (ok && !dry) {
           params.onAssetGenerated?.();
         } else if (!ok && !dry) {
@@ -215,7 +222,7 @@ export function useNodeRunner(params: {
             nodeId,
           );
         }
-        return { ok, fileUrl: patch.fileUrl };
+        return { ok, fileUrl: patch.fileUrl, accountId };
       } catch (e) {
         // A run aborted by the caller (unmount, retry, explicit cancel) is not a failure: leave the
         // node to whoever aborted it rather than painting an error the user did not cause.
@@ -304,6 +311,7 @@ export function useNodeRunner(params: {
             showToast(`▶ Bắt đầu ${unit.name} (${members.length} node)`, "info", members[0].id);
           }
 
+          let unitAccountId: string | null = null;
           let unitFailed = false;
           for (const item of members) {
             const n = nodesRef.current.find((x) => x.id === item.id) || item;
@@ -355,8 +363,11 @@ export function useNodeRunner(params: {
               }
             }
 
-            const r = await runNodeNow(n.id, dry);
+            const r = await runNodeNow(n.id, dry, { preferredAccountId: unitAccountId });
             srcOk.set(n.id, r.ok);
+            if (r.ok && r.accountId && !unitAccountId) {
+              unitAccountId = r.accountId;
+            }
             if (!r.ok && !dry) {
               unitFailed = true;
               aborted.push(unit.name);

@@ -50,6 +50,7 @@ class NodeImageBody(BaseModel):
     reference_image_paths: Optional[list[str]] = None
     project_id: Optional[str] = None
     workspace_project_id: Optional[str] = None
+    preferred_account_id: Optional[str] = None
     #: Đánh dấu ảnh này là **ảnh sản phẩm** ⇒ chép vào `out/items/<project_id>/` sau khi
     #: sinh xong. Độc lập với kịch bản: người bán có nhiều món, dùng lại cho nhiều bộ phim.
     is_item: bool = False
@@ -90,6 +91,7 @@ class NodeVideoBody(BaseModel):
     duration_s: int = 8
     project_id: Optional[str] = None
     workspace_project_id: Optional[str] = None
+    preferred_account_id: Optional[str] = None
     dry_run: bool = False
     remove_watermark: bool = True
     confirm: bool = False
@@ -155,6 +157,7 @@ def build_router(ctx: AppContext) -> APIRouter:
             "reference_image_paths": all_refs if all_refs else None,
             "project_id": body.project_id,
             "workspace_project_id": body.workspace_project_id,
+            "preferred_account_id": body.preferred_account_id,
             "is_item": body.is_item,
             "item_name": body.item_name,
             "dry_run": body.dry_run,
@@ -235,6 +238,7 @@ def build_router(ctx: AppContext) -> APIRouter:
             "agent_mode": body.agent_mode,
             "project_id": body.project_id,
             "workspace_project_id": body.workspace_project_id,
+            "preferred_account_id": body.preferred_account_id,
             "dry_run": body.dry_run,
             "remove_watermark": body.remove_watermark,
         })

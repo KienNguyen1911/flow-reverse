@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import time
 from pathlib import Path
+from typing import Optional
 
 from .common import PageInteractionError, jitter
 
@@ -56,14 +57,16 @@ class ReferenceMixin:
     # "N%" upload counter, call maseQ (upload) and finally swap the chip to a
     # signed flow-content.google image with aria-busy="false".
     _CHIP_STATE_JS = (
-        "(() => { const chips = Array.from(document.querySelectorAll('flow-image-ingredient-chip')); "
+        "(() => { const chips = Array.from(document.querySelectorAll('flow-image-ingredient-chip, flow-ingredient-chip, .reference-ingredient-chip')); "
         "const last = chips.length ? chips[chips.length - 1] : null; "
         "const btn = last ? last.querySelector('button') : null; "
         "const img = last ? last.querySelector('img') : null; "
         "const txt = last ? String(last.innerText || '') : ''; "
         "const m = txt.match(/(\\d{1,3})\\s?%/); "
+        "const src = img ? String(img.src || img.currentSrc || '') : ''; "
+        "const mid = src.match(/flow-content\\.google\\/image\\/([0-9a-fA-F-]{36})/) ? RegExp.$1 : null; "
         "return {chips: chips.length, busy: btn ? btn.getAttribute('aria-busy') === 'true' : null, "
-        "src: img ? String(img.src || '').slice(0, 24) : '', pct: m ? parseInt(m[1], 10) : null}; })()"
+        "src: src.slice(0, 80), mediaId: mid, pct: m ? parseInt(m[1], 10) : null}; })()"
     )
 
     _PASTE_JS = (
@@ -81,7 +84,8 @@ class ReferenceMixin:
             if not int(st.get("chips") or 0):
                 return 0
             btn = self.page.query_selector(
-                "flow-image-ingredient-chip .hover-icon-overlay, flow-image-ingredient-chip button"
+                "flow-image-ingredient-chip .hover-icon-overlay, flow-image-ingredient-chip button, "
+                "flow-ingredient-chip button, .reference-ingredient-chip button, button[aria-label='Thành phần']"
             )
             if not btn:
                 break
@@ -93,12 +97,90 @@ class ReferenceMixin:
         st = self.eval_json(self._CHIP_STATE_JS) or {}
         return int(st.get("chips") or 0)
 
+    def get_last_uploaded_media_id(self, project_id: Optional[str] = None) -> Optional[str]:
+        """Extract media_id of the most recently uploaded image (from DOM chips or RPC Zzl0ze)."""
+        js_probe = (
+            "(() => { "
+            "  const chips = Array.from(document.querySelectorAll('flow-image-ingredient-chip, flow-ingredient-chip, .reference-ingredient-chip')); "
+            "  for (let i = chips.length - 1; i >= 0; i--) { "
+            "    const img = chips[i].querySelector('img'); "
+            "    const src = img ? String(img.src || img.currentSrc || '') : ''; "
+            "    const m = src.match(/flow-content\\.google\\/image\\/([0-9a-fA-F-]{36})/); "
+            "    if (m) return m[1]; "
+            "  } "
+            "  const anyImgs = Array.from(document.querySelectorAll('img.chip-image, img[src*=\"flow-content.google/image/\"]')); "
+            "  for (let i = anyImgs.length - 1; i >= 0; i--) { "
+            "    const m = (anyImgs[i].src || '').match(/flow-content\\.google\\/image\\/([0-9a-fA-F-]{36})/); "
+            "    if (m) return m[1]; "
+            "  } "
+            "  return null; "
+            "})()"
+        )
+        mid = self._eval(js_probe, retries=2)
+        if isinstance(mid, str) and len(mid) == 36:
+            return mid
+
+        if project_id:
+            try:
+                from .protocol import build_rpc_url_from_template, parse_batchexecute_text
+                from ..flow_video.payload import encode_video_batchexecute_form
+                from ..flow_video.parsing import extract_media_records
+
+                ctx = self.session_ctx(timeout_s=5.0)
+                url_z = build_rpc_url_from_template(ctx.url_template, "Zzl0ze", ctx.reqid + 260000)
+                args_z = [f"projects/{project_id.strip().lower()}", None, None, None, [1]]
+                body_z = encode_video_batchexecute_form("Zzl0ze", args_z, ctx.at)
+                fr = self.fire(url_z, body_z, timeout_s=15.0, poll_s=0.5)
+                parsed = parse_batchexecute_text(fr.text)
+                if parsed.get("ok"):
+                    records = extract_media_records(parsed.get("data"), project_id=project_id)
+                    if records:
+                        return str(records[0][0])
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"Zzl0ze fallback lấy media_id thất bại: {exc}")
+        return None
+
+    def rename_media_rpc(self, project_id: str, media_id: str, new_name: str) -> bool:
+        """Rename a media item via RPC mYWVGd, with UI fallback if RPC fails."""
+        if not project_id or not media_id or not new_name:
+            return False
+
+        try:
+            from .protocol import build_rpc_url_from_template, parse_batchexecute_text
+            from ..flow_video.payload import encode_video_batchexecute_form
+
+            ctx = self.session_ctx(timeout_s=5.0)
+            url = build_rpc_url_from_template(ctx.url_template, "mYWVGd", ctx.reqid + 320000)
+            args = [[media_id, None, None, [new_name], project_id], [["metadata.display_name"]]]
+            body = encode_video_batchexecute_form("mYWVGd", args, ctx.at)
+            fr = self.fire(url, body, timeout_s=15.0, poll_s=0.4)
+            parsed = parse_batchexecute_text(fr.text)
+            if parsed.get("ok"):
+                self._log(f"RPC mYWVGd đã đổi tên media [{media_id[:8]}...] thành '{new_name}'")
+                return True
+            self._log(f"RPC mYWVGd trả về không ok ({parsed.get('reason')}), thử fallback UI...")
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"RPC mYWVGd thất bại ({exc}), thử fallback UI...")
+
+        try:
+            return self._rename_media_ui_fallback(media_id, new_name)
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"UI rename fallback thất bại: {exc}")
+            return False
+
+    def _rename_media_ui_fallback(self, media_id: str, new_name: str) -> bool:
+        """Fallback UI rename — no-op to prevent accidentally renaming the Project."""
+        self._log(f"Bỏ qua fallback UI rename cho media {media_id[:8]}... (tránh chạm vào menu Project)")
+        return False
+
     def attach_reference_paste(
         self,
         file_path: str | Path,
         timeout_s: float = 90.0,
         settle_s: float = 3.0,
         clear_existing: bool = True,
+        project_id: Optional[str] = None,
+        filename: Optional[str] = None,
     ) -> dict:
         """Upload a reference image via synthetic paste, wait until upload is 100% done, then +settle_s.
 
@@ -112,13 +194,15 @@ class ReferenceMixin:
         before = int((self.eval_json(self._CHIP_STATE_JS) or {}).get("chips") or 0)
         mime = {".png": "image/png", ".webp": "image/webp"}.get(path.suffix.lower(), "image/jpeg")
         b64 = base64.b64encode(path.read_bytes()).decode("ascii")
-        self.page.evaluate(self._PASTE_JS, [b64, path.name, mime])
-        self._log(f"paste reference {path.name} -> composer (chips before={before}, left={left})")
+        upload_name = filename or path.name
+        self.page.evaluate(self._PASTE_JS, [b64, upload_name, mime])
+        self._log(f"paste reference {upload_name} -> composer (chips before={before}, left={left})")
 
         t0 = time.time()
         seen_pct = -1
         seen_chip = False
         done = False
+        st: dict = {}
         while time.time() - t0 < timeout_s:
             st = self.eval_json(self._CHIP_STATE_JS) or {}
             chips = int(st.get("chips") or 0)
@@ -146,14 +230,23 @@ class ReferenceMixin:
         self._log(f"upload xong sau {time.time() - t0:.1f}s (max {seen_pct}%) — chờ thêm {settle_s:.0f}s rồi gửi prompt")
         if settle_s > 0:
             time.sleep(settle_s)
-        return {"input_index": -1, "accept": "paste", "preview_seen": True, "inputs": [], "method": "paste",
-                "upload_s": round(time.time() - t0, 1)}
+        mid = st.get("mediaId") or self.get_last_uploaded_media_id(project_id=project_id)
+        return {
+            "input_index": -1,
+            "accept": "paste",
+            "preview_seen": True,
+            "inputs": [],
+            "method": "paste",
+            "upload_s": round(time.time() - t0, 1),
+            "media_id": mid,
+        }
 
     def attach_reference_pastes(
         self,
         file_paths: list[str | Path],
         timeout_per_file_s: float = 90.0,
         settle_s: float = 3.0,
+        project_id: Optional[str] = None,
     ) -> list[dict]:
         """Upload multiple reference images via paste sequentially and wait for all to settle."""
         valid_paths = [Path(p) for p in file_paths if Path(p).is_file()]
@@ -167,13 +260,14 @@ class ReferenceMixin:
                 timeout_s=timeout_per_file_s,
                 settle_s=0.5,
                 clear_existing=False,
+                project_id=project_id,
             )
             results.append(info)
         if settle_s > 0:
             time.sleep(settle_s)
         return results
 
-    def attach_reference(self, file_path: str | Path, timeout_s: float = 20.0) -> dict:
+    def attach_reference(self, file_path: str | Path, timeout_s: float = 20.0, project_id: Optional[str] = None) -> dict:
         """Attach a local image to the composer via the app's own file input.
 
         Returns probe info; raises PageInteractionError when no file input
@@ -185,7 +279,7 @@ class ReferenceMixin:
         infos = self.list_file_inputs()
         if not infos:
             # Flow's composer has no file input (observed): use the paste upload path.
-            return self.attach_reference_paste(path)
+            return self.attach_reference_paste(path, project_id=project_id)
         pick = next((x for x in infos if "image" in str(x.get("accept") or "").lower()), infos[0])
         handles = self.page.query_selector_all("input[type=file]")
         idx = int(pick.get("i") or 0)
@@ -205,4 +299,5 @@ class ReferenceMixin:
                 break
             time.sleep(0.5)
         time.sleep(jitter(1.5, 0.4, 0.6))  # let the app's own upload settle
-        return {"input_index": idx, "accept": pick.get("accept"), "preview_seen": preview, "inputs": infos}
+        mid = self.get_last_uploaded_media_id(project_id=project_id)
+        return {"input_index": idx, "accept": pick.get("accept"), "preview_seen": preview, "inputs": infos, "media_id": mid}

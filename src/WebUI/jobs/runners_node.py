@@ -45,6 +45,8 @@ class NodeJobsMixin:
             account_id=aid,
             registry=self.pool.registry,
             log=lambda kind, msg: job.add_event(kind, f"[{aid}] {msg}"),
+            workspace_store=getattr(self, "workspace", None),
+            projects_store=getattr(self, "store", None),
         )
 
     def _run_node_image(self, job: Job) -> None:
@@ -65,6 +67,7 @@ class NodeJobsMixin:
                     reference_image=params.get("reference_image_path"),
                     reference_images=params.get("reference_image_paths"),
                     project_id=params.get("project_id"),
+                    workspace_project_id=params.get("workspace_project_id"),
                     dry_run=bool(params.get("dry_run")),
                     remove_watermark=bool(params.get("remove_watermark", True)),
                     on_event=job.add_event,
@@ -121,6 +124,7 @@ class NodeJobsMixin:
                     resolution=params.get("resolution") or "1080p",
                     duration_s=params.get("duration_s") or 8,
                     project_id=params.get("project_id"),
+                    workspace_project_id=params.get("workspace_project_id"),
                     dry_run=bool(params.get("dry_run")),
                     remove_watermark=bool(params.get("remove_watermark", True)),
                     auto_image=bool(params.get("auto_image", True)),

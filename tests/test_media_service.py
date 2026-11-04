@@ -508,3 +508,271 @@ def test_video_agent_mode_uses_defaults(tmp_path):
     call = video.calls[0]
     assert call["model_key"] == "abra_i2v_8s"
     assert call["count"] == 1
+
+
+def test_resolve_project_workspace_lazy_create(tmp_path):
+    from src.WebUI.workspace import WorkspaceStore
+    from src.WebUI.jobs.projects_store import ProjectsStore
+
+    ws_file = tmp_path / "workspace.json"
+    ws_store = WorkspaceStore(ws_file)
+    project = ws_store.create("Lookbook He 2026")
+
+    pj_file = tmp_path / "projects.json"
+    pj_store = ProjectsStore(pj_file)
+
+    image = FakeImageClient(tmp_path / "nodes")
+    created_id = "22222222-2222-4222-8222-222222222222"
+    image.create_project = lambda title, on_event=None: SimpleNamespace(id=created_id, title=title)
+    video = FakeVideoBridge()
+
+    svc = MediaService(
+        cdp_url="http://127.0.0.1:4999",
+        out_dir=tmp_path / "nodes",
+        account_id="acc_flow_01",
+        image_client=image,
+        video_bridge=video,
+        workspace_store=ws_store,
+        projects_store=pj_store,
+    )
+
+    events = []
+    pid = svc.resolve_project(workspace_project_id=project.id, on_event=lambda k, m: events.append((k, m)))
+    assert pid == created_id
+
+    # Check mapping was saved in WorkspaceStore
+    assert ws_store.get_flow_project(project.id, "acc_flow_01") == created_id
+    # Check event emitted
+    assert any("Đã khởi tạo & gắn Google Flow Project mới" in m for k, m in events)
+    # Check saved in ProjectsStore
+    assert any(p.id == created_id for p in pj_store.list())
+
+    # Next call returns cached mapping without calling create_project
+    image.create_project = lambda title, on_event=None: pytest.fail("Should not call create_project again")
+    pid2 = svc.resolve_project(workspace_project_id=project.id)
+    assert pid2 == created_id
+
+
+def test_generate_image_404_recovery(tmp_path):
+    from src.WebUI.workspace import WorkspaceStore
+    from src.WebUI.jobs.projects_store import ProjectsStore
+
+    ws_file = tmp_path / "workspace.json"
+    ws_store = WorkspaceStore(ws_file)
+    project = ws_store.create("Lookbook 404")
+
+    stale_pid = "33333333-3333-4333-8333-333333333333"
+    ws_store.set_flow_project(project.id, "acc_flow_01", stale_pid)
+
+    pj_file = tmp_path / "projects.json"
+    pj_store = ProjectsStore(pj_file)
+
+    image = FakeImageClient(tmp_path / "nodes")
+    new_pid = "44444444-4444-4444-8444-444444444444"
+    image.create_project = lambda title, on_event=None: SimpleNamespace(id=new_pid, title=title)
+
+    original_gen = image.generate_image
+    attempts = []
+
+    def mock_gen(project_id, prompt, **kwargs):
+        attempts.append(project_id)
+        if len(attempts) == 1:
+            raise RuntimeError(f"Dự án {project_id} không tồn tại trên tài khoản này (Flow trả về 404).")
+        return original_gen(project_id, prompt, **kwargs)
+
+    image.generate_image = mock_gen
+    video = FakeVideoBridge()
+
+    svc = MediaService(
+        cdp_url="http://127.0.0.1:4999",
+        out_dir=tmp_path / "nodes",
+        account_id="acc_flow_01",
+        image_client=image,
+        video_bridge=video,
+        workspace_store=ws_store,
+        projects_store=pj_store,
+    )
+
+    events = []
+    res = svc.generate_image(
+        prompt="fashion model",
+        workspace_project_id=project.id,
+        on_event=lambda k, m: events.append((k, m)),
+    )
+    assert res.status == "ok"
+    assert attempts == [stale_pid, new_pid]
+    # Workspace mapping was updated to new_pid
+    assert ws_store.get_flow_project(project.id, "acc_flow_01") == new_pid
+    assert any("404" in m for k, m in events)
+
+
+def test_generate_video_404_recovery_auto_image(tmp_path):
+    from src.WebUI.workspace import WorkspaceStore
+    from src.WebUI.jobs.projects_store import ProjectsStore
+
+    ws_file = tmp_path / "workspace.json"
+    ws_store = WorkspaceStore(ws_file)
+    project = ws_store.create("Video Auto Image 404")
+
+    stale_pid = "55555555-5555-4555-8555-555555555555"
+    ws_store.set_flow_project(project.id, "acc_flow_01", stale_pid)
+
+    pj_file = tmp_path / "projects.json"
+    pj_store = ProjectsStore(pj_file)
+
+    image = FakeImageClient(tmp_path / "nodes")
+    new_pid = "66666666-6666-4666-8666-666666666666"
+    created_projects = []
+
+    def mock_create_proj(title, on_event=None):
+        created_projects.append(new_pid)
+        return SimpleNamespace(id=new_pid, title=title)
+
+    image.create_project = mock_create_proj
+
+    original_gen = image.generate_image
+    image_attempts = []
+
+    def mock_gen(project_id, prompt, **kwargs):
+        image_attempts.append(project_id)
+        if len(image_attempts) == 1:
+            raise RuntimeError(f"Dự án {project_id} không tồn tại trên tài khoản này (Flow trả về 404).")
+        return original_gen(project_id, prompt, **kwargs)
+
+    image.generate_image = mock_gen
+    video = FakeVideoBridge()
+
+    svc = MediaService(
+        cdp_url="http://127.0.0.1:4999",
+        out_dir=tmp_path / "nodes",
+        account_id="acc_flow_01",
+        image_client=image,
+        video_bridge=video,
+        workspace_store=ws_store,
+        projects_store=pj_store,
+    )
+
+    res = svc.generate_video(
+        prompt="video of runway model",
+        auto_image=True,
+        workspace_project_id=project.id,
+    )
+    assert res.status == "ok"
+    # Image failed on stale_pid, then recovered with new_pid
+    assert image_attempts == [stale_pid, new_pid]
+    # Video animate_frame used new_pid directly, NOT stale_pid
+    assert len(video.calls) == 1
+    assert video.calls[0]["project_id"] == new_pid
+    # Project was created exactly ONCE
+    assert created_projects == [new_pid]
+    # Result project_id is the recovered project
+    assert res.project_id == new_pid
+    # WorkspaceStore was updated
+    assert ws_store.get_flow_project(project.id, "acc_flow_01") == new_pid
+
+
+def test_generate_video_404_recovery_provided_frame(tmp_path):
+    from src.WebUI.workspace import WorkspaceStore
+    from src.WebUI.jobs.projects_store import ProjectsStore
+
+    ws_file = tmp_path / "workspace.json"
+    ws_store = WorkspaceStore(ws_file)
+    project = ws_store.create("Video Frame 404")
+
+    stale_pid = "77777777-7777-4777-8777-777777777777"
+    ws_store.set_flow_project(project.id, "acc_flow_01", stale_pid)
+
+    pj_file = tmp_path / "projects.json"
+    pj_store = ProjectsStore(pj_file)
+
+    image = FakeImageClient(tmp_path / "nodes")
+    new_pid = "88888888-8888-4888-8888-888888888888"
+    image.create_project = lambda title, on_event=None: SimpleNamespace(id=new_pid, title=title)
+
+    video = FakeVideoBridge()
+    original_video_gen = video.generate_video_flow
+    video_attempts = []
+
+    def mock_video_gen(**kwargs):
+        video_attempts.append(kwargs.get("project_id"))
+        if len(video_attempts) == 1:
+            raise RuntimeError(f"Dự án {kwargs.get('project_id')} không tồn tại (Flow 404).")
+        return original_video_gen(**kwargs)
+
+    video.generate_video_flow = mock_video_gen
+
+    svc = MediaService(
+        cdp_url="http://127.0.0.1:4999",
+        out_dir=tmp_path / "nodes",
+        account_id="acc_flow_01",
+        image_client=image,
+        video_bridge=video,
+        workspace_store=ws_store,
+        projects_store=pj_store,
+    )
+
+    frame = tmp_path / "test_frame.png"
+    frame.write_bytes(b"frame-bytes")
+
+    res = svc.generate_video(
+        prompt="animate this",
+        frame_path=frame,
+        auto_image=False,
+        workspace_project_id=project.id,
+    )
+    assert res.status == "ok"
+    assert video_attempts == [stale_pid, new_pid]
+    assert res.project_id == new_pid
+    assert ws_store.get_flow_project(project.id, "acc_flow_01") == new_pid
+
+
+def test_generate_video_404_recovery_ingredients(tmp_path):
+    from src.WebUI.workspace import WorkspaceStore
+    from src.WebUI.jobs.projects_store import ProjectsStore
+
+    ws_file = tmp_path / "workspace.json"
+    ws_store = WorkspaceStore(ws_file)
+    project = ws_store.create("Video Ingredients 404")
+
+    stale_pid = "99999999-9999-4999-8999-999999999999"
+    ws_store.set_flow_project(project.id, "acc_flow_01", stale_pid)
+
+    pj_file = tmp_path / "projects.json"
+    pj_store = ProjectsStore(pj_file)
+
+    image = FakeImageClient(tmp_path / "nodes")
+    new_pid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    image.create_project = lambda title, on_event=None: SimpleNamespace(id=new_pid, title=title)
+
+    video = FakeVideoBridge()
+    original_text_gen = video.generate_text_video_flow
+    text_attempts = []
+
+    def mock_text_gen(**kwargs):
+        text_attempts.append(kwargs.get("project_id"))
+        if len(text_attempts) == 1:
+            raise RuntimeError(f"Dự án {kwargs.get('project_id')} không tồn tại (Flow 404).")
+        return original_text_gen(**kwargs)
+
+    video.generate_text_video_flow = mock_text_gen
+
+    svc = MediaService(
+        cdp_url="http://127.0.0.1:4999",
+        out_dir=tmp_path / "nodes",
+        account_id="acc_flow_01",
+        image_client=image,
+        video_bridge=video,
+        workspace_store=ws_store,
+        projects_store=pj_store,
+    )
+
+    res = svc.generate_video(
+        prompt="text to video ingredients",
+        sub_mode="ingredients",
+        workspace_project_id=project.id,
+    )
+    assert res.status == "ok"
+    assert text_attempts == [stale_pid, new_pid]
+    assert res.project_id == new_pid
+    assert ws_store.get_flow_project(project.id, "acc_flow_01") == new_pid
+

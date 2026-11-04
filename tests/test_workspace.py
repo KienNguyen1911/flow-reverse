@@ -336,3 +336,60 @@ def test_migrate_endpoint_restores_legacy_canvas_and_pins(client: TestClient):
     assert uploads == []
     meta = json.loads((Path(client.app.state.out_root).parent / "flowbench_asset_meta.json").read_text(encoding="utf-8"))
     assert meta["assets"]["upload:legacy.png"]["isPinned"] is True
+
+
+def test_workspace_flow_projects_mapping_and_persistence(tmp_path: Path):
+    from src.WebUI.workspace import WorkspaceStore
+
+    ws_file = tmp_path / "flowbench_workspace.json"
+    store = WorkspaceStore(ws_file)
+    project = store.create("Test Flow Projects")
+
+    # Initially empty
+    assert store.get_flow_project(project.id, "flow_main") is None
+    assert project.flow_projects == {}
+
+    # Set flow project mapping
+    store.set_flow_project(project.id, "flow_main", "c1f7b7e5-1234-5678-abcd-000000000001")
+    store.set_flow_project(project.id, "flow_acc2", "c1f7b7e5-1234-5678-abcd-000000000002")
+
+    assert store.get_flow_project(project.id, "flow_main") == "c1f7b7e5-1234-5678-abcd-000000000001"
+    assert store.get_flow_project(project.id, "flow_acc2") == "c1f7b7e5-1234-5678-abcd-000000000002"
+
+    # Reload from disk to verify persistence
+    reloaded_store = WorkspaceStore(ws_file)
+    reloaded_proj = reloaded_store.get(project.id)
+    assert reloaded_proj is not None
+    assert reloaded_proj.flow_projects["flow_main"] == "c1f7b7e5-1234-5678-abcd-000000000001"
+    assert reloaded_proj.flow_projects["flow_acc2"] == "c1f7b7e5-1234-5678-abcd-000000000002"
+    assert reloaded_store.get_flow_project(project.id, "flow_main") == "c1f7b7e5-1234-5678-abcd-000000000001"
+
+    # Remove flow project mapping
+    assert reloaded_store.remove_flow_project(project.id, "flow_main") is True
+    assert reloaded_store.get_flow_project(project.id, "flow_main") is None
+    assert reloaded_store.remove_flow_project(project.id, "non_existent") is False
+
+
+def test_workspace_canvas_save_keeps_flow_projects(client: TestClient):
+    workspace = client.app.state.workspace
+    project = default_project(client)
+    pid = project["id"]
+
+    # Set a flow project on default project
+    workspace.set_flow_project(pid, "flow_main", "c1f7b7e5-1234-5678-abcd-000000000001")
+    assert workspace.get_flow_project(pid, "flow_main") == "c1f7b7e5-1234-5678-abcd-000000000001"
+
+    # Frontend autosaves canvas via API
+    canvas = {
+        "viewport": {"x": 50, "y": 50, "zoom": 1.0},
+        "nodes": [{"id": "n1", "type": "image", "x": 10, "y": 10, "prompt": "hi"}],
+        "edges": [],
+        "groups": [],
+    }
+    r = client.post(f"/api/workspace/projects/{pid}/canvas", json=canvas)
+    assert r.status_code == 200
+
+    # Flow projects mapping must be preserved!
+    assert workspace.get_flow_project(pid, "flow_main") == "c1f7b7e5-1234-5678-abcd-000000000001"
+    full = client.get(f"/api/workspace/projects/{pid}").json()["project"]
+    assert full.get("flowProjects", {}).get("flow_main") == "c1f7b7e5-1234-5678-abcd-000000000001"

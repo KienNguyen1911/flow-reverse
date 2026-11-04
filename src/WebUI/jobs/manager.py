@@ -47,6 +47,7 @@ class JobManager(SingleJobsMixin, NodeJobsMixin, WorkflowJobsMixin):
         self.out_root = Path(out_root)
         self.node_out = self.out_root.parent / "nodes"
         self.asset_meta = None  # injected by create_app (AssetMetaStore)
+        self.workspace = None   # injected by create_app (WorkspaceStore)
         self._jobs: dict[str, Job] = {}
         self._order: list[str] = []
         self._lock = threading.RLock()
@@ -181,6 +182,7 @@ class JobManager(SingleJobsMixin, NodeJobsMixin, WorkflowJobsMixin):
         raise ValueError(f"unknown job kind: {kind}")
 
     def _acquire_and_client(self, job: Job) -> tuple[ActiveAccount, FlowClient]:
-        account = self.pool.acquire_single()
+        preferred_account_id = job.params.get("preferred_account_id")
+        account = self.pool.acquire_single(preferred_account_id=preferred_account_id)
         job.add_event("info", f"account cấp phát: {account.config.id} ({account.cdp_url})")
         return account, self.pool.client_for(account.config.id)

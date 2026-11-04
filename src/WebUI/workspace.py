@@ -114,6 +114,7 @@ class WorkspaceProject(BaseModel):
     updated_at: int = Field(default_factory=now_ms, alias="updatedAt")
     canvas_state: dict = Field(default_factory=empty_canvas_state, alias="canvasState")
     thumbnail_manual: bool = Field(default=False, alias="thumbnailManual")
+    flow_projects: dict[str, str] = Field(default_factory=dict, alias="flowProjects")
 
 
 class WorkspaceStore:
@@ -197,6 +198,42 @@ class WorkspaceStore:
                 if project.id == project_id:
                     return project.name
             return None
+
+    def get_flow_project(self, workspace_project_id: str, account_id: str) -> Optional[str]:
+        if not workspace_project_id or not account_id:
+            return None
+        with self._lock:
+            for project in self.projects:
+                if project.id == workspace_project_id:
+                    if getattr(project, "flow_projects", None) is None:
+                        project.flow_projects = {}
+                    return project.flow_projects.get(account_id)
+            return None
+
+    def set_flow_project(self, workspace_project_id: str, account_id: str, flow_project_id: str) -> None:
+        if not workspace_project_id or not account_id or not flow_project_id:
+            return
+        with self._lock:
+            for project in self.projects:
+                if project.id == workspace_project_id:
+                    if getattr(project, "flow_projects", None) is None:
+                        project.flow_projects = {}
+                    project.flow_projects[account_id] = flow_project_id
+                    self._save()
+                    return
+
+    def remove_flow_project(self, workspace_project_id: str, account_id: str) -> bool:
+        if not workspace_project_id or not account_id:
+            return False
+        with self._lock:
+            for project in self.projects:
+                if project.id == workspace_project_id:
+                    if getattr(project, "flow_projects", None) is not None and account_id in project.flow_projects:
+                        del project.flow_projects[account_id]
+                        self._save()
+                        return True
+                    return False
+            return False
 
     # -- mutations --------------------------------------------------------- #
     def create(

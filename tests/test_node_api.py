@@ -332,3 +332,38 @@ def test_node_prompt_limit_is_7200(client: TestClient):
 def test_node_files_blocks_traversal(client: TestClient, tmp_path: Path):
     r = client.get("/api/node/files/..%2F..%2Fconfigs%2Faccounts_pool.json")
     assert r.status_code == 404
+
+
+def test_node_image_and_video_accept_preferred_account_and_workspace(client: TestClient):
+    r_img = client.post(
+        "/api/node/image",
+        json={
+            "prompt": "test prompt",
+            "aspect_ratio": "16:9",
+            "workspace_project_id": "prj_workspace_123",
+            "preferred_account_id": "flow_account_a",
+            "dry_run": True,
+        },
+    )
+    assert r_img.status_code == 200
+    job_id_img = r_img.json()["job_id"]
+    job_img = client.app.state.manager.get(job_id_img)
+    assert job_img.params["workspace_project_id"] == "prj_workspace_123"
+    assert job_img.params["preferred_account_id"] == "flow_account_a"
+
+    r_vid = client.post(
+        "/api/node/video",
+        json={
+            "prompt": "test video",
+            "aspect_ratio": "9:16",
+            "sub_mode": "ingredients",
+            "workspace_project_id": "prj_workspace_456",
+            "preferred_account_id": "flow_account_b",
+            "dry_run": True,
+        },
+    )
+    assert r_vid.status_code == 200
+    job_id_vid = r_vid.json()["job_id"]
+    job_vid = client.app.state.manager.get(job_id_vid)
+    assert job_vid.params["workspace_project_id"] == "prj_workspace_456"
+    assert job_vid.params["preferred_account_id"] == "flow_account_b"

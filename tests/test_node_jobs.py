@@ -101,10 +101,11 @@ def test_node_video_job_maps_urls(tmp_path):
     assert job.state == "succeeded"
     assert job.result["video_url"] == f"/api/node/files/{run_dir.name}/video.mp4"
     assert job.result["frame_url"] == f"/api/node/files/{run_dir.name}/starting_frame.png"
+    assert job.result["account_id"] == "acc_1"
 
 
 def test_node_video_job_forwards_composer_config(tmp_path):
-    """The job must pass model/sub_mode/count through, not silently drop them."""
+    """The job must pass model/sub_mode/count/workspace_project_id through, not silently drop them."""
     seen: dict = {}
 
     class RecordingService(FakeService):
@@ -134,6 +135,7 @@ def test_node_video_job_forwards_composer_config(tmp_path):
             "resolution": "720p",
             "agent_mode": True,
             "dry_run": True,
+            "workspace_project_id": "ws_prj_999",
         },
     )
     manager._run_node_video(job)
@@ -143,6 +145,8 @@ def test_node_video_job_forwards_composer_config(tmp_path):
     assert seen["sub_mode"] == "ingredients"
     assert seen["count"] == 2
     assert seen["agent_mode"] is True
+    assert seen["workspace_project_id"] == "ws_prj_999"
+    assert job.result["account_id"] == "acc_1"
     assert job.result["model"] == "veo_3_1_fast"
     assert job.result["sub_mode"] == "ingredients"
     assert job.result["count"] == 2

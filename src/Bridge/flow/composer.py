@@ -4,9 +4,121 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Optional
+from dataclasses import dataclass
+from typing import Any, Optional, Union
 
 from .common import PageInteractionError, jitter
+
+
+@dataclass
+class TextSegment:
+    text: str
+
+    def __eq__(self, other: object) -> bool:
+        return other.__class__.__name__ == "TextSegment" and getattr(other, "text", None) == self.text
+
+
+@dataclass
+class MentionSegment:
+    alias_name: str
+    media_id: str
+
+    def __eq__(self, other: object) -> bool:
+        return (
+            other.__class__.__name__ == "MentionSegment"
+            and getattr(other, "alias_name", None) == self.alias_name
+            and getattr(other, "media_id", None) == self.media_id
+        )
+
+
+def parse_prompt_segments(
+    prompt: str,
+    refs: list[dict[str, Any]],
+) -> list[Union[TextSegment, MentionSegment]]:
+    """Parse prompt into interleaved TextSegment and MentionSegment items.
+
+    Maps:
+    - Index 0: `Image 1`, `{{@model}}`, `@model`, or direct `alias_name` -> refs[0]
+    - Index 1: `Image 2`, `{{@garment}}`, `@garment`, or direct `alias_name` -> refs[1]
+    - Index 2: `Image 3`, `{{@scene}}`, `@scene`, or direct `alias_name` -> refs[2]
+    - Index >= 3: `Image {k}`, `{{@ref{k}}}`, `@ref{k}` -> refs[k-1]
+
+    If any reference in `refs` is NOT mentioned anywhere in the prompt text,
+    it is automatically prepended as a MentionSegment at the start of the list.
+    """
+    if not refs:
+        return [TextSegment(prompt)] if prompt else []
+
+    patterns: list[tuple[int, str]] = []
+    for idx, ref in enumerate(refs):
+        alias = ref.get("alias_name", "")
+        sub_pats: list[str] = []
+        k = idx + 1
+        if idx == 0:
+            sub_pats.extend([r"\{\{@model\}\}", r"@model\b", r"\bImage\s*1\b"])
+        elif idx == 1:
+            sub_pats.extend([r"\{\{@garment\}\}", r"@garment\b", r"\bImage\s*2\b"])
+        elif idx == 2:
+            sub_pats.extend([r"\{\{@scene\}\}", r"@scene\b", r"\bImage\s*3\b"])
+        else:
+            sub_pats.extend([rf"\{{\{{@ref{k}\}}\}}", rf"@ref{k}\b", rf"\bImage\s*{k}\b"])
+        if alias:
+            sub_pats.extend([rf"\{{\{{@{re.escape(alias)}\}}\}}", rf"@{re.escape(alias)}\b"])
+        patterns.append((idx, "|".join(sub_pats)))
+
+    combined = "|".join(f"(?P<REF_{idx}>{pat})" for idx, pat in patterns)
+
+    segments: list[Union[TextSegment, MentionSegment]] = []
+    used_indices: set[int] = set()
+    last_end = 0
+
+    if prompt:
+        for m in re.finditer(combined, prompt, flags=re.IGNORECASE):
+            start, end = m.span()
+            if start > last_end:
+                segments.append(TextSegment(prompt[last_end:start]))
+            for idx in range(len(refs)):
+                if m.group(f"REF_{idx}") is not None:
+                    segments.append(
+                        MentionSegment(
+                            alias_name=refs[idx].get("alias_name", f"ref{idx+1}"),
+                            media_id=refs[idx].get("media_id", ""),
+                        )
+                    )
+                    used_indices.add(idx)
+                    break
+            last_end = end
+
+        if last_end < len(prompt):
+            segments.append(TextSegment(prompt[last_end:]))
+
+    # Prepend any unused references
+    prepends: list[Union[TextSegment, MentionSegment]] = []
+    for idx in range(len(refs)):
+        if idx not in used_indices:
+            prepends.append(
+                MentionSegment(
+                    alias_name=refs[idx].get("alias_name", f"ref{idx+1}"),
+                    media_id=refs[idx].get("media_id", ""),
+                )
+            )
+            if prompt or segments or idx < len(refs) - 1:
+                prepends.append(TextSegment(" "))
+
+    final_raw = prepends + segments
+    # Merge consecutive TextSegments and eliminate empties
+    out: list[Union[TextSegment, MentionSegment]] = []
+    for s in final_raw:
+        if isinstance(s, TextSegment):
+            if not s.text:
+                continue
+            if out and isinstance(out[-1], TextSegment):
+                out[-1].text += s.text
+            else:
+                out.append(s)
+        else:
+            out.append(s)
+    return out
 
 
 class ComposerMixin:
@@ -46,7 +158,10 @@ class ComposerMixin:
             self.page.mouse.click(pos["x"], pos["y"])
             time.sleep(jitter(0.5, 0.1, 0.3))
             try:
-                self._eval("(() => { try { document.execCommand('selectAll'); } catch (e) {} return true; })()")
+                self._eval("(() => { try { "
+            "const chips = document.querySelectorAll('flow-image-ingredient-chip, flow-ingredient-chip, .reference-ingredient-chip'); "
+            "if (!chips.length) { document.execCommand('selectAll'); } "
+            "} catch (e) {} return true; })()")
                 self._cdp.send("Input.insertText", {"text": prompt})
             except Exception as e:  # noqa: BLE001
                 self._log(f"type attempt {attempt}: insertText error {e}")
@@ -68,6 +183,135 @@ class ComposerMixin:
             )
             time.sleep(1.0)
         raise PageInteractionError("Không nhập được prompt vào composer sau nhiều lần thử.")
+
+    def type_prompt_with_mentions(
+        self,
+        prompt: str,
+        refs: list[dict[str, Any]],
+        project_id: Optional[str] = None,
+        registry: Optional[Any] = None,
+    ) -> None:
+        """Type a prompt into ProseMirror with inline @mention chips for references."""
+        if not refs:
+            self.type_prompt(prompt)
+            return
+
+        segments = parse_prompt_segments(prompt, refs)
+        if not segments:
+            return
+
+        pos = self.wait_composer()
+        self.page.mouse.click(pos["x"], pos["y"])
+        time.sleep(jitter(0.4, 0.1, 0.2))
+        try:
+            self._eval("(() => { try { document.execCommand('selectAll'); document.execCommand('delete'); } catch(e){} return true; })()")
+        except Exception:
+            pass
+        time.sleep(0.2)
+
+        for seg in segments:
+            if isinstance(seg, TextSegment):
+                if seg.text:
+                    try:
+                        self._cdp.send("Input.insertText", {"text": seg.text})
+                    except Exception as e:
+                        self._log(f"Input.insertText error: {e}")
+                    time.sleep(jitter(0.15, 0.05, 0.1))
+            elif isinstance(seg, MentionSegment):
+                self._insert_mention(
+                    seg.alias_name,
+                    seg.media_id,
+                    project_id=project_id,
+                    registry=registry,
+                    refs=refs,
+                )
+
+    def _insert_mention(
+        self,
+        alias_name: str,
+        media_id: str,
+        project_id: Optional[str] = None,
+        registry: Optional[Any] = None,
+        refs: Optional[list[dict[str, Any]]] = None,
+        retry_on_stale: bool = True,
+    ) -> bool:
+        """Insert a single @mention chip into ProseMirror by searching alias_name in the popover."""
+        page = self.page
+        if not page:
+            return False
+
+        # 1. Type '@' to open the popover
+        try:
+            page.keyboard.type("@")
+        except Exception:
+            self._cdp.send("Input.insertText", {"text": "@"})
+        time.sleep(0.4)
+
+        # 2. Wait for flow-add-menu-popover-content and input.search-input
+        search_input = page.locator("flow-add-menu-popover-content input.search-input")
+        try:
+            search_input.wait_for(state="visible", timeout=4000)
+        except Exception:
+            add_trigger = page.locator('button.add-menu-trigger, button[aria-label="Thêm thành phần vào ô nhập câu lệnh"]')
+            if add_trigger.is_visible():
+                add_trigger.click(force=True)
+                time.sleep(0.4)
+            try:
+                search_input.wait_for(state="visible", timeout=3000)
+            except Exception as exc:
+                self._log(f"Không mở được popover mention: {exc}")
+                self._cdp.send("Input.insertText", {"text": f"@{alias_name} "})
+                return False
+
+        # 3. Fill alias_name into search input
+        search_input.fill(alias_name)
+        time.sleep(jitter(0.5, 0.1, 0.2))
+
+        # 4. Check if matching item appears in virtual scroll
+        matched_option = None
+        opts = page.locator('flow-add-menu-asset-list button[role="option"].asset-item')
+        count = opts.count()
+        for idx in range(min(count, 12)):
+            opt = opts.nth(idx)
+            txt = (opt.locator(".asset-title").inner_text() or "").strip()
+            if alias_name.lower() in txt.lower():
+                matched_option = opt
+                break
+
+        if not matched_option and count > 0:
+            first_txt = (opts.first.locator(".asset-title").inner_text() or "").strip()
+            if alias_name.split("_")[-1] in first_txt or alias_name.split("_")[0] in first_txt:
+                matched_option = opts.first
+
+        if matched_option:
+            matched_option.click(force=True)
+            time.sleep(0.4)
+            add_btn = page.locator('button.detail-add-to-prompt-btn, flow-add-menu-detail-pane button:has-text("Thêm vào câu lệnh")').first
+            if add_btn.is_visible():
+                add_btn.click(force=True)
+            else:
+                page.keyboard.press("Enter")
+            time.sleep(0.5)
+
+            page.keyboard.press("End")
+            self._cdp.send("Input.insertText", {"text": " "})
+            return True
+
+        # 5. Item not found in search results
+        self._log(f"Không tìm thấy item [{alias_name}] trong popover mention")
+        page.keyboard.press("Escape")
+        time.sleep(0.3)
+
+        # Check if '@' remains at the end of the editor before pressing Backspace
+        ends_with_at = bool(page.evaluate("""() => {
+            const pm = document.querySelector('div.ProseMirror');
+            return pm && (pm.innerText || '').trimEnd().endsWith('@');
+        }"""))
+        if ends_with_at:
+            page.keyboard.press("Backspace")
+
+        self._cdp.send("Input.insertText", {"text": f"@{alias_name} "})
+        return False
 
     def ensure_ui_image_mode(
         self,
