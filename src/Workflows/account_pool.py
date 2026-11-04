@@ -672,7 +672,16 @@ class AccountPoolManager:
         if not cands:
             return FlowClient(cdp_url=self.supervisor.cdp_url(self.port_base), out_dir=self.out_root,
                               breaker_path=self.breaker_path("default"))
-        cands.sort(key=lambda a: -(int(self._account_state(a.id).get("last_used_at_ms") or 0)))
+        def _status_key(a: AccountConfig):
+            is_live = 0
+            if hasattr(self, "supervisor") and hasattr(self.supervisor, "is_alive"):
+                try:
+                    is_live = 1 if self.supervisor.is_alive(self._port_of(a.id), timeout_s=0.3) else 0
+                except Exception:
+                    is_live = 0
+            return (-is_live, -(int(self._account_state(a.id).get("last_used_at_ms") or 0)))
+
+        cands.sort(key=_status_key)
         return self.client_for(cands[0].id)
 
     # ------------------------------------------------------------------ #
