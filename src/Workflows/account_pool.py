@@ -36,6 +36,11 @@ from urllib.parse import urlsplit
 
 from ..BrowserHost.pool_supervisor import PoolSupervisor
 from .flow_client import CircuitBreaker, FlowClient, sha256_file
+from .project_media_registry import (
+    ProjectMediaRegistry,
+    compute_alias_name,
+    get_project_media_registry,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = ROOT / "configs" / "accounts_pool.json"
@@ -644,6 +649,7 @@ class AccountPoolManager:
                     out_dir=self.out_root,
                     breaker_path=self.breaker_path(account_id),
                     log=lambda m: self._log(f"[{account_id}] {m}"),
+                    account_id=account_id,
                 )
                 self._clients[account_id] = client
             return client
@@ -780,8 +786,17 @@ class AccountPoolManager:
             self._save_state()
         return ok
 
-    def acquire_single(self) -> ActiveAccount:
-        """One account for a single job (wear-leveling, wake on demand)."""
+    def acquire_single(self, preferred_account_id: Optional[str] = None) -> ActiveAccount:
+        """One account for a single job (wear-leveling, wake on demand, optional sticky account)."""
+        if preferred_account_id:
+            cand = next((a for a in self.available_accounts() if a.id == preferred_account_id), None)
+            if cand:
+                try:
+                    active, _errors = self.ensure_working_set([cand])
+                    if active:
+                        return active[0]
+                except Exception as exc:
+                    self._log(f"[pool] wake preferred account {preferred_account_id} thất bại, fallback wear-leveling: {exc}")
         selected = self.select_working_set(1)
         if not selected:
             raise PoolUnavailableError(

@@ -396,6 +396,8 @@ class MediaService:
         log: Optional[Callable[[str, str], None]] = None,
         image_client: Optional[FlowClient] = None,
         video_bridge: Optional[FlowVideoBridge] = None,
+        workspace_store: Optional[Any] = None,
+        projects_store: Optional[Any] = None,
     ):
         self.cdp_url = cdp_url
         self.out_root = Path(out_dir) if out_dir else DEFAULT_NODE_OUT
@@ -404,15 +406,69 @@ class MediaService:
         self._log = log or (lambda kind, msg: None)
         self._lock = cdp_lock(cdp_url)
         self._project_cache: Optional[str] = None
+        self.workspace_store = workspace_store
+        self.projects_store = projects_store
         self.image = image_client or FlowClient(
             cdp_url=cdp_url,
             out_dir=self.out_root,
             log=lambda msg: self._log("info", msg),
+            account_id=self.account_id,
         )
+        if not hasattr(self.image, "account_id") or not getattr(self.image, "account_id", None):
+            try:
+                setattr(self.image, "account_id", self.account_id)
+            except Exception:
+                pass
         self.video = video_bridge or FlowVideoBridge(
             cdp_url=cdp_url,
             log=lambda kind, msg: self._log(kind, msg),
         )
+
+    def _get_workspace_store(self) -> Optional[Any]:
+        if self.workspace_store is not None:
+            return self.workspace_store
+        try:
+            from ..WebUI.workspace import WorkspaceStore
+            ws_file = (self.out_root.parent / "flowbench_workspace.json") if self.out_root else (ROOT / "out" / "flowbench_workspace.json")
+            self.workspace_store = WorkspaceStore(ws_file)
+            return self.workspace_store
+        except Exception:
+            return None
+
+    def _get_projects_store(self) -> Optional[Any]:
+        if self.projects_store is not None:
+            return self.projects_store
+        try:
+            from ..WebUI.jobs.projects_store import ProjectsStore
+            pj_file = (self.out_root.parent / "playground_projects.json") if self.out_root else (ROOT / "out" / "playground_projects.json")
+            self.projects_store = ProjectsStore(pj_file)
+            return self.projects_store
+        except Exception:
+            return None
+
+    def _lazy_create_workspace_project(
+        self,
+        workspace_project_id: str,
+        on_event: Optional[Callable[..., None]] = None,
+    ) -> str:
+        ws_store = self._get_workspace_store()
+        ws = ws_store.get(workspace_project_id) if ws_store else None
+        ws_name = ws.name if ws else ((ws_store.name_of(workspace_project_id) if ws_store else None) or workspace_project_id)
+        title = f"FlowBench - {ws_name}"
+        created = self.image.create_project(title, on_event=on_event)
+        new_pid = parse_project_ref(created.id)
+        if ws_store:
+            ws_store.set_flow_project(workspace_project_id, self.account_id, new_pid)
+        pj_store = self._get_projects_store()
+        if pj_store:
+            from ..Workflows.flow_models import ProjectInfo
+            if isinstance(created, ProjectInfo):
+                pj_store.upsert(created)
+            else:
+                pj_store.upsert(ProjectInfo(id=new_pid, title=getattr(created, "title", title), source="created"))
+        self._project_cache = new_pid
+        self._emit(on_event, "info", f"Đã khởi tạo & gắn Google Flow Project mới [{new_pid}] cho Workspace [{ws_name}] trên account [{self.account_id}]")
+        return new_pid
 
     # -- project -------------------------------------------------------------- #
 
@@ -420,16 +476,30 @@ class MediaService:
         self,
         project_id: Optional[str] = None,
         *,
+        workspace_project_id: Optional[str] = None,
         create_title: str = "Node Media",
         on_event: Optional[Callable[..., None]] = None,
     ) -> str:
-        """Return a usable project id: explicit → open tab → newest → newly created."""
+        """Return a usable project id: explicit → workspace mapping (lazy-created) → open tab → newest → newly created."""
         if project_id:
-            return parse_project_ref(project_id)
+            cleaned = parse_project_ref(project_id)
+            self._project_cache = cleaned
+            return cleaned
         with self._lock:
+            ev = on_event
+            if workspace_project_id:
+                ws_store = self._get_workspace_store()
+                mapped_pid = ws_store.get_flow_project(workspace_project_id, self.account_id) if ws_store else None
+                if mapped_pid:
+                    cleaned_pid = parse_project_ref(mapped_pid)
+                    self._project_cache = cleaned_pid
+                    self._emit(ev, "info", f"Dùng Google Flow Project [{cleaned_pid}] cho Workspace [{workspace_project_id}] trên account [{self.account_id}]")
+                    return cleaned_pid
+                # Lazy-create flow project for workspace
+                return self._lazy_create_workspace_project(workspace_project_id, on_event=ev)
+
             if self._project_cache:
                 return self._project_cache
-            ev = on_event
             st = self.image.status()
             if st.flow_project_id:
                 self._project_cache = st.flow_project_id
@@ -505,6 +575,7 @@ class MediaService:
         reference_image: Optional[Path | str] = None,
         reference_images: Optional[list[Path | str]] = None,
         project_id: Optional[str] = None,
+        workspace_project_id: Optional[str] = None,
         dry_run: bool = False,
         remove_watermark: bool = True,
         model: Optional[str] = None,
@@ -540,7 +611,7 @@ class MediaService:
         if not prompt:
             raise ValueError("prompt rỗng")
         with self._lock:
-            project = self.resolve_project(project_id, on_event=on_event)
+            project = self.resolve_project(project_id, workspace_project_id=workspace_project_id, on_event=on_event)
             ref_paths: list[Path] = []
             if reference_images:
                 for r in reference_images:
@@ -591,11 +662,31 @@ class MediaService:
                     tpl, _ = self._reference_template(project, ref_paths[0], prompt, on_event)
                     gen_kwargs["reference"] = tpl
 
-            res: GenerationResult = self.image.generate_image(
-                project,
-                prompt,
-                **gen_kwargs,
-            )
+            try:
+                res: GenerationResult = self.image.generate_image(
+                    project,
+                    prompt,
+                    **gen_kwargs,
+                )
+            except Exception as exc:
+                if workspace_project_id and ("404" in str(exc) or "không tồn tại" in str(exc)):
+                    self._emit(on_event, "warn", f"Dự án {project} không tồn tại trên mây (404). Khởi tạo lại dự án mới...")
+                    ws_store = self._get_workspace_store()
+                    if ws_store:
+                        ws_store.remove_flow_project(workspace_project_id, self.account_id)
+                    from .project_media_registry import get_project_media_registry
+                    get_project_media_registry().clear_project(self.account_id, project)
+                    project = self._lazy_create_workspace_project(workspace_project_id, on_event=on_event)
+                    if ref_paths and not supports_ref_paths:
+                        tpl, _ = self._reference_template(project, ref_paths[0], prompt, on_event)
+                        gen_kwargs["reference"] = tpl
+                    res = self.image.generate_image(
+                        project,
+                        prompt,
+                        **gen_kwargs,
+                    )
+                else:
+                    raise
         return self._image_result(
             res, prompt, label, enum, project, sha, tpl, t0, model_info, n, agent_mode
         )
@@ -658,6 +749,7 @@ class MediaService:
         resolution: str = "1080p",
         duration_s: int = VIDEO_DURATION_S,
         project_id: Optional[str] = None,
+        workspace_project_id: Optional[str] = None,
         timeout_s: float = 300.0,
         model: Optional[str] = None,
         count: int = 1,
@@ -687,24 +779,53 @@ class MediaService:
             raise FileNotFoundError(f"Không tìm thấy ảnh đính kèm: {frame_path}")
         dest = Path(dest_path)
         with self._lock:
-            project = self.resolve_project(project_id, on_event=on_event)
-            self.video.generate_video_flow(
-                frame_path=frame,
-                prompt_text=prompt,
-                dest_path=dest,
-                duration_s=duration,
-                timeout_s=timeout_s,
-                project_id=project,
-                aspect_ratio=ratio,
-                seed=seed,
-                resolution=res_label,
-                model_key=key,
-                model_label=model_info.label,
-                count=n,
-                offer_resolution=model_info.has_resolution,
-                offer_duration=model_info.has_duration,
-                capture_resolution=capture_res,
-            )
+            project = self.resolve_project(project_id, workspace_project_id=workspace_project_id, on_event=on_event)
+            try:
+                self.video.generate_video_flow(
+                    frame_path=frame,
+                    prompt_text=prompt,
+                    dest_path=dest,
+                    duration_s=duration,
+                    timeout_s=timeout_s,
+                    project_id=project,
+                    aspect_ratio=ratio,
+                    seed=seed,
+                    resolution=res_label,
+                    model_key=key,
+                    model_label=model_info.label,
+                    count=n,
+                    offer_resolution=model_info.has_resolution,
+                    offer_duration=model_info.has_duration,
+                    capture_resolution=capture_res,
+                )
+            except Exception as exc:
+                if workspace_project_id and ("404" in str(exc) or "không tồn tại" in str(exc)):
+                    self._emit(on_event, "warn", f"Dự án {project} không tồn tại trên mây (404). Khởi tạo lại dự án mới...")
+                    ws_store = self._get_workspace_store()
+                    if ws_store:
+                        ws_store.remove_flow_project(workspace_project_id, self.account_id)
+                    from .project_media_registry import get_project_media_registry
+                    get_project_media_registry().clear_project(self.account_id, project)
+                    project = self._lazy_create_workspace_project(workspace_project_id, on_event=on_event)
+                    self.video.generate_video_flow(
+                        frame_path=frame,
+                        prompt_text=prompt,
+                        dest_path=dest,
+                        duration_s=duration,
+                        timeout_s=timeout_s,
+                        project_id=project,
+                        aspect_ratio=ratio,
+                        seed=seed,
+                        resolution=res_label,
+                        model_key=key,
+                        model_label=model_info.label,
+                        count=n,
+                        offer_resolution=model_info.has_resolution,
+                        offer_duration=model_info.has_duration,
+                        capture_resolution=capture_res,
+                    )
+                else:
+                    raise
         return dest
 
     def generate_text_video(
@@ -717,6 +838,7 @@ class MediaService:
         resolution: str = "1080p",
         duration_s: int = VIDEO_DURATION_S,
         project_id: Optional[str] = None,
+        workspace_project_id: Optional[str] = None,
         timeout_s: float = 300.0,
         model: Optional[str] = None,
         count: int = 1,
@@ -740,24 +862,53 @@ class MediaService:
         prompt = (prompt or "").strip()
         dest = Path(dest_path)
         with self._lock:
-            project = self.resolve_project(project_id, on_event=on_event)
-            self.video.generate_text_video_flow(
-                prompt_text=prompt,
-                dest_path=dest,
-                duration_s=duration,
-                timeout_s=timeout_s,
-                project_id=project,
-                aspect_ratio=ratio,
-                seed=seed,
-                resolution=res_label,
-                reference_paths=reference_paths,
-                model_key=key,
-                model_label=model_info.label,
-                count=n,
-                offer_resolution=model_info.has_resolution,
-                offer_duration=model_info.has_duration,
-                capture_resolution=capture_res,
-            )
+            project = self.resolve_project(project_id, workspace_project_id=workspace_project_id, on_event=on_event)
+            try:
+                self.video.generate_text_video_flow(
+                    prompt_text=prompt,
+                    dest_path=dest,
+                    duration_s=duration,
+                    timeout_s=timeout_s,
+                    project_id=project,
+                    aspect_ratio=ratio,
+                    seed=seed,
+                    resolution=res_label,
+                    reference_paths=reference_paths,
+                    model_key=key,
+                    model_label=model_info.label,
+                    count=n,
+                    offer_resolution=model_info.has_resolution,
+                    offer_duration=model_info.has_duration,
+                    capture_resolution=capture_res,
+                )
+            except Exception as exc:
+                if workspace_project_id and ("404" in str(exc) or "không tồn tại" in str(exc)):
+                    self._emit(on_event, "warn", f"Dự án {project} không tồn tại trên mây (404). Khởi tạo lại dự án mới...")
+                    ws_store = self._get_workspace_store()
+                    if ws_store:
+                        ws_store.remove_flow_project(workspace_project_id, self.account_id)
+                    from .project_media_registry import get_project_media_registry
+                    get_project_media_registry().clear_project(self.account_id, project)
+                    project = self._lazy_create_workspace_project(workspace_project_id, on_event=on_event)
+                    self.video.generate_text_video_flow(
+                        prompt_text=prompt,
+                        dest_path=dest,
+                        duration_s=duration,
+                        timeout_s=timeout_s,
+                        project_id=project,
+                        aspect_ratio=ratio,
+                        seed=seed,
+                        resolution=res_label,
+                        reference_paths=reference_paths,
+                        model_key=key,
+                        model_label=model_info.label,
+                        count=n,
+                        offer_resolution=model_info.has_resolution,
+                        offer_duration=model_info.has_duration,
+                        capture_resolution=capture_res,
+                    )
+                else:
+                    raise
         return dest
 
     def generate_video(
@@ -772,6 +923,7 @@ class MediaService:
         resolution: str = "1080p",
         duration_s: int = VIDEO_DURATION_S,
         project_id: Optional[str] = None,
+        workspace_project_id: Optional[str] = None,
         dry_run: bool = False,
         remove_watermark: bool = True,
         timeout_s: float = 300.0,
@@ -841,7 +993,7 @@ class MediaService:
                     actual_ref_paths.append(p.resolve())
 
         with self._lock:
-            project = self.resolve_project(project_id, on_event=on_event)
+            project = self.resolve_project(project_id, workspace_project_id=workspace_project_id, on_event=on_event)
             run_id, run_dir = _unique_run_dir(self.out_root, "video")
             frame_source: Optional[Literal["provided", "generated"]] = None
             frame: Optional[Path] = None
@@ -878,12 +1030,15 @@ class MediaService:
                 img_res = self.generate_image(
                     prompt=planned_image_prompt,
                     aspect_ratio=image_aspect_ratio,
-                    project_id=project,
+                    project_id=project_id,
+                    workspace_project_id=workspace_project_id,
                     dry_run=dry_run,
                     remove_watermark=remove_watermark,
                     on_event=on_event,
                 )
                 image_status = img_res.status
+                if img_res.project_id:
+                    project = img_res.project_id
                 if img_res.file_path:
                     frame = run_dir / f"starting_frame{Path(img_res.file_path).suffix or '.png'}"
                     shutil.copy(img_res.file_path, frame)
@@ -954,6 +1109,7 @@ class MediaService:
                     resolution=res_label,
                     duration_s=duration,
                     project_id=project,
+                    workspace_project_id=workspace_project_id,
                     timeout_s=timeout_s,
                     model=model_info.id,
                     count=n,
@@ -978,11 +1134,14 @@ class MediaService:
                     resolution=res_label,
                     duration_s=duration,
                     project_id=project,
+                    workspace_project_id=workspace_project_id,
                     timeout_s=timeout_s,
                     model=model_info.id,
                     count=n,
                     on_event=on_event,
                 )
+            if self._project_cache:
+                result.project_id = self._project_cache
             result.video_path = str(video_path) if video_path.is_file() else None
             result.video_bytes = video_path.stat().st_size if video_path.is_file() else None
 

@@ -107,3 +107,13 @@ def test_starting_frame_attach_video_ingredients_single(tmp_path):
     assert len(res) == 1
 
 
+def test_flow_client_account_id_default_and_custom():
+    from src.Workflows.flow_client import FlowClient
+
+    fc1 = FlowClient()
+    assert fc1.account_id == "default"
+
+    fc2 = FlowClient(account_id="acc_user1")
+    assert fc2.account_id == "acc_user1"
+
+
