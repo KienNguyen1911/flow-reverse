@@ -105,6 +105,7 @@ def test_item_scope_reaches_agent_instruction():
         ("top", "chỉ ÁO"),
         ("bottom", "chỉ QUẦN / VÁY"),
         ("full_set", "CẢ BỘ"),
+        ("coordinate_sheet", "BỘ PHỐI"),
     ):
         out = agent.format_agent_instruction(
             NodePromptTask(
@@ -129,6 +130,11 @@ def test_item_scope_excludes_other_piece():
     assert "skirt" in ITEM_SCOPES["top"]["exclude"].lower()
     assert "shirt" in ITEM_SCOPES["bottom"]["exclude"].lower()
     assert "full_set" in ITEM_SCOPES
+    # Sheet là ngoại lệ: túi và giày là món BẮT BUỘC, không được nằm trong danh sách loại trừ.
+    sheet = ITEM_SCOPES["coordinate_sheet"]
+    assert "3.4" in sheet["rule"] and "3.2" in sheet["rule"]
+    assert "bag" not in sheet["exclude"].lower()
+    assert "shoes" not in sheet["exclude"].lower()
 
 
 def test_item_scope_ignored_for_video_and_plain_images():
@@ -153,6 +159,169 @@ def test_item_scope_ignored_for_video_and_plain_images():
         NodePromptTask(node_id="n", node_type="image", upstream_media_urls=[],
                        is_item=True, item_scope="full_set")
     ) is not None
+    assert agent.resolve_item_scope(
+        NodePromptTask(node_id="n", node_type="image", upstream_media_urls=[],
+                       is_item=True, item_scope="coordinate_sheet")
+    ) is not None
+
+
+def test_coordinate_sheet_instruction_forbids_plain_fullset_template():
+    """Chọn 'Bộ phối' mà agent vẫn dùng template §3.2 thì ra flat-lay không chữ — đúng lỗi
+    đã gặp trên UI. Instruction phải chỉ §3.4, bắt buộc typography, và dặn BỎ các cụm
+    negative của plate (`no text`, `no collage`…)."""
+    from src.Workflows.prompt_agent import NodePromptTask
+
+    agent = _agent_with_skills()
+    skill = agent.skill_mgr.get_skill("lookbook-item-cutout-prompter")
+    out = agent.format_agent_instruction(
+        NodePromptTask(node_id="n", node_type="image", upstream_media_urls=[],
+                       is_item=True, item_name="Set Y2K",
+                       item_scope="coordinate_sheet"),
+        skill, [],
+    )
+    assert "BỘ PHỐI" in out
+    assert "§3.4" in out and "§3.2" in out
+    assert "Negative phải BỎ" in out
+    assert "3 ô `DETAIL`" in out
+    assert "COLOR PALETTE" in out
+    assert "first frame" in out
+
+
+def test_coordinate_sheet_instruction_embeds_34_skeleton_at_the_end():
+    """Nhắc §3.4 ở giữa instruction là chưa đủ — agent vẫn trả về §3.2.
+
+    Khối `ĐỊNH DẠNG ĐẦU RA` (thứ agent đọc cuối) phải nêu đúng câu mở đầu của §3.4 và
+    đủ 6 tên khối, để agent không còn đường lùi về template flat-lay.
+    """
+    from src.Workflows.prompt_agent import NodePromptTask
+
+    agent = _agent_with_skills()
+    skill = agent.skill_mgr.get_skill("lookbook-item-cutout-prompter")
+    out = agent.format_agent_instruction(
+        NodePromptTask(node_id="n", node_type="image", upstream_media_urls=[],
+                       is_item=True, item_name="Set Y2K",
+                       item_scope="coordinate_sheet"),
+        skill, [],
+    )
+    _, _, tail = out.partition("--- ĐỊNH DẠNG ĐẦU RA ---")
+    assert tail, "khối định dạng đầu ra bị mất"
+    for marker in ("LAYOUT", "OUTFIT", "FIDELITY LOCKS", "DO NOT ADD",
+                   "TYPE & LIGHT", "COLOR PALETTE", "Negative"):
+        assert marker in tail, marker
+    # Câu mở đầu lấy từ chính §3.4 của skill, không phải bản chép tay.
+    assert "Editorial fashion coordinate sheet" in tail
+    assert "ghost-mannequin" in tail
+    assert "KHÔNG phải flat-lay §3.2" in tail
+    # Khung đầy đủ 3.5K không được dán lại: một lượt gọi thật đã vượt trần 75s.
+    assert len(tail) < 2500
+
+
+def test_coordinate_sheet_sections_flag_plain_plate_prompt():
+    """Đúng prompt người dùng gửi: §3.2 verbatim ⇒ phải bị nhận là thiếu khối."""
+    from src.Workflows.prompt_agent import coordinate_sheet_sections_missing
+
+    plate = (
+        "Flat-lay product arrangement of a complete coordinated set: a white keyhole "
+        "shirt, and grey-blue wide-leg jeans.\n\n"
+        "Negative: no person, no model, no text, no collage, no grid, no multiple items."
+    )
+    missing = coordinate_sheet_sections_missing(plate)
+    assert "LAYOUT" in missing
+    assert "COLOR PALETTE" in missing
+    assert "FIDELITY LOCKS" in missing
+
+    sheet = (
+        "LAYOUT\n- Top left: title\nOUTFIT\nOverall: ...\n"
+        "FIDELITY LOCKS: keep the keyhole open.\nDO NOT ADD: belt.\n"
+        "TYPE & LIGHT\nTwo typefaces.\nCOLOR PALETTE\nNegative: no person."
+    )
+    assert coordinate_sheet_sections_missing(sheet) == []
+
+
+class _StubRunner:
+    """Runner giả: trả lần lượt các output đã chuẩn bị và ghi lại instruction."""
+
+    def __init__(self, outputs: list[str]):
+        self.outputs = list(outputs)
+        self.instructions: list[str] = []
+        self.config = LocalAgentConfig(preferred_agent="agy", timeout_s=75)
+
+    async def run_prompt_instruction(self, instruction, agent=None, model=None, timeout_s=None):
+        self.instructions.append(instruction)
+        return self.outputs.pop(0)
+
+
+_SHEET_PROMPT = (
+    "LAYOUT\n- Top left: title\nOUTFIT\nOverall: ...\n"
+    "FIDELITY LOCKS: keep the keyhole open.\nDO NOT ADD: belt.\n"
+    "TYPE & LIGHT\nTwo typefaces.\nCOLOR PALETTE\nNegative: no person."
+)
+_PLATE_PROMPT = (
+    "Flat-lay product arrangement of a complete coordinated set: shirt and jeans.\n\n"
+    "Negative: no person, no text, no collage, no grid."
+)
+
+
+def test_coordinate_sheet_retries_once_when_agent_returns_plate():
+    """Agent trả §3.2 ⇒ chạy lại một lần với cảnh báo, không trả prompt sai cho UI."""
+    import asyncio
+
+    from src.Workflows.prompt_agent import NodePromptTask
+
+    agent = _agent_with_skills()
+    agent.runner = _StubRunner([_PLATE_PROMPT, _SHEET_PROMPT])
+    res = asyncio.run(agent.generate_prompt_for_node(
+        NodePromptTask(node_id="n", node_type="image", upstream_media_urls=[],
+                       is_item=True, item_name="Set Y2K",
+                       item_scope="coordinate_sheet")
+    ))
+    assert res.prompt == _SHEET_PROMPT
+    assert len(agent.runner.instructions) == 2
+    retry = agent.runner.instructions[1]
+    assert "CẢNH BÁO" in retry
+    assert retry.index("CẢNH BÁO") < retry.index("--- ĐỊNH DẠNG ĐẦU RA ---")
+
+
+def test_plate_scope_never_retries():
+    """Phạm vi plate không được sinh thêm lần gọi: §3.2 là ĐÚNG cho `full_set`."""
+    import asyncio
+
+    from src.Workflows.prompt_agent import NodePromptTask
+
+    agent = _agent_with_skills()
+    agent.runner = _StubRunner([_PLATE_PROMPT])
+    res = asyncio.run(agent.generate_prompt_for_node(
+        NodePromptTask(node_id="n", node_type="image", upstream_media_urls=[],
+                       is_item=True, item_name="Set Y2K", item_scope="full_set")
+    ))
+    assert res.prompt == _PLATE_PROMPT
+    assert len(agent.runner.instructions) == 1
+
+
+def test_sheet_instruction_never_goes_inline():
+    """`agy` treo vô hạn khi nhận instruction sheet ~21K qua `-p` (>200s, không stdout).
+
+    Cùng nội dung ghi ra `out/_agent_tasks/*.md` thì trả lời trong ~24s. Ngưỡng inline
+    phải thấp hơn mọi instruction thật, nếu không nút AI Prompt treo tới hết timeout và
+    người dùng chỉ thấy prompt cũ.
+    """
+    from src.Workflows.local_agent_runner import MAX_INLINE_INSTRUCTION, _build_print_arg
+    from src.Workflows.prompt_agent import NodePromptTask
+
+    agent = _agent_with_skills()
+    skill = agent.skill_mgr.get_skill("lookbook-item-cutout-prompter")
+    ins = agent.format_agent_instruction(
+        NodePromptTask(node_id="n", node_type="image", upstream_media_urls=[],
+                       is_item=True, item_name="Set Y2K",
+                       item_scope="coordinate_sheet"),
+        skill, [],
+    )
+    assert len(ins) > MAX_INLINE_INSTRUCTION, (
+        f"instruction {len(ins)} ký tự vẫn lọt ngưỡng inline {MAX_INLINE_INSTRUCTION}"
+    )
+    arg = _build_print_arg(ins, "agy")
+    assert len(arg) < 1000, f"arg vẫn quá dài: {len(arg)}"
+    assert "out/_agent_tasks/" in arg
 
 
 def test_item_node_not_reminded_it_is_a_plate():
@@ -175,6 +344,9 @@ def test_api_accepts_item_scope(client: TestClient):
 
     body = GenerateNodePromptBody(node_id="n", is_item=True, item_scope="bottom")
     assert body.item_scope == "bottom"
+    assert GenerateNodePromptBody(
+        node_id="n", is_item=True, item_scope="coordinate_sheet"
+    ).item_scope == "coordinate_sheet"
     assert GenerateNodePromptBody(node_id="n").item_scope is None
 
 

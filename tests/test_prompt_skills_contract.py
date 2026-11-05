@@ -139,6 +139,27 @@ def test_cutout_skill_rejects_human_seg():
     assert "no person" in text.lower()
 
 
+def test_coordinate_sheet_keeps_typography_and_drops_plate_negatives():
+    """Sheet là ngoại lệ có chủ đích: có chữ, nhiều món, **không** qua rembg.
+
+    Hai lỗi phá sheet ngay: (1) bê negative của plate (`no text`, `no collage`, `no grid`,
+    `no multiple items`) — xoá đúng thứ sheet cần; (2) quên khoá chi tiết lạ nên model
+    "sửa" keyhole / gấu xẻ / cạp trễ. Test khoá cả hai, và khoá luôn palette 5 ô.
+    """
+    text = (SKILLS / "lookbook-item-cutout-prompter.md").read_text(encoding="utf-8")
+    block = next(
+        b for b in re.findall(r"```text\n(.*?)\n```", text, re.DOTALL)
+        if b.strip().startswith("Editorial fashion coordinate sheet")
+    )
+    for needle in ("FIDELITY LOCKS", "COLOR PALETTE", "DETAIL", "01 /"):
+        assert needle in block, f"sheet thiếu '{needle}'"
+    assert "no person" in block.lower()
+
+    negative = block.split("Negative:", 1)[-1].lower()
+    for banned in ("no text", "no collage", "no grid", "no multiple items"):
+        assert banned not in negative, f"negative sheet chứa '{banned}' — sẽ xoá chính sheet"
+
+
 def _skill_example_prompts() -> list[str]:
     """Prompt mẫu trong skill, đọc từ khối ```text bắt đầu bằng câu camera.
 

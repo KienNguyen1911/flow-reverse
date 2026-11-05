@@ -39,7 +39,8 @@ class GenerateNodePromptBody(BaseModel):
     #: Node ảnh tick "đây là ảnh sản phẩm" ⇒ dùng skill cutout + tên món làm ngữ cảnh.
     is_item: bool = False
     item_name: Optional[str] = None
-    #: Phạm vi tách món: `"top"` | `"bottom"` | `"full_set"`. Chỉ có nghĩa khi `is_item`.
+    #: Phạm vi tách món: `"top"` | `"bottom"` | `"full_set"` | `"coordinate_sheet"`.
+    #: Chỉ có nghĩa khi `is_item`; giá trị lạ bị `PromptAgent.resolve_item_scope` bỏ qua.
     item_scope: Optional[str] = None
     script_path: Optional[str] = None
 

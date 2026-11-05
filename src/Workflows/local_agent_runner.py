@@ -18,11 +18,12 @@ CONFIG_FILE = ROOT / "configs" / "agent_config.json"
 #: Thư mục chứa instruction dài, để CLI đọc từ file thay vì nhét vào command line.
 TASK_DIR = ROOT / "out" / "_agent_tasks"
 
-#: Trần an toàn cho command line Windows. Giới hạn thật của CreateProcess là 32.767
-#: ký tự cho **toàn bộ** dòng lệnh (gồm cả đường dẫn exe, flag, model), vượt là
-#: `WinError 206: The filename or extension is too long`. Skill `try-on-image-prompter`
-#: một mình đã 33.404 ký tự, nên nhét nguyên văn vào `-p` luôn chết.
-MAX_INLINE_INSTRUCTION = 30000
+#: Trần cho instruction truyền thẳng qua `-p`. Đừng nâng lên lại: `agy` **treo vô hạn**
+#: khi nhận instruction ~21K ký tự inline (quá 200s, không một byte stdout), trong khi
+#: đúng nội dung đó ghi ra file rồi trỏ tới thì trả lời trong ~24s. Instruction thật
+#: (skill + ngữ cảnh node) luôn > 20K, nên ngưỡng để thấp cho mọi lượt sinh prompt đều
+#: đi qua file — vừa tránh treo, vừa không bao giờ chạm trần 32.767 của Windows.
+MAX_INLINE_INSTRUCTION = 4000
 
 
 @dataclass

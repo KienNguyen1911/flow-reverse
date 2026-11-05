@@ -36,4 +36,9 @@ export const ITEM_SCOPE_OPTIONS: { value: ItemScope; label: string; hint: string
   { value: "top", label: "Áo", hint: "Chỉ món mặc trên: áo, camisole, cardigan" },
   { value: "bottom", label: "Quần / Váy", hint: "Chỉ món mặc dưới: quần, váy, shorts" },
   { value: "full_set", label: "Cả bộ", hint: "Các món xếp cạnh nhau trên một ảnh — không tách nền được" },
+  {
+    value: "coordinate_sheet",
+    label: "Bộ phối",
+    hint: "Cả bộ + callout, 3 ô detail, palette 5 màu — có chữ, không tách nền được",
+  },
 ];

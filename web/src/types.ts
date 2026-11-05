@@ -551,7 +551,7 @@ export interface GenerateNodePromptRequest {
   is_item?: boolean;
   /** Tên món — ngữ cảnh duy nhất khi node không gắn ảnh tham chiếu. */
   item_name?: string;
-  /** Phạm vi cắt món: `top` | `bottom` | `full_set`. Bỏ trống ⇒ skill tự chọn. */
+  /** Phạm vi cắt món: `top` | `bottom` | `full_set` | `coordinate_sheet`. Bỏ trống ⇒ skill tự chọn. */
   item_scope?: ItemScope;
   script_path?: string;
 }

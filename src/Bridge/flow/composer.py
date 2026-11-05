@@ -79,13 +79,22 @@ def parse_prompt_segments(
                 segments.append(TextSegment(prompt[last_end:start]))
             for idx in range(len(refs)):
                 if m.group(f"REF_{idx}") is not None:
-                    segments.append(
-                        MentionSegment(
-                            alias_name=refs[idx].get("alias_name", f"ref{idx+1}"),
-                            media_id=refs[idx].get("media_id", ""),
+                    alias = refs[idx].get("alias_name", f"ref{idx+1}")
+                    if idx not in used_indices:
+                        # Only FIRST occurrence becomes a rich MentionSegment (chip in ProseMirror).
+                        # This registers the asset into Google Flow's reference shelf (max 3 references).
+                        segments.append(
+                            MentionSegment(
+                                alias_name=alias,
+                                media_id=refs[idx].get("media_id", ""),
+                            )
                         )
-                    )
-                    used_indices.add(idx)
+                        used_indices.add(idx)
+                    else:
+                        # Subsequent occurrences remain as clean plain text (@alias).
+                        # This prevents duplicate mention chips which causes Google Flow
+                        # backend to reject the request with [3] (INVALID_ARGUMENT).
+                        segments.append(TextSegment(f"@{alias}"))
                     break
             last_end = end
 
@@ -184,6 +193,38 @@ class ComposerMixin:
             time.sleep(1.0)
         raise PageInteractionError("Không nhập được prompt vào composer sau nhiều lần thử.")
 
+    def _paste_text_segment(self, text: str) -> None:
+        """Paste a text chunk into ProseMirror using synthetic ClipboardEvent."""
+        if not text:
+            return
+        js_paste = """([text]) => {
+            const pm = document.querySelector('div.ProseMirror');
+            if (!pm) return false;
+            pm.focus();
+            const dt = new DataTransfer();
+            dt.setData('text/plain', text);
+            const ev = new ClipboardEvent('paste', {
+                bubbles: true,
+                cancelable: true,
+                clipboardData: dt
+            });
+            const dispatched = pm.dispatchEvent(ev);
+            if (dispatched) {
+                try {
+                    document.execCommand('insertText', false, text);
+                } catch (e) {}
+            }
+            return true;
+        }"""
+        try:
+            self.page.evaluate(js_paste, [text])
+        except Exception as exc:
+            self._log(f"Paste text segment error: {exc}, fallback to Input.insertText")
+            try:
+                self._cdp.send("Input.insertText", {"text": text})
+            except Exception:
+                pass
+
     def type_prompt_with_mentions(
         self,
         prompt: str,
@@ -191,7 +232,10 @@ class ComposerMixin:
         project_id: Optional[str] = None,
         registry: Optional[Any] = None,
     ) -> None:
-        """Type a prompt into ProseMirror with inline @mention chips for references."""
+        """Type a prompt into ProseMirror with chunked paste for text and @mention chips for references.
+        
+        Paced with explicit 2.0s sleep after each pasted chunk and each @mention.
+        """
         if not refs:
             self.type_prompt(prompt)
             return
@@ -202,22 +246,25 @@ class ComposerMixin:
 
         pos = self.wait_composer()
         self.page.mouse.click(pos["x"], pos["y"])
-        time.sleep(jitter(0.4, 0.1, 0.2))
+        time.sleep(0.5)
+        # Clear existing content cleanly using Ctrl+A + Backspace
         try:
-            self._eval("(() => { try { document.execCommand('selectAll'); document.execCommand('delete'); } catch(e){} return true; })()")
+            self.page.keyboard.press("Control+A")
+            time.sleep(0.2)
+            self.page.keyboard.press("Backspace")
+            time.sleep(0.3)
         except Exception:
             pass
-        time.sleep(0.2)
 
-        for seg in segments:
+        for idx, seg in enumerate(segments):
             if isinstance(seg, TextSegment):
                 if seg.text:
-                    try:
-                        self._cdp.send("Input.insertText", {"text": seg.text})
-                    except Exception as e:
-                        self._log(f"Input.insertText error: {e}")
-                    time.sleep(jitter(0.15, 0.05, 0.1))
+                    self._log(f"[Composer] Paste đoạn #{idx+1}: {repr(seg.text[:35])}...")
+                    self._paste_text_segment(seg.text)
+                    # Thời gian nghỉ sau mỗi lần paste đoạn là 2.0s theo yêu cầu
+                    time.sleep(2.0)
             elif isinstance(seg, MentionSegment):
+                self._log(f"[Composer] Chèn @mention #{idx+1}: @{seg.alias_name}")
                 self._insert_mention(
                     seg.alias_name,
                     seg.media_id,
@@ -225,6 +272,8 @@ class ComposerMixin:
                     registry=registry,
                     refs=refs,
                 )
+                # Thời gian nghỉ sau mỗi lần @mention là 2.0s theo yêu cầu
+                time.sleep(2.0)
 
     def _insert_mention(
         self,
@@ -235,17 +284,20 @@ class ComposerMixin:
         refs: Optional[list[dict[str, Any]]] = None,
         retry_on_stale: bool = True,
     ) -> bool:
-        """Insert a single @mention chip into ProseMirror by searching alias_name in the popover."""
+        """Insert a single @mention chip into ProseMirror by searching alias_name in the popover.
+        
+        Paced with explicit 1.0s wait intervals to eliminate race conditions.
+        """
         page = self.page
         if not page:
             return False
 
-        # 1. Type '@' to open the popover
+        # 1. Type '@' to open the popover, then WAIT 1.0s for popover to render
         try:
             page.keyboard.type("@")
         except Exception:
             self._cdp.send("Input.insertText", {"text": "@"})
-        time.sleep(0.4)
+        time.sleep(1.0)
 
         # 2. Wait for flow-add-menu-popover-content and input.search-input
         search_input = page.locator("flow-add-menu-popover-content input.search-input")
@@ -255,17 +307,17 @@ class ComposerMixin:
             add_trigger = page.locator('button.add-menu-trigger, button[aria-label="Thêm thành phần vào ô nhập câu lệnh"]')
             if add_trigger.is_visible():
                 add_trigger.click(force=True)
-                time.sleep(0.4)
+                time.sleep(1.0)
             try:
                 search_input.wait_for(state="visible", timeout=3000)
             except Exception as exc:
                 self._log(f"Không mở được popover mention: {exc}")
-                self._cdp.send("Input.insertText", {"text": f"@{alias_name} "})
+                self._paste_text_segment(f"{alias_name} ")
                 return False
 
-        # 3. Fill alias_name into search input
+        # 3. Fill alias_name into search input and WAIT 1.0s for filtering
         search_input.fill(alias_name)
-        time.sleep(jitter(0.5, 0.1, 0.2))
+        time.sleep(1.0)
 
         # 4. Check if matching item appears in virtual scroll
         matched_option = None
@@ -285,32 +337,28 @@ class ComposerMixin:
 
         if matched_option:
             matched_option.click(force=True)
-            time.sleep(0.4)
+            time.sleep(1.0)
+
+            # If a detail pane opened with "Thêm vào câu lệnh":
             add_btn = page.locator('button.detail-add-to-prompt-btn, flow-add-menu-detail-pane button:has-text("Thêm vào câu lệnh")').first
             if add_btn.is_visible():
                 add_btn.click(force=True)
-            else:
-                page.keyboard.press("Enter")
-            time.sleep(0.5)
+                time.sleep(1.0)
 
+            # Position cursor after chip and add trailing space
             page.keyboard.press("End")
-            self._cdp.send("Input.insertText", {"text": " "})
+            time.sleep(0.2)
+            self._paste_text_segment(" ")
+            time.sleep(0.3)
             return True
 
-        # 5. Item not found in search results
+        # 5. Item not found in search results: close popover safely with Escape
         self._log(f"Không tìm thấy item [{alias_name}] trong popover mention")
         page.keyboard.press("Escape")
-        time.sleep(0.3)
+        time.sleep(0.5)
 
-        # Check if '@' remains at the end of the editor before pressing Backspace
-        ends_with_at = bool(page.evaluate("""() => {
-            const pm = document.querySelector('div.ProseMirror');
-            return pm && (pm.innerText || '').trimEnd().endsWith('@');
-        }"""))
-        if ends_with_at:
-            page.keyboard.press("Backspace")
-
-        self._cdp.send("Input.insertText", {"text": f"@{alias_name} "})
+        # Safe fallback: do NOT press Backspace
+        self._paste_text_segment(f"{alias_name} ")
         return False
 
     def ensure_ui_image_mode(

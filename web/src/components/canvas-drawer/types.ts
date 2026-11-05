@@ -1,5 +1,8 @@
-/** Phạm vi ảnh sản phẩm — quyết định món nào lên ảnh khi ảnh ref là cả bộ. */
-export type ItemScope = "top" | "bottom" | "full_set";
+/**
+ * Phạm vi ảnh sản phẩm — quyết định món nào lên ảnh khi ảnh ref là cả bộ.
+ * `coordinate_sheet` là ngoại lệ có chủ đích: cả bộ + typography editorial, **không** tách nền.
+ */
+export type ItemScope = "top" | "bottom" | "full_set" | "coordinate_sheet";
 
 /**
  * The live canvas node shape — the single declaration.
@@ -64,7 +67,7 @@ export interface CanvasDrawerNode {
   isItem?: boolean;
   /** Tên món, dùng để đặt tên file trong thư viện. */
   itemName?: string | null;
-  /** Phạm vi cắt món: `top` (áo) | `bottom` (quần/váy) | `full_set` (cả bộ). */
+  /** Phạm vi cắt món: `top` (áo) | `bottom` (quần/váy) | `full_set` (cả bộ) | `coordinate_sheet` (bộ phối có chữ). */
   itemScope?: ItemScope | null;
 }
 

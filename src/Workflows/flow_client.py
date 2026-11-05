@@ -564,7 +564,6 @@ class FlowClient:
                 # Always clear any leftover chips from previous runs
                 br.clear_reference_chips()
 
-                resolved_refs: list[dict[str, Any]] = []
                 if actual_ref_paths:
                     from .project_media_registry import (
                         compute_alias_name,
@@ -572,66 +571,76 @@ class FlowClient:
                     )
 
                     pm_registry = get_project_media_registry()
-                    had_new_uploads = False
+                    account_key = getattr(self, "account_id", "default") or "default"
 
+                    resolved_refs: list[dict[str, Any]] = []
+
+                    # 1. Deduplication & Upload Management (Upload Once per Project)
                     for idx, rpath in enumerate(actual_ref_paths):
                         sha = sha256_file(rpath)
                         alias = compute_alias_name(idx, sha)
-                        account_key = getattr(self, "account_id", "default") or "default"
-                        # Check cache for current account, or any other account associated with this project
+                        upload_fname = f"{alias}{rpath.suffix.lower()}"
+
+                        # Check persistent cache
                         cached = pm_registry.get(account_key, project_id, sha)
                         if not cached:
-                            for alt_acc in ["flow_main", "default", "kiennd-study", "aaaaa"]:
-                                cached = pm_registry.get(alt_acc, project_id, sha)
-                                if cached:
-                                    break
+                            # Cross-account fallback for the same project
+                            with pm_registry._lock:
+                                for entry in pm_registry._entries.values():
+                                    if (
+                                        isinstance(entry, dict)
+                                        and entry.get("project_id", "").lower() == project_id.lower()
+                                        and entry.get("sha256", "").lower() == sha.lower()
+                                    ):
+                                        cached = entry
+                                        break
 
                         if cached and cached.get("media_id"):
+                            # CACHE HIT: Image already exists in this project on Cloud!
+                            c_alias = cached.get("alias_name") or alias
+                            c_mid = cached.get("media_id")
                             ev(
                                 "info",
-                                f"Ảnh tham chiếu #{idx+1} ({rpath.name}) cache HIT: alias='{cached['alias_name']}', media_id={cached['media_id'][:8]}...",
+                                f"[Cache HIT] Ảnh #{idx+1} ({c_alias}) đã có trên Project ({c_mid[:8]}...), KHÔNG tải lại!",
                             )
-                            resolved_refs.append(
-                                {
-                                    "alias_name": cached.get("alias_name") or alias,
-                                    "media_id": cached["media_id"],
-                                    "path": rpath,
-                                    "sha256": sha,
-                                }
-                            )
+                            resolved_refs.append({
+                                "alias_name": c_alias,
+                                "media_id": c_mid,
+                                "sha256": sha,
+                                "path": str(rpath),
+                            })
                         else:
-                            # Cache MISS: upload via paste with alias directly as file name
-                            had_new_uploads = True
-                            upload_fname = f"{alias}{rpath.suffix.lower()}"
-                            ev("step", f"Tải lên ảnh tham chiếu #{idx+1}/{len(actual_ref_paths)}: {upload_fname}...")
+                            # CACHE MISS: First time upload to this project
+                            ev("step", f"[Cache MISS] Tải lên ảnh #{idx+1}/{len(actual_ref_paths)}: {rpath.name}...")
                             paste_info = br.attach_reference_paste(
                                 rpath,
-                                settle_s=0.5,
+                                settle_s=1.0,
                                 clear_existing=False,
                                 project_id=project_id,
                                 filename=upload_fname,
                             )
                             media_id = paste_info.get("media_id") or br.get_last_uploaded_media_id(project_id=project_id)
-                            if not media_id:
-                                import uuid
-                                media_id = str(uuid.uuid4())
-                            pm_registry.put(account_key, project_id, sha, media_id, alias)
-                            resolved_refs.append(
-                                {
-                                    "alias_name": alias,
-                                    "media_id": media_id,
-                                    "path": rpath,
-                                    "sha256": sha,
-                                }
-                            )
+                            if media_id:
+                                pm_registry.put(account_key, project_id, sha, media_id, alias)
+                                ev("info", f"[Cache SAVED] Đã lưu cache ảnh {alias} ({media_id[:8]}...) vào registry")
+                            resolved_refs.append({
+                                "alias_name": alias,
+                                "media_id": media_id or "",
+                                "sha256": sha,
+                                "path": str(rpath),
+                            })
 
-                    if had_new_uploads:
-                        # Clear temporary chips from paste uploads before typing prompt with @mentions
-                        br.clear_reference_chips()
-                        time.sleep(0.5)
+                    # Clean leftover upload paste chips so the composer prompt relies on inline @mention chips
+                    br.clear_reference_chips()
+                    time.sleep(0.5)
 
-                    ev("step", "nhập prompt kèm @mention vào composer...")
-                    br.type_prompt_with_mentions(prompt, resolved_refs, project_id=project_id, registry=pm_registry)
+                    ev("step", f"nhập prompt với inline @mentions ({', '.join(r['alias_name'] for r in resolved_refs)})...")
+                    br.type_prompt_with_mentions(
+                        prompt,
+                        resolved_refs,
+                        project_id=project_id,
+                        registry=pm_registry,
+                    )
                 else:
                     ev("step", "nhập prompt vào composer...")
                     br.type_prompt(prompt)

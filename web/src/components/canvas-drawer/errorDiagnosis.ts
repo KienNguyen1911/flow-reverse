@@ -96,6 +96,17 @@ export function diagnoseError(
   // Backend trả câu tiếng Việt ("Tham số không hợp lệ: prompt: …") từ
   // validation_exception_handler, nên khớp theo tiếng Anh là trượt và rơi xuống
   // EXECUTION_ERROR — người dùng bị hướng dẫn đi kiểm tra mạng dù lỗi nằm ở chỗ khác.
+  if (lower.includes("từ google") || lower.includes("từ google:") || (lower.includes("invalid_argument") && lower.includes("[3]"))) {
+    return {
+      code: "VALIDATION_ERROR",
+      title: "Google Flow từ chối tham số yêu cầu",
+      explanation:
+        "Google Flow phản hồi mã lỗi INVALID_ARGUMENT ([3]). Nguyên nhân: số lượng thẻ ảnh tham chiếu (@mention chip) bị lặp lại quá nhiều lần hoặc vượt giới hạn 3 tham chiếu cho phép của Google Flow. Yêu cầu chưa được xử lý nên không mất credit.",
+      fixHint:
+        "1. Hệ thống đã tự động giới hạn chỉ chèn tối đa 1 thẻ @mention chip cho mỗi ảnh tham chiếu, các vị trí nhắc lại trong prompt sẽ giữ nguyên dạng text.\n2. Bấm 'Thử chạy lại ngay' để tạo lại.",
+    };
+  }
+
   if (
     lower.includes("validation") ||
     lower.includes("422") ||

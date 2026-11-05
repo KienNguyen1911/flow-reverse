@@ -179,27 +179,59 @@ sách món vào kịch bản.
 
 Ảnh Shopee gần như luôn là **cả bộ trên người mẫu**, còn skill cutout lại bắt "chỉ một món".
 Không chỉ định gì thì model chọn vật thể nổi bật nhất — thực tế **luôn ra chiếc áo**, không
-bao giờ ra quần. Vì vậy node ảnh sản phẩm có thêm 3 nút chọn phạm vi, mặc định `Áo`:
+bao giờ ra quần. Vì vậy node ảnh sản phẩm có thêm 4 nút chọn phạm vi, mặc định `Áo`:
 
 | Nút | `item_scope` | Ảnh sinh ra | Tách nền được? |
 | :-- | :-- | :-- | :-- |
 | **Áo** | `top` | Một món mặc trên, quần/váy bị loại hẳn | Có |
 | **Quần / Váy** | `bottom` | Một món mặc dưới, áo bị loại hẳn | Có |
 | **Cả bộ** | `full_set` | Các món xếp cạnh nhau trên cùng nền | **Không** |
+| **Bộ phối** | `coordinate_sheet` | Cả bộ + callout, 3 ô `DETAIL`, palette 5 màu | **Không** |
 
-`full_set` là ngoại lệ **duy nhất** được bỏ quy tắc "một món" trong
-`prompt-skills/lookbook-item-cutout-prompter.md`. Các quy tắc còn lại (nền trơn, cấm người,
-cấm chữ, giữ đúng phom/màu) giữ nguyên.
+`full_set` và `coordinate_sheet` là **hai ngoại lệ có chủ đích** của quy tắc "một món" trong
+`prompt-skills/lookbook-item-cutout-prompter.md`:
 
-Ảnh cả bộ **không đem tách nền**: rembg coi cả cụm là một khối, và kể cả khi tách thành công
-thì bbox gộp cả bộ nên card sản phẩm hở khoảng trống giữa các món. `cutout_items` giờ đếm số
-mảnh alpha rời (`pieces`) và loại ảnh có >1 mảnh kèm lời nhắc sinh lại theo từng món. Dùng
-thẳng ảnh nền trơn cho composition.
+- `full_set` chỉ bỏ "một món" — vẫn **cấm chữ**, vẫn là plate dùng làm layer.
+- `coordinate_sheet` bỏ cả "một món" lẫn "cấm chữ": ảnh ra là **deliverable** có typography
+  (title, callout `01`–`0N`, 3 ô `DETAIL`, palette 5 màu), dùng cho bìa/gallery/social.
+
+Cả hai đều **không đem tách nền**: rembg coi cả cụm là một khối, và với sheet thì cắt luôn chữ.
+
+Với `full_set`, rembg còn gộp bbox cả cụm nên card sản phẩm hở khoảng trống giữa các món.
+`cutout_items` giờ đếm số mảnh alpha rời (`pieces`) và loại ảnh có >1 mảnh kèm lời nhắc sinh
+lại theo từng món. Dùng thẳng ảnh nền trơn cho composition.
 
 Đường đi của giá trị: `CanvasNode.itemScope` → `GenerateNodePromptBody.item_scope` →
 `NodePromptTask.item_scope` → `PromptAgent.ITEM_SCOPES` (chèn khối "Phạm vi cần tách" vào
 instruction của agent). Cả 3 đường gọi agent — nút **AI Prompt** trên thẻ, tab Cấu hình trong
 drawer, và JIT lúc chạy workflow — đều gửi kèm `is_item`/`item_name`/`item_scope`.
+
+Đổi phạm vi **không** tự sinh lại prompt: prompt cũ vẫn nằm nguyên trên node. Drawer hiện
+nhắc đúng câu đó; phải bấm **AI Prompt** thì prompt mới đổi.
+
+#### Vì sao instruction sheet phải dán lại khung §3.4
+
+Nhắc "dùng §3.4" ở giữa instruction là **không đủ**. `gemini-3.8-flash-low` đọc 21K ký tự
+skill rồi vẫn trả về nguyên văn template §3.2 (flat-lay, `no text`, `no collage`) — đúng
+triệu chứng "chọn Bộ phối mà prompt không khác gì". Hai lớp chặn:
+
+1. `format_agent_instruction` trích **câu mở đầu** của §3.4 từ chính file skill rồi dán vào
+   cuối instruction, ngay trong `ĐỊNH DẠNG ĐẦU RA` — chỗ agent đọc cuối cùng trước khi trả
+   lời — kèm danh sách 6 khối bắt buộc. Không chép tay sang Python: sửa template trong
+   skill là app theo ngay.
+2. `generate_prompt_for_node` kiểm tra hậu sinh bằng `coordinate_sheet_sections_missing`
+   (`LAYOUT`, `OUTFIT`, `FIDELITY LOCKS`, `DO NOT ADD`, `TYPE & LIGHT`, `COLOR PALETTE`,
+   `Negative:`). Thiếu khối nào thì chạy lại **đúng một lần** với cảnh báo chèn ngay trước
+   khối định dạng. Không retry vô hạn: agent hỏng hẳn thì trả kết quả và người dùng thấy.
+
+#### Vì sao instruction luôn đi qua file task
+
+`agy` **treo vô hạn** khi instruction ~21K ký tự được truyền thẳng qua `-p`: không một byte
+stdout, quá 200s, kể cả khi `stdin` đã đóng. Đúng nội dung đó ghi ra
+`out/_agent_tasks/task_*.md` rồi trỏ agent tới file thì trả lời trong ~24s. Vì vậy
+`MAX_INLINE_INSTRUCTION` hạ từ 30.000 xuống **4.000** — mọi instruction thật (skill + ngữ
+cảnh node) đều đi qua file. Trước đây ngưỡng 30.000 khiến lượt sinh sheet treo im lặng cho
+tới khi hết 75s timeout, và người dùng chỉ thấy prompt cũ không đổi.
 
 ### Thư viện ảnh sản phẩm (`out/items/<project_id>/`)
 

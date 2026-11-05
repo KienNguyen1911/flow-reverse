@@ -1,11 +1,7 @@
 import type { CanvasDrawerNode } from "./types";
-
-/** Phạm vi ảnh sản phẩm — phải khớp `ITEM_SCOPE_OPTIONS` trong CanvasPanel. */
-const ITEM_SCOPE_OPTIONS: { value: "top" | "bottom" | "full_set"; label: string; hint: string }[] = [
-  { value: "top", label: "Áo", hint: "Chỉ món mặc trên: áo, camisole, cardigan" },
-  { value: "bottom", label: "Quần / Váy", hint: "Chỉ món mặc dưới: quần, váy, shorts" },
-  { value: "full_set", label: "Cả bộ", hint: "Các món xếp cạnh nhau trên một ảnh — không tách nền được" },
-];
+// Một nguồn duy nhất cho 4 phạm vi — trước đây list này được chép tay và lệch ngay khi
+// thêm `coordinate_sheet`.
+import { ITEM_SCOPE_OPTIONS } from "../canvas/constants";
 
 interface Props {
   node: CanvasDrawerNode;
@@ -41,9 +37,11 @@ export function ItemOptions({ node, onUpdateNode }: Props) {
             placeholder="Tên món — vd: Áo Kiểu Nữ Donna"
             className="h-7 rounded-ctl border border-line2 bg-panel px-1.5 text-[11.5px] text-fg outline-none focus:border-acc"
           />
-          <div className="flex items-center gap-1">
-            <span className="text-[10px] font-semibold text-mut shrink-0">Cắt món</span>
-            <div className="flex items-center gap-1 flex-1">
+          {/* 4 lựa chọn ⇒ lưới 2×2. Xếp một hàng thì "Quần / Váy" và "Bộ phối" bị bóp
+              chữ trong drawer hẹp. */}
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-semibold text-mut">Cắt món</span>
+            <div className="grid grid-cols-2 gap-1">
               {ITEM_SCOPE_OPTIONS.map((opt) => {
                 const active = (node.itemScope ?? "top") === opt.value;
                 return (
@@ -52,7 +50,7 @@ export function ItemOptions({ node, onUpdateNode }: Props) {
                     type="button"
                     onClick={() => onUpdateNode?.(node.id, { itemScope: opt.value })}
                     title={opt.hint}
-                    className={`flex-1 h-6 rounded-[4px] text-[10px] font-semibold border transition-colors cursor-pointer ${
+                    className={`h-6 rounded-[4px] text-[10px] font-semibold border transition-colors cursor-pointer ${
                       active
                         ? "border-acc bg-acc/15 text-acc"
                         : "border-line2 bg-panel text-dim hover:text-fg"
@@ -63,6 +61,12 @@ export function ItemOptions({ node, onUpdateNode }: Props) {
                 );
               })}
             </div>
+            {node.prompt.trim() !== "" && (
+              <p className="text-[10px] text-mut leading-snug">
+                Đổi phạm vi <span className="font-semibold text-warn">không</span> tự viết lại
+                prompt — bấm <span className="font-semibold text-acc">AI Prompt</span> trên node.
+              </p>
+            )}
           </div>
         </>
       )}

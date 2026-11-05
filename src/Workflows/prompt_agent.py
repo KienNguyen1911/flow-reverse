@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -16,7 +17,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 #: Phạm vi món đồ của node ảnh sản phẩm. Skill cutout mặc định bắt "chỉ một món", nên
 #: phải nói rõ món nào — không thì model tự chọn vật thể nổi bật nhất (thường là chiếc áo).
-#: `full_set` là ngoại lệ duy nhất: người dùng chủ động muốn cả bộ trên một ảnh.
+#: Hai ngoại lệ có chủ đích: `full_set` bỏ luật "một món" nhưng vẫn cấm chữ (plate dùng làm
+#: layer); `coordinate_sheet` bỏ cả "một món" lẫn "cấm chữ" vì ảnh ra là deliverable có
+#: typography — xem §2.2/§3.4 của skill, và tuyệt đối không đem rembg.
 ITEM_SCOPES: dict[str, dict[str, str]] = {
     "top": {
         "label": "chỉ ÁO",
@@ -46,7 +49,55 @@ ITEM_SCOPES: dict[str, dict[str, str]] = {
         ),
         "exclude": "background scenery, furniture, props",
     },
+    "coordinate_sheet": {
+        "label": "BỘ PHỐI (sheet)",
+        "rule": (
+            "Produce the COORDINATE SHEET deliverable defined by §2.2 and the §3.4 template: "
+            "the complete outfit as a ghost-mannequin flat-lay PLUS editorial typography — "
+            "sheet title, issue number, numbered callouts (01..0N, in dressing order), three "
+            "DETAIL crops and a five-swatch COLOR PALETTE. Include every piece visible in the "
+            "reference: top, bottom, bag and shoes. Do NOT use the plain full_set template "
+            "(§3.2) — it has no typography. The output is a deliverable: never feed it to "
+            "rembg, never use it as a video first frame."
+        ),
+        "exclude": (
+            "human body, face, hands, hair, background scenery, props, and any garment or "
+            "accessory that is not in the reference"
+        ),
+    },
 }
+
+#: Các khối bắt buộc của khung §3.4. Dùng để kiểm tra agent có thật sự viết coordinate
+#: sheet hay lại lùi về flat-lay §3.2 — chuyện đã xảy ra thật với `gemini-3.8-flash-low`.
+COORDINATE_SHEET_SECTIONS: tuple[str, ...] = (
+    "LAYOUT",
+    "OUTFIT",
+    "FIDELITY LOCKS",
+    "DO NOT ADD",
+    "TYPE & LIGHT",
+    "COLOR PALETTE",
+    "Negative:",
+)
+
+
+def extract_skill_template(raw_content: str, section: str) -> Optional[str]:
+    """Khối ```text đầu tiên nằm ngay dưới heading `### <section>` của skill.
+
+    Template sống trong file .md (nguồn sự thật duy nhất); hàm này chỉ *trích lại* để dán
+    vào cuối instruction. Chép tay sang Python thì hai bản lệch nhau ngay lần sửa sau, và
+    bản Python sẽ thắng một cách âm thầm.
+    """
+    heading = re.search(rf"^###\s+{re.escape(section)}\b.*$", raw_content, re.MULTILINE)
+    if heading is None:
+        return None
+    fence = re.search(r"```text\s*\n(.*?)\n```", raw_content[heading.end():], re.DOTALL)
+    return fence.group(1).strip() if fence else None
+
+
+def coordinate_sheet_sections_missing(prompt: str) -> list[str]:
+    """Các khối §3.4 mà `prompt` còn thiếu. Rỗng ⇒ đúng là coordinate sheet."""
+    text = (prompt or "").upper()
+    return [s for s in COORDINATE_SHEET_SECTIONS if s.upper() not in text]
 
 
 @dataclass
@@ -69,7 +120,8 @@ class NodePromptTask:
     item_name: Optional[str] = None
     #: Phạm vi món đồ người dùng chọn trên node ảnh sản phẩm:
     #: `"top"` (chỉ áo) | `"bottom"` (chỉ quần/váy) | `"full_set"` (cả bộ, ngoại lệ của
-    #: quy tắc "một món" trong skill cutout). `None` ⇒ giữ nguyên hành vi cũ.
+    #: quy tắc "một món") | `"coordinate_sheet"` (bộ phối có typography, ngoại lệ của cả
+    #: "một món" lẫn "cấm chữ"). `None` ⇒ giữ nguyên hành vi cũ.
     item_scope: Optional[str] = None
     #: Node ảnh sinh **first frame cho video** ⇒ agent dùng chế độ plate của skill try-on
     #: (§2.5): chỉ một ảnh đầu vào, bối cảnh studio thay thế, negative thêm nhóm nền sạch.
@@ -226,7 +278,11 @@ class PromptAgent:
         if task.item_id:
             lines.append(f"- Món đồ trong script: {task.item_id}")
         elif task.is_item and task.item_name:
-            lines.append(f"- Món đồ cần dựng ảnh sản phẩm: {task.item_name}")
+            if (task.item_scope or "").strip().lower() == "coordinate_sheet":
+                # Gọi là "ảnh sản phẩm" ở đây thì agent lại viết template plate §3.2.
+                lines.append(f"- Bộ phối cần dựng (coordinate sheet): {task.item_name}")
+            else:
+                lines.append(f"- Món đồ cần dựng ảnh sản phẩm: {task.item_name}")
 
         scope = self.resolve_item_scope(task)
         if scope is not None:
@@ -239,6 +295,17 @@ class PromptAgent:
                     "  → Ngoại lệ có chủ đích: bỏ quy tắc 'một món' của skill; giữ nguyên "
                     "các quy tắc còn lại (nền trơn, cấm người, cấm chữ)."
                 )
+            elif key == "coordinate_sheet":
+                lines.extend([
+                    "  → Ngoại lệ có chủ đích: bỏ CẢ quy tắc 'một món' và 'cấm chữ'. Dùng "
+                    "§2.2 + template §3.4; KHÔNG dùng template flat-lay §3.2.",
+                    "  → Bắt buộc có typography: title + `NO. <số>`, callout 01..0N theo thứ "
+                    "tự mặc, 3 ô `DETAIL`, 5 swatch `COLOR PALETTE`.",
+                    "  → Negative phải BỎ `no text`, `no collage`, `no grid`, `no multiple "
+                    "items` — chúng xoá đúng thứ sheet cần.",
+                    "  → Ảnh này là deliverable: không đưa vào `cutout_items`, không dùng làm "
+                    "first frame video.",
+                ])
 
         # Ngữ cảnh script: shot nào rơi vào clip này, đang nhấn món nào. Đây là thứ
         # trước kia agent không hề biết, nên prompt sinh ra không khớp timeline.
@@ -271,16 +338,52 @@ class PromptAgent:
         if task.custom_hint and task.custom_hint.strip():
             lines.append(f"- Ghi chú bổ sung từ người dùng: \"{task.custom_hint.strip()}\"")
 
-        lines.extend([
-            "",
-            "--- ĐỊNH DẠNG ĐẦU RA ---",
-            "Trả về CHỈ các khối code markdown, mỗi khối một prompt tiếng Anh hoàn chỉnh.",
-            "Số khối đúng bằng số clip/món đồ được giao ở trên (1 nếu chỉ có 1).",
-            "Không lời chào, không giải thích, không header dạng '[Video Prompt N]'.",
-            "```markdown",
-            "<prompt tiếng Anh>",
-            "```",
-        ])
+        is_sheet = scope is not None and scope[0] == "coordinate_sheet"
+        # Dán khung §3.4 ngay trước khi agent trả lời: nhắc "dùng §3.4" ở giữa instruction
+        # là chưa đủ — template §3.2 nằm sát ngay trên nó trong file skill, và
+        # `gemini-3.8-flash-low` đã thật sự trả về nguyên văn §3.2 dù phạm vi là sheet.
+        #
+        # Chỉ dán CÂU MỞ ĐẦU + danh sách khối, không dán cả template 3.5K ký tự: nội dung
+        # template vẫn nằm nguyên trong phần skill ở trên, dán lại lần nữa chỉ làm agent
+        # đọc thêm 3.5K mà không thêm thông tin.
+        sheet_opener = ""
+        if is_sheet:
+            template = extract_skill_template(skill.raw_content, "3.4") or ""
+            sheet_opener = template.split("\n\n")[0].strip()
+
+        lines.extend(["", "--- ĐỊNH DẠNG ĐẦU RA ---"])
+        if is_sheet:
+            lines.extend([
+                "Trả về CHỈ MỘT khối code markdown chứa prompt tiếng Anh hoàn chỉnh.",
+                "Prompt đó là coordinate sheet theo §3.4, KHÔNG phải flat-lay §3.2 — bản §3.2",
+                "không có chữ, không callout, không palette, và bị tính là câu trả lời sai.",
+                "Câu mở đầu dùng đúng nguyên văn:",
+                f'"{sheet_opener}"' if sheet_opener else "<câu mở đầu của §3.4>",
+                "Tiếp theo là đúng các khối sau, giữ nguyên tên khối và thứ tự:",
+                "  LAYOUT — title góc trên trái, `NO. <số>` góc trên phải, bộ đồ xếp dọc ở",
+                "    giữa, callout 01..0N theo thứ tự mặc, 3 ô DETAIL xếp dọc bên phải,",
+                "    5 swatch `COLOR PALETTE` ở góc dưới trái.",
+                "  OUTFIT — 5 dòng: Overall / Upper body / Lower body / Sleeves and materials /",
+                "    Accessories.",
+                "  FIDELITY LOCKS — 3–6 chi tiết dễ bị model sửa sai.",
+                "  DO NOT ADD — món không có trong reference.",
+                "  TYPE & LIGHT — 2 typeface, 3 chất liệu đọc được, high-key softbox.",
+                "  Negative — KHÔNG được chứa `no text`, `no collage`, `no grid`,",
+                "    `no multiple items`; PHẢI có no person / no model / no face / no hands.",
+                "Không lời chào, không giải thích, không header dạng '[Prompt 1]'.",
+                "```markdown",
+                "<prompt coordinate sheet tiếng Anh>",
+                "```",
+            ])
+        else:
+            lines.extend([
+                "Trả về CHỈ các khối code markdown, mỗi khối một prompt tiếng Anh hoàn chỉnh.",
+                "Số khối đúng bằng số clip/món đồ được giao ở trên (1 nếu chỉ có 1).",
+                "Không lời chào, không giải thích, không header dạng '[Video Prompt N]'.",
+                "```markdown",
+                "<prompt tiếng Anh>",
+                "```",
+            ])
 
         return "\n".join(lines)
 
@@ -467,6 +570,8 @@ class PromptAgent:
         t0 = time.perf_counter()
         skill = self.select_skill(task)
         upstream_files = self.resolve_upstream_files(task.upstream_media_urls)
+        scope = self.resolve_item_scope(task)
+        is_sheet = scope is not None and scope[0] == "coordinate_sheet"
 
         instruction = self.format_agent_instruction(task, skill, upstream_files)
         raw_output = await self.runner.run_prompt_instruction(
@@ -474,6 +579,18 @@ class PromptAgent:
             agent=task.agent,
             model=task.model,
         )
+
+        # Kiểm tra hậu sinh: agent đôi khi vẫn trả về §3.2 dù khung §3.4 đã nằm cuối
+        # instruction. Chạy lại ĐÚNG MỘT lần với cảnh báo thay vì trả về prompt sai định
+        # dạng — người dùng chỉ thấy kết quả, không thấy lý do nó sai.
+        if is_sheet:
+            missing = coordinate_sheet_sections_missing(raw_output)
+            if missing:
+                raw_output = await self.runner.run_prompt_instruction(
+                    instruction=self._sheet_correction_instruction(instruction, missing),
+                    agent=task.agent,
+                    model=task.model,
+                )
 
         elapsed = round(time.perf_counter() - t0, 2)
         rel_names = [p.name for p in upstream_files]
@@ -487,6 +604,21 @@ class PromptAgent:
             elapsed_s=elapsed,
             raw_response=raw_output,
         )
+
+    @staticmethod
+    def _sheet_correction_instruction(instruction: str, missing: list[str]) -> str:
+        """Chèn cảnh báo ngay TRƯỚC khối định dạng — chỗ agent đọc cuối cùng."""
+        note = (
+            "--- CẢNH BÁO: LẦN TRƯỚC SAI ĐỊNH DẠNG ---\n"
+            f"Lần trước bạn trả về thiếu: {', '.join(missing)}.\n"
+            "Đó là template flat-lay §3.2, không phải coordinate sheet. Viết lại từ đầu và\n"
+            "giữ đủ mọi khối của khung §3.4 bên dưới.\n\n"
+        )
+        marker = "--- ĐỊNH DẠNG ĐẦU RA ---"
+        idx = instruction.find(marker)
+        if idx < 0:
+            return instruction + "\n\n" + note
+        return instruction[:idx] + note + instruction[idx:]
 
 
 # Global agent instance
