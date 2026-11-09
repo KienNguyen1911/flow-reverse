@@ -8,10 +8,10 @@ Architecture (see `docs/api_specs/flow_create_video.md`):
    - Arms `VIDEO_HOOK_JS` (`window.__blockVideoGen = true`) to block the app's own `eb1hJf`
      request (0 credit spent on decoy) and borrow its freshly minted single-use reCAPTCHA
      Enterprise token (`0cAFcWeA...` at `args[1][10][0]`).
-   - Builds our deterministic `eb1hJf` payload (`build_video_args`: model `"abra_i2v_8s"`,
-     aspect enum `1` for 9:16 / `2` for 16:9, signed int32 `seed`, `starting_frame_media_id`,
-     uppercase UUIDs `u1, u2, gen_id`, `_reqid = app_reqid + 100000`) and fires in-page
-     with header `x-harness-ours: 1`.
+   - Builds our deterministic `eb1hJf` payload (`build_video_args`: model
+     `macaron_cookie_i2v_<n>s` on Omni 1.2 Flash, aspect enum `1` for 9:16 / `2` for 16:9,
+     signed int32 `seed`, `starting_frame_media_id`, uppercase UUIDs `u1, u2, gen_id`,
+     `_reqid = app_reqid + 100000`) and fires in-page with header `x-harness-ours: 1`.
    - Extracts `video_media_id` directly from `eb1hJf`'s `wrb.fr` JSON envelope.
 3. Deterministic Status & Policy Error Polling (`jwpduf`, 0 credit):
    - Polls `jwpduf` (`args = [None, None, [[video_media_id]]]`) every ~4s.
@@ -86,7 +86,6 @@ from .flow_video.constants import (  # noqa: E402,F401
     VIDEO_EDIT_RPC,
     VIDEO_LAST_FRAME_SUBMIT_RPC,
     VIDEO_MEDIA_URL_RPC,
-    VIDEO_MODEL_KEY,
     VIDEO_POLL_RPC,
     VIDEO_SUBMIT_RPC,
     VIDEO_SUBMIT_RPCS,

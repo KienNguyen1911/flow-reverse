@@ -6,7 +6,7 @@ Prompt video gửi Flow **không mang được nhãn thời gian**:
 
 1. `sanitize_video_prompt()` (`src/Bridge/flow_video_bridge.py`) xoá mọi mốc `0s-2s:` / `[0-2s]`
    trước khi gửi, và để lại rác với dạng `(0s-2s)`.
-2. Payload `abra_i2v_8s` (`build_video_args`) chỉ có một chuỗi prompt — không có trường timeline,
+2. Payload `macaron_cookie_i2v_<n>s` (`build_video_args`) chỉ có một chuỗi prompt — không có trường timeline,
    không có trường negative.
 
 Nên nhịp phải sống ở **dữ liệu** (`clips[].beats` trong script) và chỉ được **diễn đạt** thành văn

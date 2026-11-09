@@ -33,7 +33,8 @@ from playwright.sync_api import sync_playwright
 CDP = "http://127.0.0.1:4022"
 
 IMAGE_MODELS = ["🍌 Nano Banana Pro", "🍌 Nano Banana 2 Lite", "🍌 Nano Banana 2.1"]
-VIDEO_MODELS = ["Omni 1.1 Flash", "Veo 3.1 - Lite", "Veo 3.1 - Fast", "Veo 3.1 - Quality"]
+# Flow removed Omni 1.1 / Veo Fast / Veo Quality on 2026-11-09; these are the survivors.
+VIDEO_MODELS = ["Omni 1.2 Flash", "Veo 3.1 - Lite"]
 
 DUMP = r"""
 () => {

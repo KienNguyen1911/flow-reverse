@@ -187,15 +187,15 @@ def test_video_option_validation():
 
 def test_video_option_validation_per_model():
     """Veo hides resolution + duration, so those choices must fail loudly per model."""
-    assert normalize_video_resolution("360p", model="omni_1_1_flash") == "360p"
-    assert normalize_video_resolution("1080p", model="omni_1_1_flash") == "1080p"
+    assert normalize_video_resolution("360p", model="omni_1_2_flash") == "360p"
+    assert normalize_video_resolution("1080p", model="omni_1_2_flash") == "1080p"
     with pytest.raises(UnsupportedOptionError) as exc:
-        normalize_video_resolution("360p", model="veo_3_1_fast")
+        normalize_video_resolution("360p", model="veo_3_1_lite")
     assert "360p" in str(exc.value)
-    assert validate_video_duration(4, model="omni_1_1_flash") == 4
-    assert validate_video_duration(8, model="veo_3_1_quality") == 8
+    assert validate_video_duration(4, model="omni_1_2_flash") == 4
+    assert validate_video_duration(8, model="veo_3_1_lite") == 8
     with pytest.raises(UnsupportedOptionError):
-        validate_video_duration(4, model="veo_3_1_quality")
+        validate_video_duration(4, model="veo_3_1_lite")
 
 
 def test_node_options_exposes_captured_catalog(tmp_path):
@@ -374,15 +374,15 @@ def test_video_node_forwards_model_key_frames(tmp_path):
         prompt="pan",
         frame_path=frame,
         aspect_ratio="16:9",
-        model="veo_3_1_fast",
+        model="veo_3_1_lite",
         sub_mode="frames",
         count=2,
         remove_watermark=False,
     )
     assert res.status == "ok"
-    assert (res.model, res.sub_mode, res.count) == ("veo_3_1_fast", "frames", 2)
+    assert (res.model, res.sub_mode, res.count) == ("veo_3_1_lite", "frames", 2)
     call = video.calls[0]
-    assert call["model_key"] == "veo_3_1_i2v_s_fast"
+    assert call["model_key"] == "veo_3_1_i2v_lite"
     assert call["count"] == 2
     assert call["offer_resolution"] is False and call["offer_duration"] is False
     assert call["capture_resolution"] == "720p"
@@ -395,7 +395,7 @@ def test_video_node_ingredients_is_text_to_video(tmp_path):
         prompt="ocean at sunrise",
         sub_mode="ingredients",
         aspect_ratio="9:16",
-        model="veo_3_1_quality",
+        model="veo_3_1_lite",
         auto_image=True,  # must be ignored in this sub-mode
         remove_watermark=False,
     )
@@ -403,10 +403,10 @@ def test_video_node_ingredients_is_text_to_video(tmp_path):
     assert res.sub_mode == "ingredients"
     assert res.frame_source is None
     assert res.reference_image_paths is None
-    assert res.model_key == "veo_3_1_t2v_portrait"
+    assert res.model_key == "veo_3_1_t2v_lite"
     assert image.calls == [], "ingredients must not generate a starting frame"
     assert video.calls == [], "ingredients must not use the image→video RPC"
-    assert video.text_calls[0]["model_key"] == "veo_3_1_t2v_portrait"
+    assert video.text_calls[0]["model_key"] == "veo_3_1_t2v_lite"
     assert video.text_calls[0]["prompt_text"] == "ocean at sunrise"
 
 
@@ -422,7 +422,7 @@ def test_video_node_ingredients_with_reference_images(tmp_path):
         reference_image_paths=[str(ref1), str(ref2)],
         sub_mode="ingredients",
         aspect_ratio="9:16",
-        model="omni_1_1_flash",
+        model="omni_1_2_flash",
         remove_watermark=False,
     )
     assert res.status == "ok"
@@ -444,13 +444,13 @@ def test_video_node_omni_360p_and_duration(tmp_path):
         prompt="pan",
         frame_path=frame,
         aspect_ratio="9:16",
-        model="omni_1_1_flash",
+        model="omni_1_2_flash",
         sub_mode="frames",
         resolution="360p",
         duration_s=4,
         remove_watermark=False,
     )
-    assert res.model_key == "abra_i2v_4s_360p"
+    assert res.model_key == "macaron_cookie_i2v_4s_360p"
     assert res.reference_image_paths is None
     call = video.calls[0]
     assert call["resolution"] == "360p"
@@ -464,13 +464,13 @@ def test_video_node_1080p_upsamples_from_720p(tmp_path):
     frame = tmp_path / "frame.png"
     frame.write_bytes(b"frame")
     res = svc.generate_video(
-        prompt="pan", frame_path=frame, model="omni_1_1_flash", duration_s=8, remove_watermark=False
+        prompt="pan", frame_path=frame, model="omni_1_2_flash", duration_s=8, remove_watermark=False
     )
     assert res.resolution == "1080p"
     call = video.calls[0]
     assert call["resolution"] == "1080p"
     assert call["capture_resolution"] == "720p"
-    assert call["model_key"] == "abra_i2v_8s"
+    assert call["model_key"] == "macaron_cookie_i2v_8s"
 
 
 def test_video_node_rejects_veo_with_360p(tmp_path):
@@ -492,7 +492,7 @@ def test_video_agent_mode_uses_defaults(tmp_path):
         prompt="pan",
         frame_path=frame,
         aspect_ratio="16:9",
-        model="veo_3_1_fast",
+        model="veo_3_1_lite",
         resolution="360p",
         duration_s=4,
         count=3,

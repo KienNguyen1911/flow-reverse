@@ -7,8 +7,9 @@ the module refuses to invent one.
 
 Which key a submit carries is decided by three independent facts about the request:
 
-* **family** — Omni 1.2 (``macaron_cookie_*``), Omni 1.1 (``abra_*``), Veo 3.1, or the
-  video-edit path (``abra_edit``).
+* **family** — Omni 1.2 (``macaron_cookie_*``) or Veo 3.1, plus the video-edit path
+  (``abra_edit``). The retired ``abra_*`` Omni 1.1 family is kept in the docs only as the
+  shape older captures carried, not as something the catalog can still resolve to.
 * **shape** — how many frames are attached and whether references are images or a video.
   That is *not* the composer's sub-mode name: "Khung hình" with only a first frame is
   ``eb1hJf``, the same sub-mode with both frames is ``nprQif``, and an ingredients-mode

@@ -784,7 +784,6 @@ def test_build_video_args_and_parse_video_app_capture():
     from src.Bridge.flow_video_bridge import (
         VIDEO_ASPECT_LANDSCAPE,
         VIDEO_ASPECT_PORTRAIT,
-        VIDEO_MODEL_KEY,
         VIDEO_SUBMIT_RPC,
         VIDEO_TOOL_ID,
         build_video_args,
@@ -792,6 +791,11 @@ def test_build_video_args_and_parse_video_app_capture():
         extract_starting_frame_from_eb1hjf_args,
         parse_video_app_capture,
     )
+
+    # The live Omni 1.2 key for an 8s single-frame render. Hardcoded rather than imported:
+    # the payload builder takes the key as an argument, so the test must not read it back
+    # from the same catalog the builder was fed.
+    model_key = "macaron_cookie_i2v_8s"
 
     project_id = "006f6e93-2d22-4a3d-9b03-1a902a50fd10"
     sf_id = "2b1457d2-d1c8-4c56-a1d8-947caab2bf78"
@@ -806,7 +810,7 @@ def test_build_video_args_and_parse_video_app_capture():
         starting_frame_media_id=sf_id,
         aspect_ratio="9:16",
         seed=567281629,
-        model_key=VIDEO_MODEL_KEY,
+        model_key=model_key,
         u1="aaaa1111-2222-4333-8444-555566667777",
         u2="bbbb1111-2222-4333-8444-555566667777",
         gen_id="cccc1111-2222-4333-8444-555566667777",
@@ -814,7 +818,7 @@ def test_build_video_args_and_parse_video_app_capture():
 
     spec = args_916[0][0]
     assert spec[0] == [None, None, [[["A fashion model walking naturally in a sunlit courtyard, 8 seconds."]]]]
-    assert spec[1] == VIDEO_MODEL_KEY
+    assert spec[1] == model_key
     assert spec[2] == VIDEO_ASPECT_PORTRAIT
     assert spec[3] == 567281629
     assert spec[4][1] == sf_id
@@ -837,7 +841,7 @@ def test_build_video_args_and_parse_video_app_capture():
         starting_frame_media_id=sf_id,
         aspect_ratio="16:9",
         seed=12345,
-        model_key=VIDEO_MODEL_KEY,
+        model_key=model_key,
     )
     assert args_169[0][0][2] == VIDEO_ASPECT_LANDSCAPE
 
@@ -859,7 +863,7 @@ def test_build_video_args_and_parse_video_app_capture():
         recaptcha_token=fake_token,
         starting_frame_media_id=sf_id,
         aspect_ratio="9:16",
-        model_key=VIDEO_MODEL_KEY,
+        model_key=model_key,
         crop_box=crop_916,
     )
     body_crop = encode_video_batchexecute_form(VIDEO_SUBMIT_RPC, args_crop, at_param)

@@ -36,11 +36,13 @@ from src.Bridge.flow_video_bridge import (
 )
 from src.Bridge.flow_video.composer import VideoComposerMixin, parse_chip_duration
 from src.Workflows.flow_catalog import (
+    VIDEO_MODELS,
     CatalogError,
     capture_resolution,
     image_model_key,
     normalize_count,
     resolve_image_model,
+    resolve_video_model,
     video_model_key,
 )
 from src.Workflows.flow_models import build_image_args
@@ -84,19 +86,11 @@ def test_count_is_clamped_to_composer_values():
 @pytest.mark.parametrize(
     "model,sub,aspect,expected",
     [
-        ("omni_1_1_flash", "frames", "9:16", "abra_i2v_8s"),
-        ("omni_1_1_flash", "frames", "16:9", "abra_i2v_8s"),
-        ("omni_1_1_flash", "ingredients", "9:16", "abra_t2v_8s"),
+        ("omni_1_2_flash", "frames", "9:16", "macaron_cookie_i2v_8s"),
+        ("omni_1_2_flash", "frames", "16:9", "macaron_cookie_i2v_8s"),
+        ("omni_1_2_flash", "ingredients", "9:16", "macaron_cookie_t2v_8s"),
         ("veo_3_1_lite", "frames", "9:16", "veo_3_1_i2v_lite"),
         ("veo_3_1_lite", "ingredients", "16:9", "veo_3_1_t2v_lite"),
-        ("veo_3_1_fast", "frames", "9:16", "veo_3_1_i2v_s_fast_portrait"),
-        ("veo_3_1_fast", "frames", "16:9", "veo_3_1_i2v_s_fast"),
-        ("veo_3_1_fast", "ingredients", "9:16", "veo_3_1_t2v_fast_portrait"),
-        ("veo_3_1_fast", "ingredients", "16:9", "veo_3_1_t2v_fast"),
-        ("veo_3_1_quality", "frames", "9:16", "veo_3_1_i2v_s_portrait"),
-        ("veo_3_1_quality", "frames", "16:9", "veo_3_1_i2v_s"),
-        ("veo_3_1_quality", "ingredients", "9:16", "veo_3_1_t2v_portrait"),
-        ("veo_3_1_quality", "ingredients", "16:9", "veo_3_1_t2v"),
     ],
 )
 def test_video_model_key_matrix(model, sub, aspect, expected):
@@ -106,45 +100,55 @@ def test_video_model_key_matrix(model, sub, aspect, expected):
     )
 
 
-@pytest.mark.parametrize("duration", [4, 6, 8, 10])
+@pytest.mark.parametrize("retired", ["omni_1_1_flash", "veo_3_1_fast", "veo_3_1_quality"])
+def test_retired_models_resolve_to_the_live_default(retired):
+    """Flow retires these on 5 Dec, so the catalog no longer offers them.
+
+    A canvas saved before the removal still names one, and it has to keep loading: the
+    resolver maps it onto the live default instead of raising, and the id itself is gone.
+    """
+    assert retired not in {m.id for m in VIDEO_MODELS}
+    assert resolve_video_model(retired).id == "omni_1_2_flash"
+
+
+@pytest.mark.parametrize("duration", [3, 4, 8, 10, 15])
 def test_omni_model_key_tracks_duration(duration):
     assert (
-        video_model_key("omni_1_1_flash", sub_mode="frames", duration_s=duration)
-        == f"abra_i2v_{duration}s"
+        video_model_key("omni_1_2_flash", sub_mode="frames", duration_s=duration)
+        == f"macaron_cookie_i2v_{duration}s"
     )
     assert (
-        video_model_key("omni_1_1_flash", sub_mode="ingredients", duration_s=duration)
-        == f"abra_t2v_{duration}s"
+        video_model_key("omni_1_2_flash", sub_mode="ingredients", duration_s=duration)
+        == f"macaron_cookie_t2v_{duration}s"
     )
 
 
 def test_omni_360p_suffix_and_veo_rejection():
     assert (
-        video_model_key("omni_1_1_flash", sub_mode="frames", duration_s=4, resolution="360p")
-        == "abra_i2v_4s_360p"
+        video_model_key("omni_1_2_flash", sub_mode="frames", duration_s=4, resolution="360p")
+        == "macaron_cookie_i2v_4s_360p"
     )
     assert (
-        video_model_key("omni_1_1_flash", sub_mode="ingredients", duration_s=8, resolution="360p")
-        == "abra_t2v_8s_360p"
+        video_model_key("omni_1_2_flash", sub_mode="ingredients", duration_s=8, resolution="360p")
+        == "macaron_cookie_t2v_8s_360p"
     )
-    for model in ("veo_3_1_lite", "veo_3_1_fast", "veo_3_1_quality"):
-        with pytest.raises(CatalogError):
-            video_model_key(model, duration_s=8, resolution="360p")
+    with pytest.raises(CatalogError):
+        video_model_key("veo_3_1_lite", duration_s=8, resolution="360p")
 
 
 def test_veo_duration_and_bad_aspect_rejected():
     with pytest.raises(CatalogError):
-        video_model_key("veo_3_1_fast", duration_s=4)
+        video_model_key("veo_3_1_lite", duration_s=4)
     with pytest.raises(CatalogError):
-        video_model_key("omni_1_1_flash", aspect_ratio="1:1")
+        video_model_key("omni_1_2_flash", aspect_ratio="1:1")
 
 
 def test_1080p_is_an_upsample_of_720p():
     """1080p is our own p0UkFb step, not a Flow option: the submit still asks 720p."""
-    for model in ("omni_1_1_flash", "veo_3_1_fast"):
+    for model in ("omni_1_2_flash", "veo_3_1_lite"):
         assert capture_resolution(model, "1080p") == "720p"
-    assert capture_resolution("omni_1_1_flash", "360p") == "360p"
-    assert capture_resolution("omni_1_1_flash", "720p") == "720p"
+    assert capture_resolution("omni_1_2_flash", "360p") == "360p"
+    assert capture_resolution("omni_1_2_flash", "720p") == "720p"
 
 
 # --------------------------------------------------------------------------- #
@@ -235,7 +239,7 @@ def test_build_video_args_360p_with_last_frame_is_not_padded():
 def test_build_video_args_count_gives_one_spec_per_render():
     args = build_video_args(
         PROJECT_ID, "pan", "token", SF_MEDIA_ID,
-        aspect_ratio="16:9", seed=7, model_key="abra_i2v_8s", count=2,
+        aspect_ratio="16:9", seed=7, model_key="macaron_cookie_i2v_8s", count=2,
     )
     specs = args[0]
     assert len(specs) == 2
@@ -256,12 +260,12 @@ def test_build_video_args_count_gives_one_spec_per_render():
 def test_build_text_video_args_has_no_starting_frame():
     args = build_text_video_args(
         PROJECT_ID, "wave", "token",
-        aspect_ratio="9:16", seed=7, model_key="abra_t2v_8s",
+        aspect_ratio="9:16", seed=7, model_key="macaron_cookie_t2v_8s",
     )
     assert len(args) == 3
     spec = args[0][0]
     assert len(spec) == 5
-    assert spec[1] == "abra_t2v_8s"
+    assert spec[1] == "macaron_cookie_t2v_8s"
     assert spec[2] == 1
     assert spec[3] == 7
     # spec[4] is the UUID slot — no media id anywhere.

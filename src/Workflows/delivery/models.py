@@ -39,7 +39,7 @@ class RunRef:
     take: int = 1
     prompt: str = ""
     seed: Optional[int] = None
-    model: str = "abra_i2v_8s"
+    model: str = "macaron_cookie_i2v_8s"
     policy_retries: int = 0
     video_path: Optional[str] = None
     plate_path: Optional[str] = None  # starting_frame / ảnh plate dùng làm nền

@@ -2,10 +2,11 @@
 
 Two composer facts drive most of this module and were captured 0-credit (2026-11-09):
 
-* **Duration is a slider on Omni 1.2, radios on Omni 1.1/Veo.** ``flow-duration-slider``
-  wraps an ``input[type=range]`` whose value is ``seconds - 3`` (0..12 → 3..15 giây).
-  With both frame slots filled the max drops to 7 (3..10s). The older models still show
-  the ``Thời lượng video`` radio group.
+* **Duration is a slider.** ``flow-duration-slider`` wraps an ``input[type=range]`` whose
+  value is ``seconds - 3`` (0..12 → 3..15 giây). With both frame slots filled the max drops
+  to 7 (3..10s). The retired Omni 1.1 / Veo Fast / Veo Quality models used a
+  ``Thời lượng video`` radio group instead; Flow no longer offers them, so this module only
+  drives the slider.
 * **"Khung hình" has two slots: "Bắt đầu" and "Kết thúc".** Both are always rendered;
   the last one becomes optional input. Filling it changes the submit RPC to ``nprQif``.
 """
@@ -220,15 +221,16 @@ class VideoComposerMixin:
         return _chip()
 
     def _apply_duration(self, page: Any, duration_s: int) -> None:
-        """Set the clip length however the current model expresses it.
+        """Set the clip length on Omni 1.2's ``Độ dài`` slider.
 
-        Omni 1.2 has a slider (``flow-duration-slider``); Omni 1.1 and Veo still have the
-        ``Thời lượng video`` radio group. Trying the slider first and falling back to the
-        radio keeps one code path for both, and the log names which one applied.
+        Every model the catalog still offers expresses duration the same way now: Omni 1.2
+        has the slider, and Veo 3.1 Lite hides the duration group entirely (fixed 8s, so
+        callers pass ``offer_duration=False``). The ``Thời lượng video`` radio group the
+        retired Omni 1.1 / Veo Fast / Veo Quality used is gone from Flow, so a missing
+        slider is a real failure worth logging rather than a cue to try another control.
         """
-        if self._set_duration_slider(page, duration_s) or self._pick_duration_radio(page, duration_s):
-            return
-        self._log("warn", f"Không đặt được thời lượng {duration_s}s trên composer")
+        if not self._set_duration_slider(page, duration_s):
+            self._log("warn", f"Không đặt được thời lượng {duration_s}s trên composer")
 
     def _set_duration_slider(self, page: Any, duration_s: int) -> bool:
         """Drive Omni 1.2's ``Độ dài`` range input; returns False when there is none."""
@@ -287,30 +289,6 @@ class VideoComposerMixin:
                 f"(yêu cầu {duration_s}s)",
             )
         return True
-
-    def _pick_duration_radio(self, page: Any, duration_s: int) -> bool:
-        """Pick the ``Thời lượng video`` radio (Omni 1.1 / Veo); returns False when absent."""
-        if not self._open_settings_popover(page):
-            return False
-        page.wait_for_timeout(400)
-        has_group = bool(
-            page.evaluate(
-                """() => {
-                const sc = document.querySelector('.cdk-overlay-pane .settings-content');
-                if (!sc) return false;
-                const labels = [...sc.querySelectorAll('flow-toggles')]
-                  .map(g => g.getAttribute('aria-label') || '');
-                return labels.includes('Thời lượng video');
-              }"""
-            )
-        )
-        if not has_group:
-            self._close_settings_popover(page)
-            return False
-        picked = self._pick_in_popover(page, f"{duration_s} giây")
-        page.wait_for_timeout(300)
-        self._close_settings_popover(page)
-        return bool(picked)
 
     def _ensure_video_sub_mode(self, page: Any, sub_label: str) -> None:
         """Make sure the composer is on the wanted sub-mode (Khung hình / Thành phần).

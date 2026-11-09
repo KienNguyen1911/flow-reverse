@@ -422,7 +422,7 @@ export interface NodeVideoRequest {
   aspect_ratio?: string;
   /** `frames` = Khung hình (image→video) | `ingredients` = Thành phần (text→video). */
   sub_mode?: string;
-  /** Model id hoặc label (`omni_1_1_flash` / `Omni 1.1 Flash`). */
+  /** Model id hoặc label (`omni_1_2_flash` / `Omni 1.2 Flash`). */
   model?: string | null;
   /** Số video mỗi lần chạy (x1..x4 như composer). */
   count?: number;

@@ -25,11 +25,11 @@ Limitations (verified against docs/api_specs/*):
 * Image aspect ratios are an int enum; only ``16:9 == 3`` is verified. Extra
   ratios must be captured with ``discovery/capture_image_aspects.py`` (written
   to ``configs/image_aspect_enums.json``) — never guessed.
-* Video is image-to-video only (``abra_i2v_8s``): a starting frame is required.
-  Without one, ``auto_image=True`` chains an image generation first. There is
-  no reverse-engineered text-to-video RPC (see ``discovery/probe_video_composer.py``).
-* Video duration is fixed at 8s by the model key; resolution supports 1080p
-  (default, upsampled via ``p0UkFb`` with 720p fallback) and 720p.
+* Video needs a starting frame in "Khung hình" (``macaron_cookie_i2v_<n>s``) or runs as
+  text→video in "Thành phần"; both accept 3..15s on Omni 1.2 Flash.
+* Video duration is 3..15s (3..10s with a last frame) on Omni 1.2 Flash, which is the only
+  model the catalog still offers besides Veo 3.1 Lite (fixed 8s).
+* Resolution supports 1080p (default, upsampled via ``p0UkFb`` with 720p fallback) and 720p.
 """
 
 from __future__ import annotations
@@ -348,8 +348,8 @@ class NodeVideoResult:
     video_bytes: Optional[int] = None
     resolution: str = "1080p"
     #: Composer config actually used (see ``src/Workflows/flow_catalog.py``).
-    model: str = "omni_1_1_flash"
-    model_label: str = "Omni 1.1 Flash"
+    model: str = "omni_1_2_flash"
+    model_label: str = "Omni 1.2 Flash"
     model_key: Optional[str] = None
     sub_mode: str = "frames"
     count: int = 1

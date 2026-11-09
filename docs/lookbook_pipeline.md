@@ -22,7 +22,7 @@ Bố cục đúng:
 
 | Lớp | Làm gì | Không làm gì |
 | :-- | :-- | :-- |
-| Flow (Veo, `abra_i2v_8s`) | Người mẫu toàn thân, chuyển động, camera | Chữ, card, progress bar, cột thông tin |
+| Flow (Omni 1.2, `macaron_cookie_i2v_<n>s`) | Người mẫu toàn thân, chuyển động, camera | Chữ, card, progress bar, cột thông tin |
 | HyperFrames desktop | Card sản phẩm, kinetic text, progress bar, zoom/pan, audio, render | Sinh chuyển động người |
 
 Hệ quả định lượng: board có cột UI chiếm ~37% bề ngang. Crop bỏ cột ⇒ chỉ còn **~453px**
@@ -37,7 +37,8 @@ Ràng buộc nghiệp vụ (Schema không diễn đạt được, `src/Workflows
 
 - `fps ∈ {24, 30}`. **24 là trần nguồn** (ffprobe `r_frame_rate=24/1` của clip Flow);
   đặt 60 chỉ nhân bản khung.
-- `clips[].duration_s ≤ 8` — model key cố định 8s. Muốn dài hơn phải nối bằng `chain_from`.
+- `clips[].duration_s ≤ 8` — trần của script lookbook (`CLIP_MAX_S`), không phải trần của Flow.
+  Muốn dài hơn phải nối bằng `chain_from`.
 - `shots[].clip_offset_s + duration_s ≤ clips[].duration_s`.
 - `chain_from` phải trỏ tới clip có thật; `emphasis_item` phải trỏ tới item có thật.
 
@@ -144,7 +145,7 @@ lại bằng một ảnh plate sạch để có độ nét đầy đủ.
 | :-- | :-- |
 | Kích thước tải về | 720×1280, upsample `p0UkFb` → 1080×1920 |
 | Frame rate | 24 fps (trần nguồn) |
-| Thời lượng | 8.000s mỗi clip, cố định bởi `abra_i2v_8s` |
+| Thời lượng | 8.000s mỗi clip theo `CLIP_MAX_S` của script; Flow (Omni 1.2) cho 3..15s |
 | Audio | **không có** — `-an` tại `flow_video_bridge.py` (strip/concat) và `watermark_remover.py` |
 
 ## 6. Cutout sản phẩm: Flow sinh ảnh → delivery tự lấy về

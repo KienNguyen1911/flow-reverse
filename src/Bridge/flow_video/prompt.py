@@ -8,9 +8,10 @@ import re
 def sanitize_video_prompt(prompt_text: str, aggressive: bool = False) -> str:
     """Sanitize video prompts to avoid false-positive Google Flow celebrity/identity policy blocks.
 
-    In Frames Mode ('Khung hình' / `abra_i2v_8s`), the starting frame image already locks the
-    model's visual identity. Phrases like 'exact young Korean woman from the reference image'
-    or 'Strictly lock facial identity' frequently trigger Google's prominent-person safety filter.
+    In Frames Mode ('Khung hình' / `macaron_cookie_i2v_<n>s`), the starting frame image already
+    locks the model's visual identity. Phrases like 'exact young Korean woman from the reference
+    image' or 'Strictly lock facial identity' frequently trigger Google's prominent-person safety
+    filter.
     """
     clean = " ".join([line.strip() for line in prompt_text.splitlines() if line.strip()])
 

@@ -45,10 +45,11 @@ Ghi chú quan trọng:
   (`docs/api_specs/flow_create_image.md` §2). Các tỷ lệ khác **không được đoán** — chạy
   `python discovery/capture_image_aspects.py --project <uuid> --ratios 9:16 1:1 4:3`
   (0 credit, request app bị chặn) để ghi `configs/image_aspect_enums.json`; API sẽ tự đọc file này.
-- **Video:** protocol hiện tại là **image-to-video** (`abra_i2v_8s`), bắt buộc có starting frame.
-  Node không đính kèm ảnh sẽ tự chain **ảnh → video** (`auto_image=true`). Chưa có RPC text-to-video
-  (xem `discovery/probe_video_composer.py` để thu evidence).
-- **Thời lượng video** cố định 8s theo model key; muốn dài hơn thì nối nhiều node video.
+- **Video:** hai sub-mode. `Khung hình` là image-to-video (`macaron_cookie_i2v_<n>s`) và bắt
+  buộc có starting frame; node không đính kèm ảnh sẽ tự chain **ảnh → video** (`auto_image=true`).
+  `Thành phần` là text→video (`YhhmEf`/`MZZa6b`), kèm khung `Kết thúc` thì đổi sang `nprQif`.
+- **Thời lượng video** 3..15s trên Omni 1.2 (`durations_s` trong `GET /api/node/options`),
+  còn 3..10s khi gắn khung `Kết thúc`. Veo 3.1 Lite cố định 8s.
 - **Độ phân giải** `1080p` (upsample `p0UkFb`, fallback 720p khi lỗi) hoặc `720p`.
 
 ## 2. POST /api/node/image

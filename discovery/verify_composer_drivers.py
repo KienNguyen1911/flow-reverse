@@ -54,12 +54,11 @@ def main(argv: list[str] | None = None) -> int:
         page.keyboard.press("Escape")
 
         combos = [
-            dict(sub_mode="frames", target_aspect="9:16", model_label="Omni 1.1 Flash",
+            dict(sub_mode="frames", target_aspect="9:16", model_label="Omni 1.2 Flash",
                  duration_s=4, resolution="360p", count=2),
-            dict(sub_mode="frames", target_aspect="16:9", model_label="Veo 3.1 - Fast",
-                 duration_s=8, resolution="720p", count=1, offer_resolution=False,
-                 offer_duration=False),
-            dict(sub_mode="ingredients", target_aspect="9:16", model_label="Veo 3.1 - Quality",
+            dict(sub_mode="frames", target_aspect="16:9", model_label="Omni 1.2 Flash",
+                 duration_s=15, resolution="720p", count=1),
+            dict(sub_mode="ingredients", target_aspect="9:16", model_label="Veo 3.1 - Lite",
                  duration_s=8, resolution="720p", count=4, offer_resolution=False,
                  offer_duration=False),
         ]

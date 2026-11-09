@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.Bridge.flow_bridge import DEFAULT_CDP_URL, FlowBridge
+from src.Bridge.flow_video.composer import parse_chip_duration
 from src.Bridge.flow_video_bridge import (
     FlowVideoBridge,
     extract_starting_frame_from_eb1hjf_args,
@@ -108,10 +109,17 @@ def esc(page, n=1):
         page.wait_for_timeout(300)
 
 
-def apply_combo(page, submode, aspect, model, res, dur, count="x1") -> list:
+def apply_combo(page, submode, aspect, model, res, dur, count="x1", video=None) -> list:
+    """Drive the settings popover into one combo and report what could be picked.
+
+    Duration is no longer a radio inside the popover: Omni 1.2 exposes it on
+    ``flow-duration-slider``. Pass ``video`` (a :class:`FlowVideoBridge`) so the duration is
+    written through the bridge's own slider helper instead of a ``"N giây"`` chip that no
+    longer exists; ``None`` skips duration (Veo hides that group anyway).
+    """
     log = []
     groups = [[("Video", False)], [(submode, False)], [(aspect, False)],
-              [(model, True)], [(res, False), (dur, False), (count, False)]]
+              [(model, True)], [(res, False), (count, False)]]
     for group in groups:
         if not open_settings(page):
             log.append(("NO_CHIP", group[0][0]))
@@ -125,18 +133,19 @@ def apply_combo(page, submode, aspect, model, res, dur, count="x1") -> list:
             page.wait_for_timeout(420)
         esc(page)
         page.wait_for_timeout(300)
+    seconds = parse_chip_duration(dur)
+    if seconds is not None and video is not None:
+        log.append((f"duration {seconds}s", video._set_duration_slider(page, seconds)))
     return log
 
 
 COMBOS = {
-    "omni_8s_720p_916": ("Khung hình", "9:16", "Omni 1.1 Flash", "720p", "8 giây"),
-    "omni_8s_720p_169": ("Khung hình", "16:9", "Omni 1.1 Flash", "720p", "8 giây"),
-    "omni_4s_360p_916": ("Khung hình", "9:16", "Omni 1.1 Flash", "360p", "4 giây"),
-    "omni_6s_720p_916": ("Khung hình", "9:16", "Omni 1.1 Flash", "720p", "6 giây"),
-    "omni_10s_720p_916": ("Khung hình", "9:16", "Omni 1.1 Flash", "720p", "10 giây"),
+    "omni_3s_720p_916": ("Khung hình", "9:16", "Omni 1.2 Flash", "720p", "3 giây"),
+    "omni_8s_720p_916": ("Khung hình", "9:16", "Omni 1.2 Flash", "720p", "8 giây"),
+    "omni_8s_720p_169": ("Khung hình", "16:9", "Omni 1.2 Flash", "720p", "8 giây"),
+    "omni_4s_360p_916": ("Khung hình", "9:16", "Omni 1.2 Flash", "360p", "4 giây"),
+    "omni_15s_720p_916": ("Khung hình", "9:16", "Omni 1.2 Flash", "720p", "15 giây"),
     "veo_lite_8s_720p": ("Khung hình", "9:16", "Veo 3.1 - Lite", "720p", "8 giây"),
-    "veo_fast_8s_720p": ("Khung hình", "9:16", "Veo 3.1 - Fast", "720p", "8 giây"),
-    "veo_quality_8s_720p": ("Khung hình", "9:16", "Veo 3.1 - Quality", "720p", "8 giây"),
 }
 
 
@@ -165,7 +174,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         page.wait_for_timeout(1300)
 
-        print("setup:", apply_combo(page, "Khung hình", "9:16", "Omni 1.1 Flash", "720p", "8 giây"))
+        print("setup:", apply_combo(page, "Khung hình", "9:16", "Omni 1.2 Flash", "720p", "8 giây",
+                                    video=video))
         print("chip:", chip_text(page))
 
         mid = video.upload_starting_frame_via_paste(br, frame, timeout_s=45.0)
@@ -178,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
         items = {k: v for k, v in COMBOS.items() if not args.only or k == args.only}
         for name, (submode, aspect, model, res, dur) in items.items():
             print(f"\n=== {name} ===")
-            print("  set:", apply_combo(page, submode, aspect, model, res, dur))
+            print("  set:", apply_combo(page, submode, aspect, model, res, dur, video=video))
             chip = chip_text(page)
             print("  chip:", chip)
 

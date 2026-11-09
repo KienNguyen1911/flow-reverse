@@ -14,8 +14,9 @@
 ## 0. Thay đổi phá vỡ tương thích của Omni 1.2 Flash (đọc trước)
 
 Google Flow đã thay model video mặc định `Omni 1.1 Flash` (`abra_*`) bằng **`Omni 1.2 Flash`**
-(`macaron_cookie_*`), và kèm theo là 4 thay đổi giao thức. Omni 1.1 + Veo Fast/Quality bị
-đánh dấu **"Sẽ ngừng hoạt động vào ngày 5 thg 12"** ngay trong menu model:
+(`macaron_cookie_*`), và kèm theo là 4 thay đổi giao thức. **Omni 1.1 Flash, Veo 3.1 - Fast và
+Veo 3.1 - Quality đã bị Flow tách khỏi app** (menu model ngày 2026-11-09 chỉ còn `Omni 1.2 Flash`
++ `Veo 3.1 - Lite`), nên catalog của app chỉ còn cung cấp hai model đó:
 
 | # | Trước (Omni 1.1) | Nay (Omni 1.2) |
 | :--- | :--- | :--- |
@@ -23,6 +24,10 @@ Google Flow đã thay model video mặc định `Omni 1.1 Flash` (`abra_*`) bằ
 | 2 | Thời lượng là **radio 4/6/8/10 giây**, duration nằm trong key | **Slider `Độ dài` 3..15 giây**, duration vẫn nằm trong key (mọi giá trị nguyên) |
 | 3 | "Khung hình" chỉ có 1 ô `Bắt đầu` | **2 ô: `Bắt đầu` + `Kết thúc`**; điền ô thứ hai đổi RPC sang `nprQif` |
 | 4 | "Thành phần" chỉ nhận ảnh tham chiếu | Nhận **cả video tham chiếu** (`jIps6`, model key `abra_edit`) |
+
+Ba model đã ngừng cung cấp — `omni_1_1_flash`, `veo_3_1_fast`, `veo_3_1_quality` — vẫn được
+`resolve_video_model()` ánh xạ về `omni_1_2_flash`, vì canvas lưu trước đó còn tên chúng; đây là
+ánh xạ **một chiều**, không đường nào resolve ngược về model đã bỏ.
 
 Hai giới hạn duration đã đo trực tiếp từ `flow-duration-slider`:
 
@@ -210,7 +215,7 @@ Khi đính kèm file ảnh vào composer (có thể kích hoạt hoàn toàn b�
 | Đường dẫn JSON | Kiểu | Giá trị quan sát | Ý nghĩa & Quy tắc |
 | :--- | :--- | :--- | :--- |
 | `args[0][0][0]` | `list` | `[null, null, [[["<prompt>"]]]]` | Prompt mô tả chuyển động video (bọc 3 lớp mảng trong vị trí `[2]`). |
-| `args[0][0][1]` | `str` | `"macaron_cookie_i2v_8s"` | Mã model. Nay là `macaron_cookie_i2v_<n>s` cho **mọi** duration nguyên 3..15 (Omni 1.2 đã bỏ radio 4/6/8/10). Omni 1.1 cũ vẫn dạng `abra_i2v_<n>s`. |
+| `args[0][0][1]` | `str` | `"macaron_cookie_i2v_8s"` | Mã model. Nay là `macaron_cookie_i2v_<n>s` cho **mọi** duration nguyên 3..15 (Omni 1.2 đã bỏ radio 4/6/8/10). |
 | `args[0][0][2]` | `int` | `1` hoặc `2` | **Tỷ lệ khung hình (`aspect_enum`)**: `1` = **9:16 (Dọc / Portrait)**, `2` = **16:9 (Ngang / Landscape)**. |
 | `args[0][0][3]` | `int \| null` | `null` hoặc `int32` (`1..2147483647`) | Seed tạo video. Khi để `null`, server tự sinh seed `int32` và trả về tại `rec[7][0][1]`. |
 | `args[0][0][4]` | `list` | `[null, "<media_id>"]` hoặc `[null, "<media_id>", null, null, null, [x0, y0, x1, y1]]` | Khung **`Bắt đầu`**: vị trí `[1]` là media id, vị trí `[5]` là khung crop chuẩn hóa. **Đuôi crop là trạng thái composer, không phải hằng số**: capture 3s/15s/360p đều chỉ có `[null, id]`, chỉ capture 2 khung mới có crop → builder phải chuyển tiếp `None` thay vì tự điền `DEFAULT_CROP_916/169`. |
@@ -550,7 +555,7 @@ Mã nguồn nằm trong `src/Bridge/flow_video/` (facade `src/Bridge/flow_video_
 | `parsing.extract_reference_video_from_args(args)` | `(video_media_id, frame_count)` từ `jIps6` (`spec[0]`). |
 | `parsing.parse_jwpduf_status(data)` | Phân tích `rec[5][8]` (`[1]/[2]` pending, `[3]` succeeded, `[4, ...]` failed kèm `error_code`/`error_categories`). |
 | `parsing.extract_signed_video_url(data)` | Ưu tiên `flow-content.google/video/<id>?Expires=...` từ `as29s`, fallback FIFE `=mm,22,15`. |
-| `composer._apply_duration(page, s)` | Đặt thời lượng: slider (Omni 1.2) hoặc radio `Thời lượng video` (Omni 1.1/Veo). |
+| `composer._apply_duration(page, s)` | Đặt thời lượng qua slider `Độ dài` (Omni 1.2) — hình thức duy nhất còn tồn tại sau khi Flow bỏ Omni 1.1 / Veo Fast / Veo Quality. |
 | `composer._set_duration_slider(page, s)` | Ghi giá trị vào `input[type=range]` của `flow-duration-slider`, đọc offset slider↔giây từ DOM. |
 | `composer._ensure_video_sub_mode(page, label)` | Chọn đúng nhóm `Loại video` (nhãn nhóm, không đoán theo text item). |
 | `last_frame.frame_slots(bridge)` | Liệt kê ô `Bắt đầu`/`Kết thúc`: index, nhãn, đã điền chưa, media id. |

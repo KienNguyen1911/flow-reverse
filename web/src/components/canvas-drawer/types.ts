@@ -31,7 +31,7 @@ export interface CanvasDrawerNode {
   imageModel?: string | null;
   /** Số ảnh mỗi lần chạy (x1..x4 như composer Flow). */
   imageCount?: number;
-  /** Model video đã chọn (`omni_1_1_flash` …). */
+  /** Model video đã chọn (`omni_1_2_flash` …). */
   videoModel?: string | null;
   /** Sub-mode video: `frames` (Khung hình) | `ingredients` (Thành phần). */
   videoSubMode?: string;
@@ -41,7 +41,7 @@ export interface CanvasDrawerNode {
   videoDurationS?: number;
   /**
    * Ảnh khung "Kết thúc" (chỉ sub-mode `frames`). Gắn vào thì Flow đổi RPC sang `nprQif`
-   * và hạ trần thời lượng xuống 10s — UI phải lọc lại `durations_s` khi field này có giá trị.
+   * và hạ trần thời lượng xuống 10s — slider nhận `maxAllowed` để phản ánh trần đó.
    * Trỏ tới node nguồn (ref/image/last_frame) giống `sourceImageId`, không phải URL thô.
    */
   videoLastFrameSourceId?: string | null;

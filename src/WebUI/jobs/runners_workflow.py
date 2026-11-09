@@ -42,7 +42,7 @@ class WorkflowJobsMixin:
                 take=int(raw.get("take") or 1),
                 prompt=str(raw.get("prompt") or ""),
                 seed=raw.get("seed"),
-                model=str(raw.get("model") or "abra_i2v_8s"),
+                model=str(raw.get("model") or "macaron_cookie_i2v_8s"),
                 policy_retries=int(raw.get("policy_retries") or 0),
                 video_path=raw.get("video_path"),
                 plate_path=raw.get("plate_path"),

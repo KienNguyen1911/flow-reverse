@@ -53,9 +53,7 @@ VIDEO_DECOY_RPCS: tuple[str, ...] = (
     "IJhj9c",
 )
 
-#: Legacy default model key (Omni 1.1 Flash, 8s). Omni 1.2 is the live default now;
-#: this constant is kept because older callers and stored runs still name it.
-VIDEO_MODEL_KEY = "abra_i2v_8s"
+#: Upsample step for 1080p. Not a composer model: it is our own post-step on the 720p file.
 VIDEO_UPSAMPLE_1080P_MODEL_KEY = "veo_3_1_upsampler_1080p"
 VIDEO_TOOL_ID = 22
 

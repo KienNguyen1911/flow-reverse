@@ -47,9 +47,9 @@ def test_node_options_matches_captured_flow_composer(client: TestClient):
     assert video["supports_last_frame"] is True
     assert video["supports_video_reference"] is True
     models = {m["id"]: m for m in video["models"]}
-    assert set(models) == {
-        "omni_1_2_flash", "omni_1_1_flash", "veo_3_1_lite", "veo_3_1_fast", "veo_3_1_quality",
-    }
+    # Omni 1.1 / Veo Fast / Veo Quality are retired by Flow on 5 Dec, so the catalog no
+    # longer offers them; only Omni 1.2 and Veo Lite remain selectable.
+    assert set(models) == {"omni_1_2_flash", "veo_3_1_lite"}
     assert video["default_model"] == "omni_1_2_flash"
     # Omni 1.2 replaced the 4/6/8/10 radios with a 3..15s slider, capped at 10s when a
     # last frame is attached (observed 2026-11-09).
@@ -57,15 +57,10 @@ def test_node_options_matches_captured_flow_composer(client: TestClient):
     assert models["omni_1_2_flash"]["durations_s"] == list(range(3, 16))
     assert models["omni_1_2_flash"]["durations_with_last_frame_s"] == list(range(3, 11))
     assert models["omni_1_2_flash"]["has_last_frame"] is True
-    # Omni 1.1 still exposes 360p + the 4/6/8/10 duration group, but Flow retires it on 5/12.
-    assert models["omni_1_1_flash"]["has_resolution"] is True
-    assert models["omni_1_1_flash"]["durations_s"] == [4, 6, 8, 10]
-    assert models["omni_1_1_flash"]["is_deprecated"] is True
-    for veo in ("veo_3_1_lite", "veo_3_1_fast", "veo_3_1_quality"):
-        assert models[veo]["has_resolution"] is False
-        assert models[veo]["has_duration"] is False
-        assert models[veo]["durations_s"] == [8]
-        assert "360p" not in models[veo]["resolutions"]
+    assert models["veo_3_1_lite"]["has_resolution"] is False
+    assert models["veo_3_1_lite"]["has_duration"] is False
+    assert models["veo_3_1_lite"]["durations_s"] == [8]
+    assert "360p" not in models["veo_3_1_lite"]["resolutions"]
 
     # Agent mode locks the whole config block.
     assert body["agent"]["locks_config"] is True
@@ -234,7 +229,7 @@ def test_node_video_veo_fixes_resolution_and_duration(client: TestClient):
         "/api/node/video",
         json={
             "prompt": "x",
-            "model": "veo_3_1_fast",
+            "model": "veo_3_1_lite",
             "sub_mode": "ingredients",
             "resolution": "360p",
             "auto_image": False,
@@ -248,7 +243,7 @@ def test_node_video_veo_fixes_resolution_and_duration(client: TestClient):
         "/api/node/video",
         json={
             "prompt": "x",
-            "model": "veo_3_1_fast",
+            "model": "veo_3_1_lite",
             "sub_mode": "ingredients",
             "duration_s": 4,
             "auto_image": False,
@@ -261,7 +256,7 @@ def test_node_video_veo_fixes_resolution_and_duration(client: TestClient):
         "/api/node/video",
         json={
             "prompt": "x",
-            "model": "veo_3_1_fast",
+            "model": "veo_3_1_lite",
             "sub_mode": "ingredients",
             "aspect_ratio": "16:9",
             "duration_s": 8,
@@ -271,13 +266,13 @@ def test_node_video_veo_fixes_resolution_and_duration(client: TestClient):
         },
     )
     assert ok.status_code == 200, ok.text
-    assert ok.json()["model_key"] == "veo_3_1_t2v_fast"
+    assert ok.json()["model_key"] == "veo_3_1_t2v_lite"
 
     portrait = client.post(
         "/api/node/video",
         json={
             "prompt": "x",
-            "model": "veo_3_1_fast",
+            "model": "veo_3_1_lite",
             "sub_mode": "ingredients",
             "aspect_ratio": "9:16",
             "auto_image": False,
@@ -285,7 +280,29 @@ def test_node_video_veo_fixes_resolution_and_duration(client: TestClient):
         },
     )
     assert portrait.status_code == 200, portrait.text
-    assert portrait.json()["model_key"] == "veo_3_1_t2v_fast_portrait"
+    assert portrait.json()["model_key"] == "veo_3_1_t2v_lite"
+
+
+def test_node_video_retired_model_falls_back_to_the_live_default(client: TestClient):
+    """A canvas that still names a retired model must keep submitting, on Omni 1.2.
+
+    The three models Flow retires on 5 Dec are gone from the catalog, but stored node configs
+    still carry their ids; resolving them to the default is what keeps those nodes runnable.
+    """
+    r = client.post(
+        "/api/node/video",
+        json={
+            "prompt": "x",
+            "model": "veo_3_1_fast",
+            "sub_mode": "ingredients",
+            "duration_s": 8,
+            "auto_image": False,
+            "dry_run": True,
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["model"] == "omni_1_2_flash"
+    assert r.json()["model_key"] == "macaron_cookie_t2v_8s"
 
 
 def test_node_video_omni_360p_and_durations(client: TestClient):
@@ -293,7 +310,7 @@ def test_node_video_omni_360p_and_durations(client: TestClient):
         "/api/node/video",
         json={
             "prompt": "x",
-            "model": "omni_1_1_flash",
+            "model": "omni_1_2_flash",
             "sub_mode": "ingredients",
             "resolution": "360p",
             "duration_s": 4,
@@ -302,13 +319,13 @@ def test_node_video_omni_360p_and_durations(client: TestClient):
         },
     )
     assert r.status_code == 200, r.text
-    assert r.json()["model_key"] == "abra_t2v_4s_360p"
+    assert r.json()["model_key"] == "macaron_cookie_t2v_4s_360p"
 
     r = client.post(
         "/api/node/video",
         json={
             "prompt": "x",
-            "model": "omni_1_1_flash",
+            "model": "omni_1_2_flash",
             "sub_mode": "frames",
             "resolution": "720p",
             "duration_s": 10,
@@ -317,7 +334,7 @@ def test_node_video_omni_360p_and_durations(client: TestClient):
         },
     )
     assert r.status_code == 200, r.text
-    assert r.json()["model_key"] == "abra_i2v_10s"
+    assert r.json()["model_key"] == "macaron_cookie_i2v_10s"
 
 
 def test_node_video_requires_confirm(client: TestClient):

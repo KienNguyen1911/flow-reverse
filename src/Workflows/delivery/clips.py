@@ -60,7 +60,7 @@ def _clip_manifest_entry(
         "take": ref.take if ref else None,
         "prompt": ref.prompt if ref else clip.motion_prompt,
         "seed": ref.seed if ref else None,
-        "model": ref.model if ref else "abra_i2v_8s",
+        "model": ref.model if ref else "macaron_cookie_i2v_8s",
         "policy_retries": ref.policy_retries if ref else 0,
         # Giá trị script yêu cầu, để người dựng biết lệch bao nhiêu so với thực đo.
         "script_duration_s": clip.duration_s,

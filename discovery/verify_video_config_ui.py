@@ -3,9 +3,11 @@
 Opens a video node's drawer and asserts, against the live ``/api/node/options``:
 
 * sub-mode buttons are exactly ``frames`` + ``ingredients`` with the VI labels;
-* the model select lists all 4 captured models;
-* picking Veo (no resolution/duration group in the composer) disables both selects;
-* switching back to Omni re-enables them and offers 360p + 4/6/8/10s;
+* the model select lists exactly the models the catalog still offers (Omni 1.2 Flash +
+  Veo 3.1 Lite — Flow removed Omni 1.1 / Veo Fast / Veo Quality on 2026-11-09);
+* Omni offers 360p and a 3..15s duration slider;
+* picking Veo (no resolution/duration group in the composer) disables the resolution select
+  and the duration slider, and pins the slider to the model's fixed 8s;
 * ticking "Tác nhân" hides the whole config block behind the warning note.
 
 Nothing is submitted to Flow: it never clicks "Chạy lại".
@@ -37,16 +39,27 @@ DUMP = r"""
     const head = l.querySelector('span');
     const sel = l.querySelector('select');
     return {
-      label: head ? norm(head.innerText) : '',
+      label: head ? norm(head.innerText) : (l.querySelector('select') ? '' : norm(l.innerText)),
       options: sel ? [...sel.querySelectorAll('option')].map(o => norm(o.innerText)) : null,
       disabled: sel ? !!sel.disabled : null,
       value: sel ? sel.value : null,
       type: sel ? 'select' : (l.querySelector('input[type=checkbox]') ? 'checkbox' : 'other'),
     };
   });
+  // Duration is a range input, not a select: report its window and current seconds.
+  const slider = drawer.querySelector('input[type=range]');
+  const duration = slider ? {
+    disabled: !!slider.disabled,
+    min: Number(slider.min),
+    max: Number(slider.max),
+    seconds: slider.getAttribute('aria-valuetext'),
+    shown: (slider.closest('div.flex-col') || slider.parentElement)
+      ?.querySelector('output')?.innerText || null,
+  } : null;
   return {
     open: true,
     fields,
+    duration,
     buttons: [...drawer.querySelectorAll('button')].map(b => norm(b.innerText)).filter(Boolean),
     text: norm(drawer.innerText).slice(0, 2000),
   };
@@ -75,21 +88,19 @@ def main(argv: list[str] | None = None) -> int:
         opts = page.evaluate("() => fetch('/api/node/options').then(r => r.json())")
         models = {m["id"]: m for m in opts["video"]["models"]}
 
+        # The card's detail button opens the drawer on the Config tab, which is where the
+        # video params live. (Clicking the ``Sub`` pill only opens its dropdown.)
         opened = page.evaluate(
             r"""() => {
-            const n = s => (s||'').replace(/\s+/g,' ').trim();
-            const cards = [...document.querySelectorAll('div')].filter(d => n(d.innerText).includes('Sub '));
-            const card = cards[0];
-            if (!card) return false;
-            const b = [...card.querySelectorAll('button')].find(x => n(x.innerText).startsWith('Sub '));
+            const b = document.querySelector('button[title="Xem chi tiết & nhật ký"]');
             if (!b) return false;
             b.click();
             return true;
           }"""
         )
-        page.wait_for_timeout(1200)
+        page.wait_for_timeout(1800)
         if not opened:
-            check("video drawer opens", False, "no video node with a Sub pill found")
+            check("video drawer opens", False, "no video node card with a detail button found")
             page.close()
             br.close()
             return 1
@@ -105,21 +116,22 @@ def main(argv: list[str] | None = None) -> int:
         )
         model_field = labels.get("Model", {})
         check(
-            "video model select lists all captured models",
+            "video model select lists only the models Flow still offers",
             model_field.get("options") is not None and len(model_field["options"]) == len(models),
             model_field.get("options"),
         )
         res_field = labels.get("Độ phân giải", {})
-        dur_field = labels.get("Thời lượng", {})
+        dur_field = snap.get("duration") or {}
         check(
-            "omni offers 360p + durations 4/6/8/10",
+            "omni offers 360p + a 3..15s duration slider",
             bool(res_field.get("options")) and any("360p" in o for o in res_field["options"])
-            and dur_field.get("options") == [f"{d} giây" for d in (4, 6, 8, 10)],
-            {"res": res_field.get("options"), "dur": dur_field.get("options")},
+            and dur_field.get("min") == 0 and dur_field.get("max") == 12
+            and dur_field.get("seconds") == "8 giây",
+            {"res": res_field.get("options"), "dur": dur_field},
         )
 
         # -- switch to Veo: resolution + duration must become disabled ----------
-        veo_id = "veo_3_1_fast"
+        veo_id = "veo_3_1_lite"
         switched = page.evaluate(
             r"""(id) => {
             const n = s => (s||'').replace(/\s+/g,' ').trim();
@@ -138,6 +150,7 @@ def main(argv: list[str] | None = None) -> int:
         veo_snap = page.evaluate(DUMP)
         report["snapshots"].append({"stage": "veo", "drawer": veo_snap})
         vl = {f["label"]: f for f in veo_snap["fields"]}
+        veo_dur = veo_snap.get("duration") or {}
         check("selected Veo model", switched, vl.get("Model", {}).get("value"))
         check(
             "Veo disables the resolution select",
@@ -145,14 +158,14 @@ def main(argv: list[str] | None = None) -> int:
             vl.get("Độ phân giải"),
         )
         check(
-            "Veo disables the duration select",
-            vl.get("Thời lượng", {}).get("disabled") is True,
-            vl.get("Thời lượng"),
+            "Veo disables the duration slider",
+            veo_dur.get("disabled") is True,
+            veo_dur,
         )
         check(
             "Veo duration is forced to its fixed 8s",
-            vl.get("Thời lượng", {}).get("options") == ["8 giây"],
-            vl.get("Thời lượng", {}).get("options"),
+            veo_dur.get("seconds") == "8 giây",
+            veo_dur,
         )
         check(
             "Veo resolutions exclude 360p",
@@ -190,8 +203,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         check(
             "agent mode hides resolution and duration",
-            "Độ phân giải" not in al and "Thời lượng" not in al,
-            list(al),
+            "Độ phân giải" not in al and agent_snap.get("duration") is None,
+            {"labels": list(al), "duration": agent_snap.get("duration")},
         )
 
         page.close()

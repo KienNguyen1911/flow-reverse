@@ -118,8 +118,8 @@ def test_node_video_job_forwards_composer_config(tmp_path):
                 run_id="r1",
                 run_dir=str(tmp_path / "r1"),
                 sub_mode="ingredients",
-                model="veo_3_1_fast",
-                model_key="veo_3_1_t2v_fast",
+                model="veo_3_1_lite",
+                model_key="veo_3_1_t2v_lite",
                 count=2,
             )
 
@@ -128,7 +128,7 @@ def test_node_video_job_forwards_composer_config(tmp_path):
         "node_video",
         {
             "prompt": "pan",
-            "model": "veo_3_1_fast",
+            "model": "veo_3_1_lite",
             "sub_mode": "ingredients",
             "count": 2,
             "duration_s": 8,
@@ -141,13 +141,13 @@ def test_node_video_job_forwards_composer_config(tmp_path):
     manager._run_node_video(job)
 
     assert job.state == "succeeded"
-    assert seen["model"] == "veo_3_1_fast"
+    assert seen["model"] == "veo_3_1_lite"
     assert seen["sub_mode"] == "ingredients"
     assert seen["count"] == 2
     assert seen["agent_mode"] is True
     assert seen["workspace_project_id"] == "ws_prj_999"
     assert job.result["account_id"] == "acc_1"
-    assert job.result["model"] == "veo_3_1_fast"
+    assert job.result["model"] == "veo_3_1_lite"
     assert job.result["sub_mode"] == "ingredients"
     assert job.result["count"] == 2
 

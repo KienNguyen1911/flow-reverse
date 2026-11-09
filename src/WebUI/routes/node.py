@@ -74,7 +74,7 @@ class NodeVideoBody(BaseModel):
     aspect_ratio: str = "9:16"
     #: ``frames`` = Khung hình (image→video) | ``ingredients`` = Thành phần (text→video).
     sub_mode: str = "frames"
-    #: Composer model id or label (`omni_1_1_flash` / `Omni 1.1 Flash`).
+    #: Composer model id or label (`omni_1_2_flash` / `Omni 1.2 Flash`).
     model: Optional[str] = None
     #: Batch size, mirroring the composer's x1..x4.
     count: int = 1

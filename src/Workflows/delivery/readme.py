@@ -12,7 +12,7 @@ def _render_readme(manifest: dict, result: DeliveryResult) -> str:
         "",
         f"- Composition: **{c['width']}×{c['height']} @ {c['fps']}fps**, dài **{c['duration_s']}s**",
         f"- Xuất lúc: {manifest['created_ts']}",
-        "- Nguồn: Google Flow (`abra_i2v_8s`, image-to-video, 8s/clip)",
+        "- Nguồn: Google Flow (`macaron_cookie_i2v_<n>s`, image-to-video, 3..15s/clip)",
         "",
         "## Cách dựng trong HyperFrames desktop",
         "",

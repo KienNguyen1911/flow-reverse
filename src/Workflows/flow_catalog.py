@@ -87,22 +87,16 @@ class MediaModel:
     #: Whether the composer offers the duration group for this model.
     has_duration: bool = True
     #: Durations the composer offers (seconds). Ignored when ``has_duration`` is False.
-    durations_s: tuple[int, ...] = (4, 6, 8, 10)
+    durations_s: tuple[int, ...] = (8,)
     #: Resolution used when the model exposes no resolution group.
     fixed_resolution: str = "720p"
     #: Duration used when the model exposes no duration group.
     fixed_duration_s: int = 8
     #: Aspect ratios the model accepts (empty = all of ``VIDEO_ASPECT_ORDER``).
     aspect_ratios: tuple[str, ...] = ()
-    #: Flow's own "this model retires on <date>" note, verbatim, when the menu shows one.
-    deprecated_note: str = ""
 
     def aspects(self) -> tuple[str, ...]:
         return self.aspect_ratios or VIDEO_ASPECT_ORDER
-
-    @property
-    def is_deprecated(self) -> bool:
-        return bool(self.deprecated_note)
 
 
 IMAGE_MODELS: tuple[MediaModel, ...] = (
@@ -140,18 +134,6 @@ VIDEO_MODELS: tuple[MediaModel, ...] = (
         fixed_duration_s=8,
     ),
     MediaModel(
-        id="omni_1_1_flash",
-        label="Omni 1.1 Flash",
-        keys={
-            "i2v_dur": "abra_i2v_{dur}s",
-            "t2v_dur": "abra_t2v_{dur}s",
-        },
-        has_resolution=True,
-        has_duration=True,
-        #: Flow flags this model "Sẽ ngừng hoạt động vào ngày 5 thg 12" (retires 2026-12-05).
-        deprecated_note="Sẽ ngừng hoạt động vào ngày 5 thg 12",
-    ),
-    MediaModel(
         id="veo_3_1_lite",
         label="Veo 3.1 - Lite",
         keys={
@@ -163,32 +145,6 @@ VIDEO_MODELS: tuple[MediaModel, ...] = (
         # Observed: picking a Veo model removes the resolution + duration groups entirely.
         has_resolution=False,
         has_duration=False,
-    ),
-    MediaModel(
-        id="veo_3_1_fast",
-        label="Veo 3.1 - Fast",
-        keys={
-            "i2v_916": "veo_3_1_i2v_s_fast_portrait",
-            "i2v_169": "veo_3_1_i2v_s_fast",
-            "t2v_916": "veo_3_1_t2v_fast_portrait",
-            "t2v_169": "veo_3_1_t2v_fast",
-        },
-        has_resolution=False,
-        has_duration=False,
-        deprecated_note="Sẽ ngừng hoạt động vào ngày 5 thg 12",
-    ),
-    MediaModel(
-        id="veo_3_1_quality",
-        label="Veo 3.1 - Quality",
-        keys={
-            "i2v_916": "veo_3_1_i2v_s_portrait",
-            "i2v_169": "veo_3_1_i2v_s",
-            "t2v_916": "veo_3_1_t2v_portrait",
-            "t2v_169": "veo_3_1_t2v",
-        },
-        has_resolution=False,
-        has_duration=False,
-        deprecated_note="Sẽ ngừng hoạt động vào ngày 5 thg 12",
     ),
 )
 
@@ -215,6 +171,19 @@ VIDEO_MODEL_ALIASES: dict[str, str] = {
     "omni_1.2_flash": "omni_1_2_flash",
 }
 
+#: Models Flow marked "Sẽ ngừng hoạt động vào ngày 5 thg 12" (observed 2026-11-09) and that
+#: we no longer offer. A canvas saved before the removal still names one of them, so the
+#: resolver maps those ids onto the live default instead of failing to load the node. The
+#: mapping is deliberately *forward-only*: nothing may resolve back to a retired model.
+RETIRED_VIDEO_MODEL_ALIASES: dict[str, str] = {
+    "omni_1_1_flash": "omni_1_2_flash",
+    "omni 1.1 flash": "omni_1_2_flash",
+    "veo_3_1_fast": "omni_1_2_flash",
+    "veo 3.1 - fast": "omni_1_2_flash",
+    "veo_3_1_quality": "omni_1_2_flash",
+    "veo 3.1 - quality": "omni_1_2_flash",
+}
+
 
 class CatalogError(ValueError):
     """Raised when a model/option combination was never observed in Flow."""
@@ -237,11 +206,16 @@ def resolve_image_model(value: Optional[str]) -> MediaModel:
 
 
 def resolve_video_model(value: Optional[str]) -> MediaModel:
-    """Resolve an id / label to a video model (default: Omni 1.2 Flash)."""
+    """Resolve an id / label to a video model (default: Omni 1.2 Flash).
+
+    A model Flow is retiring resolves to the live default rather than raising: stored
+    canvases and in-flight run configs still name ``omni_1_1_flash`` / ``veo_3_1_fast`` /
+    ``veo_3_1_quality``, and a node that cannot resolve a model cannot be opened to fix it.
+    """
     key = _norm(value)
     if not key:
         return VIDEO_MODELS_BY_ID["omni_1_2_flash"]
-    model_id = VIDEO_MODEL_ALIASES.get(key)
+    model_id = VIDEO_MODEL_ALIASES.get(key) or RETIRED_VIDEO_MODEL_ALIASES.get(key)
     if not model_id:
         known = ", ".join(m.id for m in VIDEO_MODELS)
         raise CatalogError(f"Mô hình video {value!r} chưa capture. Đã biết: {known}.")
@@ -449,8 +423,6 @@ def video_catalog() -> dict:
                 "has_duration": m.has_duration,
                 "has_last_frame": "i2v_fl_dur" in m.keys,
                 "has_reference_video": m.id == "omni_1_2_flash",
-                "is_deprecated": m.is_deprecated,
-                "deprecated_note": m.deprecated_note,
                 "model_keys": {
                     sub: {
                         aspect: video_model_key(m, sub_mode=sub, aspect_ratio=aspect,
