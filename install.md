@@ -120,6 +120,11 @@ cd ..
 Ghi chú dev frontend (không bắt buộc): `npm run dev` chạy Vite tại `http://127.0.0.1:4001`,
 proxy `/api` → `http://127.0.0.1:4000` (xem `web/vite.config.ts`). Sửa frontend thì build lại — server không cần restart.
 
+`run.ps1 start` / `restart` **tự chạy `npm run build`** khi `web/dist` không khớp mã nguồn `web/`, nên không
+cần nhớ Bước 4 sau mỗi lần sửa UI. Bản build được đóng dấu vân tay nội dung (`web/dist/.build-stamp`),
+nên pull về mã mới cũng được phát hiện kể cả khi mtime không đổi. Dùng `-SkipBuild` nếu muốn khởi động
+nhanh với bundle hiện có.
+
 ## 5. Lần chạy đầu — tạo profile & đăng nhập Google (⚠️ THỦ CÔNG)
 
 ```bash
@@ -214,7 +219,8 @@ python discovery/payload_differ.py traces/raw_trace_<A>.jsonl traces/raw_trace_<
 | Build frontend lỗi do Node quá cũ | Nâng Node lên ^20.19.0 || ≥ 22.12.0 (Vite 8) |
 | `[launch] !! cloakbrowser is not installed` (exit 2) | Sai môi trường Python (venv khác?) → kích hoạt đúng venv rồi `pip install cloakbrowser` |
 | `--wait` báo "CDP endpoint not ready" | Tăng `--wait-timeout`, hoặc firewall chặn cổng 4022; kiểm tra `curl.exe http://127.0.0.1:4022/json/version` |
-| UI báo *"UI chưa build"* | Chưa chạy Bước 4 (`cd web && npm run build`) |
+| UI báo *"UI chưa build"* | Chưa chạy Bước 4 (`cd web && npm run build`), hoặc `run.ps1 start -SkipBuild` khi `web/dist` trống |
+| Sửa UI mà web vẫn hiện bản cũ | Server phục vụ bundle tĩnh trong `web/dist`; quên build lại. `run.ps1 start`/`restart` nay tự build khi `web/dist` không khớp nguồn |
 | Lỗi *"port already in use"* khi chạy WebUI | Đổi cổng: `python -m src.WebUI.app --port 4001` |
 | UI báo *"Browser offline"* | CloakBrowser chưa mở / CDP chết → chạy lại Bước 5 |
 | `423` khi tạo ảnh | Breaker đang cooldown (lý do hiện trong banner). Kiểm tra phiên đăng nhập trước, rồi `curl.exe http://127.0.0.1:4000/api/circuit/clear` |

@@ -10,14 +10,20 @@
     Trạng thái (PID) được ghi vào out/run/ để có thể dừng chính xác.
 
 .EXAMPLE
-    .\run.ps1 start                # khởi động browser + web
+    .\run.ps1 start                # khởi động browser + web (tự build lại UI nếu cần)
     .\run.ps1 start -NoBrowser     # chỉ khởi động web (browser đã mở sẵn)
+    .\run.ps1 start -SkipBuild     # khởi động mà không build lại UI
     .\run.ps1 stop                 # dừng cả hai
     .\run.ps1 restart              # dừng rồi khởi động lại
     .\run.ps1 status               # xem trạng thái
 
 .NOTES
-    Yêu cầu: Python 3.11+ (dùng .venv nếu có), web/dist đã build (npm run build).
+    Yêu cầu: Python 3.11+ (dùng .venv nếu có) và npm (để build UI).
+
+    Server phục vụ bundle tĩnh trong web/dist, đọc thẳng từ đĩa mỗi request. Vì vậy
+    start/restart tự chạy `npm run build` khi web/dist không khớp mã nguồn web/ — nếu
+    không, sửa UI sẽ không bao giờ hiện ra (web/dist giữ nguyên bản build cũ).
+    Sửa backend Python thì vẫn phải `restart` (uvicorn không tự reload).
 #>
 [CmdletBinding()]
 param(
@@ -30,7 +36,8 @@ param(
     [int]$WebPort = 4000,
 
     [switch]$NoBrowser,   # bỏ qua phần browser, chỉ lo WebUI
-    [switch]$Open         # mở UI trong trình duyệt mặc định sau khi start
+    [switch]$Open,        # mở UI trong trình duyệt mặc định sau khi start
+    [switch]$SkipBuild    # không build lại UI (dùng bundle đang có trong web/dist)
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,6 +62,114 @@ function Ensure-RunDir {
     if (-not (Test-Path $RunDir)) { New-Item -ItemType Directory -Path $RunDir -Force | Out-Null }
 }
 
+# Vân tay của mã nguồn UI: băm nội dung mọi file có thể làm thay đổi bundle.
+# Băm nội dung (không dùng mtime) vì checkout/pull có thể đặt lại mtime, khiến
+# "dist mới hơn src" trong khi nội dung đã đổi — đó chính là kiểu làm cũ bị lừa.
+function Get-WebSourceFingerprint {
+    param([string]$WebDir)
+
+    $sources = @(
+        (Join-Path $WebDir "src"),
+        (Join-Path $WebDir "index.html"),
+        (Join-Path $WebDir "package.json"),
+        (Join-Path $WebDir "package-lock.json"),
+        (Join-Path $WebDir "vite.config.ts"),
+        (Join-Path $WebDir "tsconfig.json")
+    )
+
+    $entries = New-Object System.Collections.Generic.List[string]
+    foreach ($source in $sources) {
+        if (-not (Test-Path -LiteralPath $source)) { continue }
+        $item = Get-Item -LiteralPath $source
+        if ($item.PSIsContainer) {
+            $files = Get-ChildItem -LiteralPath $source -Recurse -File -ErrorAction SilentlyContinue
+        } else {
+            $files = @($item)
+        }
+        foreach ($f in $files) {
+            $rel = $f.FullName.Substring($WebDir.Length).TrimStart('\', '/')
+            $hash = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash
+            $entries.Add("$rel|$hash")
+        }
+    }
+
+    $sorted = $entries | Sort-Object
+    $payload = [System.Text.Encoding]::UTF8.GetBytes(($sorted -join "`n"))
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return [System.BitConverter]::ToString($sha.ComputeHash($payload)).Replace('-', '')
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+# Build lại UI khi web/dist không khớp mã nguồn web/ hiện tại.
+# Trả về $true nếu web/dist/index.html tồn tại sau khi build (server phục vụ được UI).
+function Sync-WebBuild {
+    $webDir = Join-Path $Root "web"
+    $distIndex = Join-Path $webDir "dist\index.html"
+    # Stamp nằm trong dist nên tự vô hiệu khi thư mục bị xóa hoặc vite dọn outDir.
+    $stampFile = Join-Path $webDir "dist\.build-stamp"
+
+    if ($SkipBuild) {
+        Write-Host "[skip] -SkipBuild: không build lại UI." -ForegroundColor DarkGray
+        return (Test-Path $distIndex)
+    }
+
+    $fingerprint = Get-WebSourceFingerprint $webDir
+    if ((Test-Path $distIndex) -and (Test-Path $stampFile)) {
+        $built = (Get-Content -LiteralPath $stampFile -Raw -ErrorAction SilentlyContinue)
+        if ($built -and $built.Trim() -eq $fingerprint) {
+            Write-Host "[skip] web/dist đã khớp mã nguồn UI." -ForegroundColor DarkGray
+            return $true
+        }
+        Write-Host "[build] Mã nguồn UI khác bản đã build — build lại..." -ForegroundColor Cyan
+    } elseif (Test-Path $distIndex) {
+        Write-Host "[build] web/dist không rõ nguồn gốc (thiếu .build-stamp) — build lại..." -ForegroundColor Cyan
+    } else {
+        Write-Host "[build] Chưa có web/dist — build UI..." -ForegroundColor Cyan
+    }
+
+    if (-not (Test-Path (Join-Path $webDir "node_modules"))) {
+        Write-Warning "Chưa có web/node_modules. Chạy trước:  cd web; npm ci"
+        return $false
+    }
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        Write-Warning "Không tìm thấy npm trong PATH — không build được UI."
+        return $false
+    }
+
+    Push-Location $webDir
+    $code = 1
+    try {
+        # Qua cmd để stderr của npm/vite không thành NativeCommandError khi ErrorActionPreference=Stop
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        cmd.exe /c "npm run build 2>&1"
+        $code = $LASTEXITCODE
+        $ErrorActionPreference = $prevEap
+    } finally {
+        Pop-Location
+    }
+
+    if ($code -ne 0) {
+        if (Test-Path $distIndex) {
+            Write-Warning "npm run build thất bại (exit code $code). Giữ bundle cũ trong web/dist — UI sẽ KHÔNG phải bản mới."
+            return $true
+        }
+        Write-Warning "npm run build thất bại (exit code $code) và chưa có web/dist. Sửa lỗi build rồi chạy lại."
+        return $false
+    }
+
+    if (Test-Path $distIndex) {
+        $fingerprint | Out-File -LiteralPath $stampFile -Encoding ascii -NoNewline
+        Write-Host "[ok] Đã build UI vào web/dist." -ForegroundColor Green
+        return $true
+    }
+    Write-Warning "npm run build báo thành công nhưng không thấy web/dist/index.html."
+    return $false
+}
+
 function Test-Cdp {
     try {
         Invoke-WebRequest -Uri "http://127.0.0.1:$CdpPort/json/version" -UseBasicParsing -TimeoutSec 2 | Out-Null
@@ -63,8 +178,10 @@ function Test-Cdp {
 }
 
 function Test-Web {
+    # /api/status dò CDP với timeout 2.5s ⇒ khi browser không chạy endpoint này mất ~3s
+    # mới trả lời. Timeout phải lớn hơn thế, nếu không server khoẻ vẫn bị coi là chưa lên.
     try {
-        Invoke-WebRequest -Uri "http://127.0.0.1:$WebPort/api/status" -UseBasicParsing -TimeoutSec 2 | Out-Null
+        Invoke-WebRequest -Uri "http://127.0.0.1:$WebPort/api/status" -UseBasicParsing -TimeoutSec 8 | Out-Null
         return $true
     } catch { return $false }
 }
@@ -115,17 +232,19 @@ function Start-Browser {
 }
 
 function Start-Web {
+    # Build TRƯỚC khi kiểm tra cổng: server đang chạy vẫn phục vụ web/dist mới từ đĩa,
+    # nên bỏ qua bước này khi server đã lên sẽ khiến UI kẹt ở bundle cũ.
+    $hasDist = Sync-WebBuild
+    if (-not $hasDist) {
+        Write-Warning "web/dist/index.html chưa tồn tại — UI sẽ chỉ trả JSON. Chạy trước:  cd web; npm ci; npm run build"
+    }
+
     if (Test-Web) {
         Ensure-RunDir
         $portPid = Get-PortPid -Port $WebPort
         if ($portPid) { $portPid | Out-File -Encoding ascii $WebPidFile }
         Write-Host "[skip] WebUI đã chạy tại cổng $WebPort." -ForegroundColor DarkYellow
         return
-    }
-
-    $dist = Join-Path $Root "web\dist\index.html"
-    if (-not (Test-Path $dist)) {
-        Write-Warning "web/dist/index.html chưa tồn tại. Chạy trước:  cd web; npm ci; npm run build"
     }
 
     Ensure-RunDir
