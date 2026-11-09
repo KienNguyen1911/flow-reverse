@@ -44,11 +44,23 @@ def test_node_options_matches_captured_flow_composer(client: TestClient):
     assert video["aspect_ratios"] == ["16:9", "9:16"]
     assert video["counts"] == [1, 2, 3, 4]
     assert video["supports_text_to_video"] is True
+    assert video["supports_last_frame"] is True
+    assert video["supports_video_reference"] is True
     models = {m["id"]: m for m in video["models"]}
-    assert set(models) == {"omni_1_1_flash", "veo_3_1_lite", "veo_3_1_fast", "veo_3_1_quality"}
-    # Only Omni exposes 360p + the 4/6/8/10 duration group (observed in the composer).
+    assert set(models) == {
+        "omni_1_2_flash", "omni_1_1_flash", "veo_3_1_lite", "veo_3_1_fast", "veo_3_1_quality",
+    }
+    assert video["default_model"] == "omni_1_2_flash"
+    # Omni 1.2 replaced the 4/6/8/10 radios with a 3..15s slider, capped at 10s when a
+    # last frame is attached (observed 2026-11-09).
+    assert models["omni_1_2_flash"]["has_resolution"] is True
+    assert models["omni_1_2_flash"]["durations_s"] == list(range(3, 16))
+    assert models["omni_1_2_flash"]["durations_with_last_frame_s"] == list(range(3, 11))
+    assert models["omni_1_2_flash"]["has_last_frame"] is True
+    # Omni 1.1 still exposes 360p + the 4/6/8/10 duration group, but Flow retires it on 5/12.
     assert models["omni_1_1_flash"]["has_resolution"] is True
     assert models["omni_1_1_flash"]["durations_s"] == [4, 6, 8, 10]
+    assert models["omni_1_1_flash"]["is_deprecated"] is True
     for veo in ("veo_3_1_lite", "veo_3_1_fast", "veo_3_1_quality"):
         assert models[veo]["has_resolution"] is False
         assert models[veo]["has_duration"] is False
@@ -146,7 +158,8 @@ def test_node_video_ingredients_needs_no_frame(client: TestClient):
     body = r.json()
     assert body["sub_mode"] == "ingredients"
     assert body["frame_source"] == "none"
-    assert body["model_key"] == "abra_t2v_8s"
+    # Default model is Omni 1.2, whose reference-free ingredients key is `macaron_cookie_t2v_*`.
+    assert body["model_key"] == "macaron_cookie_t2v_8s"
 
 
 def test_node_video_ingredients_accepts_reference_images(client: TestClient, tmp_path: Path):

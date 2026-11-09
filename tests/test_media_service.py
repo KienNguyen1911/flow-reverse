@@ -500,13 +500,13 @@ def test_video_agent_mode_uses_defaults(tmp_path):
         remove_watermark=False,
     )
     assert res.agent_mode is True
-    assert res.model == "omni_1_1_flash"
+    assert res.model == "omni_1_2_flash"
     assert res.aspect_ratio == "9:16"
     assert res.resolution == "1080p"
     assert res.duration_s == 8
     assert res.count == 1
     call = video.calls[0]
-    assert call["model_key"] == "abra_i2v_8s"
+    assert call["model_key"] == "macaron_cookie_i2v_8s"
     assert call["count"] == 1
 
 

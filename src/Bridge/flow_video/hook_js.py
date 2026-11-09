@@ -2,24 +2,29 @@
 
 from __future__ import annotations
 
+from .constants import VIDEO_DECOY_RPCS
+
+
+def _submit_rpc_checks() -> str:
+    """``s.indexOf('rpcids=<id>') >= 0 ||`` for every decoy RPC, in declared order."""
+    return " ||\n".join(f"      s.indexOf('rpcids={rpcid}') >= 0" for rpcid in VIDEO_DECOY_RPCS)
+
+
 # In-page fetch hook for Video Bridge Mode:
-# - Blocks app's own eb1hJf (and ogiZ0b) when window.__blockVideoGen == true (0 credit on decoy).
+# - Blocks the app's own submit request when window.__blockVideoGen == true (0 credit on the
+#   decoy). Every submit RPC is blocked, because which one the app fires depends on the
+#   composer state (frames only / first+last / ingredients / video reference).
 # - Passively captures maseQ upload responses so starting_frame_media_id is read from JSON.
-VIDEO_HOOK_JS = r"""
+VIDEO_HOOK_JS = (
+    r"""
 (() => {
-  window.__isVideoSubmit = u => {
+  window.__isVideoSubmit = function (u) {
     const s = String(u || '');
     if (s.indexOf('/data/batchexecute?') < 0) return false;
     return (
-      s.indexOf('rpcids=eb1hJf') >= 0 ||
-      s.indexOf('rpcids=MZZa6b') >= 0 ||
-      s.indexOf('rpcids=YhhmEf') >= 0 ||
-      s.indexOf('rpcids=nprQif') >= 0 ||
-      s.indexOf('rpcids=fZytfe') >= 0 ||
-      s.indexOf('rpcids=jIps6') >= 0 ||
-      s.indexOf('rpcids=IJhj9c') >= 0 ||
-      s.indexOf('rpcids=p0UkFb') >= 0 ||
-      s.indexOf('rpcids=ogiZ0b') >= 0
+"""
+    + _submit_rpc_checks()
+    + r"""
     );
   };
   const isMaseQ = u => {
@@ -31,8 +36,8 @@ VIDEO_HOOK_JS = r"""
     catch (e) { return false; }
   };
 
-  if (!window.__videoHook || (window.__videoHook.v || 0) < 3) {
-    window.__videoHook = {v: 3, cap: null, blocked: false, lastUpload: null};
+  if (!window.__videoHook || (window.__videoHook.v || 0) < 4) {
+    window.__videoHook = {v: 4, cap: null, blocked: false, lastUpload: null};
     const prevFetch = window.__origFetchForVideo || window.fetch;
     window.__origFetchForVideo = prevFetch;
     window.fetch = function(input, init) {
@@ -65,12 +70,12 @@ VIDEO_HOOK_JS = r"""
             cap.readErr = String(e);
             cap.bodyReady = true;
           });
-          return Promise.reject(new Error('bridge-blocked-eb1hJf'));
+          return Promise.reject(new Error('bridge-blocked-video-submit'));
         }
         const body = String((init && init.body) || '');
         window.__videoHook.cap = {url: String(url), body: body, bodyReady: true, ts: Date.now(), via: 'fetch-init'};
         window.__videoHook.blocked = true;
-        return Promise.reject(new Error('bridge-blocked-eb1hJf'));
+        return Promise.reject(new Error('bridge-blocked-video-submit'));
       }
 
       return prevFetch.apply(this, arguments);
@@ -79,6 +84,10 @@ VIDEO_HOOK_JS = r"""
   window.__videoHook.cap = null;
   window.__videoHook.blocked = false;
   window.__blockVideoGen = true;
-  return {installed: true, v: window.__videoHook.v};
+  return {installed: true, v: window.__videoHook.v, rpcs: """
+    + repr(list(VIDEO_DECOY_RPCS))
+    + r"""};
 })()
 """
+)
+

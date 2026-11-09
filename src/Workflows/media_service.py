@@ -753,13 +753,18 @@ class MediaService:
         timeout_s: float = 300.0,
         model: Optional[str] = None,
         count: int = 1,
+        last_frame_path: Optional[Path | str] = None,
         on_event: Optional[Callable[..., None]] = None,
     ) -> Path:
         """Bridge-level image→video call (no run dir, no watermark) under the tab lock.
 
         Used by :meth:`generate_video` and by multi-step workflows (try-on chain)
         that own their output paths and post-processing.
+
+        ``last_frame_path`` fills the composer's "Kết thúc" slot; the submit then goes out
+        on `nprQif` and Flow caps the duration at 10s.
         """
+        has_last_frame = last_frame_path is not None
         plan = plan_video_submit(
             aspect_ratio=aspect_ratio,
             model=model,
@@ -767,6 +772,7 @@ class MediaService:
             resolution=resolution,
             duration_s=duration_s,
             count=count,
+            has_last_frame=has_last_frame,
         )
         model_info, ratio = plan.model, plan.ratio
         res_label, duration = plan.resolution, plan.duration_s
@@ -777,27 +783,31 @@ class MediaService:
         frame = resolve_input_path(frame_path)
         if not frame.is_file():
             raise FileNotFoundError(f"Không tìm thấy ảnh đính kèm: {frame_path}")
+        last_frame = resolve_input_path(last_frame_path) if last_frame_path else None
+        if last_frame is not None and not last_frame.is_file():
+            raise FileNotFoundError(f"Không tìm thấy ảnh khung 'Kết thúc': {last_frame_path}")
         dest = Path(dest_path)
+        bridge_kwargs = dict(
+            frame_path=frame,
+            prompt_text=prompt,
+            dest_path=dest,
+            duration_s=duration,
+            timeout_s=timeout_s,
+            aspect_ratio=ratio,
+            seed=seed,
+            resolution=res_label,
+            model_key=key,
+            model_label=model_info.label,
+            count=n,
+            offer_resolution=model_info.has_resolution,
+            offer_duration=model_info.has_duration,
+            capture_resolution=capture_res,
+            last_frame_path=last_frame,
+        )
         with self._lock:
             project = self.resolve_project(project_id, workspace_project_id=workspace_project_id, on_event=on_event)
             try:
-                self.video.generate_video_flow(
-                    frame_path=frame,
-                    prompt_text=prompt,
-                    dest_path=dest,
-                    duration_s=duration,
-                    timeout_s=timeout_s,
-                    project_id=project,
-                    aspect_ratio=ratio,
-                    seed=seed,
-                    resolution=res_label,
-                    model_key=key,
-                    model_label=model_info.label,
-                    count=n,
-                    offer_resolution=model_info.has_resolution,
-                    offer_duration=model_info.has_duration,
-                    capture_resolution=capture_res,
-                )
+                self.video.generate_video_flow(project_id=project, **bridge_kwargs)
             except Exception as exc:
                 if workspace_project_id and ("404" in str(exc) or "không tồn tại" in str(exc)):
                     self._emit(on_event, "warn", f"Dự án {project} không tồn tại trên mây (404). Khởi tạo lại dự án mới...")
@@ -807,26 +817,10 @@ class MediaService:
                     from .project_media_registry import get_project_media_registry
                     get_project_media_registry().clear_project(self.account_id, project)
                     project = self._lazy_create_workspace_project(workspace_project_id, on_event=on_event)
-                    self.video.generate_video_flow(
-                        frame_path=frame,
-                        prompt_text=prompt,
-                        dest_path=dest,
-                        duration_s=duration,
-                        timeout_s=timeout_s,
-                        project_id=project,
-                        aspect_ratio=ratio,
-                        seed=seed,
-                        resolution=res_label,
-                        model_key=key,
-                        model_label=model_info.label,
-                        count=n,
-                        offer_resolution=model_info.has_resolution,
-                        offer_duration=model_info.has_duration,
-                        capture_resolution=capture_res,
-                    )
+                    self.video.generate_video_flow(project_id=project, **bridge_kwargs)
                 else:
                     raise
-        return dest
+            return dest
 
     def generate_text_video(
         self,

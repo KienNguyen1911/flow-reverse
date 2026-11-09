@@ -113,16 +113,18 @@ def normalize_video_resolution(value: Optional[str], *, model: Optional[str] = N
     return label
 
 
-def validate_video_duration(duration_s: int, *, model: Optional[str] = None) -> int:
+def validate_video_duration(duration_s: int, *, model: Optional[str] = None, has_last_frame: bool = False) -> int:
     """Normalize a duration; with ``model`` also check Flow offers it."""
     d = int(duration_s)
-    allowed = video_durations(model)
+    allowed = video_durations(model, has_last_frame=has_last_frame)
     if d not in allowed:
         hint = (
             f"{resolve_video_model(model).label} cố định {allowed[0]}s."
             if len(allowed) == 1
-            else f"Chọn: {', '.join(f'{x}s' for x in allowed)}."
+            else f"Chọn: {allowed[0]}..{allowed[-1]}s."
         )
+        if has_last_frame:
+            hint += " (đang có khung 'Kết thúc' nên Flow giới hạn ngắn hơn)"
         raise UnsupportedOptionError(f"Video không hỗ trợ {d}s. {hint}")
     return d
 
@@ -156,8 +158,12 @@ class VideoSubmitPlan:
     capture_res: str
     duration_s: int
     count: int
-    #: Captured model key encoding model + sub-mode + duration + resolution + aspect.
+    #: Captured model key encoding model + shape + duration + resolution.
     model_key: str
+    #: True when a last frame ("Kết thúc") slot is filled.
+    has_last_frame: bool = False
+    #: True when the request attaches image ingredient chips.
+    has_references: bool = False
     #: True when "Tác nhân" discarded the caller's config.
     agent_mode: bool = False
 
@@ -188,6 +194,8 @@ def plan_video_submit(
     duration_s: int = VIDEO_DURATION_S,
     count: int = 1,
     agent_mode: bool = False,
+    has_last_frame: bool = False,
+    has_references: bool = False,
 ) -> VideoSubmitPlan:
     """Resolve a video request into a submit plan.
 
@@ -198,6 +206,10 @@ def plan_video_submit(
     ``agent_mode`` discards the caller's model/ratio/resolution/duration/count *before* any of
     those are validated, mirroring the composer: when the chip is on, Flow hides those groups,
     so a stale value from the UI must not be able to fail the submit.
+
+    ``has_last_frame`` / ``has_references`` are not user options — they are facts about what
+    the request attached, and they change BOTH the model key family and the duration window
+    (both frame slots filled → 3..10s instead of 3..15s).
     """
     if agent_mode:
         model = None
@@ -210,7 +222,7 @@ def plan_video_submit(
     model_info = resolve_video_model(model)
     sub = validate_sub_mode(sub_mode)
     res_label = normalize_video_resolution(resolution, model=model_info.id)
-    duration = validate_video_duration(duration_s, model=model_info.id)
+    duration = validate_video_duration(duration_s, model=model_info.id, has_last_frame=has_last_frame)
     n = normalize_count(count)
     capture_res = capture_resolution(model_info, res_label)
     key = video_model_key(
@@ -219,6 +231,8 @@ def plan_video_submit(
         duration_s=duration,
         resolution=capture_res,
         aspect_ratio=ratio,
+        has_last_frame=has_last_frame,
+        has_references=has_references,
     )
     return VideoSubmitPlan(
         ratio=ratio,
@@ -229,6 +243,8 @@ def plan_video_submit(
         duration_s=duration,
         count=n,
         model_key=key,
+        has_last_frame=has_last_frame,
+        has_references=has_references,
         agent_mode=agent_mode,
     )
 

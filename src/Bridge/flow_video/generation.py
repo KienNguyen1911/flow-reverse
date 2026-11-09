@@ -19,14 +19,34 @@ from ..flow_bridge import (
     new_seed,
     parse_batchexecute_text,
 )
-from .constants import VIDEO_MODEL_KEY, VIDEO_SUBMIT_RPC, VIDEO_TEXT_SUBMIT_RPC, VIDEO_INGREDIENTS_SUBMIT_RPC
+from .constants import (
+    OMNI12_MAX_DURATION_S_WITH_LAST_FRAME,
+    VIDEO_EDIT_RPC,
+    VIDEO_LAST_FRAME_SUBMIT_RPC,
+    VIDEO_SUBMIT_RPC,
+    VIDEO_SUBMIT_RPCS,
+)
 from .media_tools import strip_video_audio
 from .parsing import (
+    extract_last_frame_from_args,
+    extract_reference_media_ids,
+    extract_reference_video_from_args,
     extract_starting_frame_from_eb1hjf_args,
     extract_video_submit_media_id,
     parse_video_app_capture,
 )
-from .payload import build_text_video_args, build_video_args, encode_video_batchexecute_form
+from .models import (
+    SHAPE_IMAGE_REFS,
+    SHAPE_TEXT,
+    SHAPE_VIDEO_REF,
+    submit_rpc_for,
+)
+from .payload import (
+    build_text_video_args,
+    build_video_args,
+    build_video_edit_args,
+    encode_video_batchexecute_form,
+)
 from .prompt import sanitize_video_prompt
 
 
@@ -46,6 +66,7 @@ class VideoGenerationMixin:
         seed: Optional[int] = None,
         resolution: str = "1080p",
         *,
+        last_frame_path: Path | str | None = None,
         model_key: Optional[str] = None,
         model_label: Optional[str] = None,
         count: int = 1,
@@ -53,21 +74,19 @@ class VideoGenerationMixin:
         offer_duration: bool = True,
         capture_resolution: str = "720p",
     ) -> Path:
-        """Protocol-level ("Bridge Mode") Video generation on Google Flow (`eb1hJf` + `jwpduf` + `as29s`).
+        """Protocol-level ("Bridge Mode") Video generation on Google Flow.
 
         Workflow:
         1. Connects to CloakBrowser over CDP (`FlowBridge`) and installs `VIDEO_HOOK_JS`.
-        2. Uploads starting frame via `maseQ` (synthetic paste on `div.ProseMirror`, with UI fallback).
-        3. Intercepts & blocks the app's decoy `eb1hJf` request (0 credit spent on decoy) to borrow
-           the freshly minted reCAPTCHA Enterprise token (`0cAFcWeA...`) and starting frame slot.
-        4. Builds our deterministic `eb1hJf` payload (`build_video_args`: sanitized prompt, int32 seed,
-           aspect enum `1`/`2`, uppercase UUIDs, `_reqid + 100000`) and fires in-page (`x-harness-ours: 1`).
-        5. Polls `jwpduf` (0 credit) every 4s for deterministic JSON status:
-           - On `PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED`: fails fast in ~8s (no 300s blind wait)
-             and automatically performs 1 protocol-level recovery retry with a conditioned starting frame
-             (`condition_frame_for_policy_retry`), aggressive prompt sanitization, and a fresh int32 seed.
-           - On `succeeded`: mints a 6-hour signed CDN URL via `as29s` (0 credit) and downloads the
-             full-bitrate `ftypisom` MP4.
+        2. Uploads the starting frame via `maseQ` (synthetic paste on `div.ProseMirror`).
+        3. Optionally fills the composer's "Kết thúc" slot — with ``last_frame_path`` (a
+           local file) or, when that file is already a project asset, by name. Filling it
+           switches the submit RPC to `nprQif` and narrows the duration window to 3..10s.
+        4. Blocks the app's decoy submit request (0 credit) to borrow the freshly minted
+           reCAPTCHA Enterprise token and the frame ids the composer actually used.
+        5. Fires our deterministic payload with `x-harness-ours: 1`, then polls `jwpduf`
+           every 4s. Policy rejections fail fast (~8s) and retry once with a fresh seed.
+        6. Mints a 6-hour signed CDN URL via `as29s` (0 credit) and downloads the MP4.
         """
         frame_p = Path(frame_path).resolve()
         dest_p = Path(dest_path).resolve()
@@ -101,6 +120,7 @@ class VideoGenerationMixin:
             # Use the exact original starting frame untouched to preserve 100% character consistency
             max_protocol_attempts = 2
             current_frame_p = frame_p
+            wants_last_frame = last_frame_path is not None
 
             for attempt in range(max_protocol_attempts):
                 is_retry = attempt > 0
@@ -110,7 +130,8 @@ class VideoGenerationMixin:
 
                 self._log(
                     "step",
-                    f"[Bridge Mode {attempt + 1}/{max_protocol_attempts}] Tạo Video ({duration_s}s, {target_aspect}, seed={seed_to_use}) từ {current_frame_p.name}",
+                    f"[Bridge Mode {attempt + 1}/{max_protocol_attempts}] Tạo Video ({duration_s}s, {target_aspect}, seed={seed_to_use}"
+                    f"{', có khung Kết thúc' if wants_last_frame else ''}) từ {current_frame_p.name}",
                 )
                 self._log("info", f"Prompt ({len(clean_prompt)} ký tự): '{clean_prompt[:85]}...'")
 
@@ -142,7 +163,21 @@ class VideoGenerationMixin:
                         "Không thể gắn Starting Frame vào ô 'Bắt đầu' (cả qua maseQ paste lẫn UI fallback)."
                     )
 
-                # 3. Arm eb1hJf blocker (0 credit on decoy), type prompt, click Generate
+                # 3. Fill the optional "Kết thúc" slot. A failed attach is an error when the
+                #    caller asked for it: submitting anyway would silently drop the last frame.
+                if wants_last_frame:
+                    attached_last = self.fill_last_frame_from_file(br, last_frame_path, timeout_s=45.0)
+                    if not attached_last:
+                        raise BridgeError(
+                            "Không gắn được khung 'Kết thúc' vào composer (Flow chỉ nhận asset có sẵn "
+                            "hoặc upload vào đúng ô) — hủy submit thay vì tạo video 1 khung."
+                        )
+                    # Attaching the last frame lowers the slider's ceiling, so a longer
+                    # duration must be re-applied (and will clamp to the lower ceiling).
+                    if duration_s > OMNI12_MAX_DURATION_S_WITH_LAST_FRAME:
+                        self._apply_duration(page, duration_s)
+
+                # 4. Arm the submit blocker (0 credit on decoy), type prompt, click Generate
                 br._eval("window.__videoHook.cap = null; window.__blockVideoGen = true;")
                 br.type_prompt(clean_prompt)
                 time.sleep(jitter(0.4, 0.1, 0.2))
@@ -153,11 +188,15 @@ class VideoGenerationMixin:
                     self.disarm_video_hook(br)
                     app_reqid = extract_app_reqid(cap["url"])
                     token, at_param, app_args, cap_rpcid = parse_video_app_capture(cap["body"])
-                    if cap_rpcid != VIDEO_SUBMIT_RPC:
+                    expected_rpc = (
+                        VIDEO_LAST_FRAME_SUBMIT_RPC if wants_last_frame else VIDEO_SUBMIT_RPC
+                    )
+                    if cap_rpcid != expected_rpc:
                         br.reload(settle_s=4.0)
                         raise BridgeError(
-                            f"Request mồi là {cap_rpcid} thay vì {VIDEO_SUBMIT_RPC} (composer không ở chế độ Video) — "
-                            "hủy submit để tránh lỗi PUBLIC_ERROR_UNUSUAL_ACTIVITY / tạo nhầm ảnh."
+                            f"Request mồi là {cap_rpcid} thay vì {expected_rpc} "
+                            f"({'có' if wants_last_frame else 'không có'} khung Kết thúc) — "
+                            "composer không ở đúng trạng thái, hủy submit để tránh lỗi UNUSUAL_ACTIVITY."
                         )
                 except (TokenParseError, CaptureTimeoutError) as cap_err:
                     self.disarm_video_hook(br)
@@ -173,6 +212,7 @@ class VideoGenerationMixin:
                     raise
 
                 cap_sf_id, cap_crop_box = extract_starting_frame_from_eb1hjf_args(app_args)
+                cap_last_id, cap_last_crop = extract_last_frame_from_args(app_args)
 
                 starting_frame_media_id = cap_sf_id or uploaded_media_id
                 if not starting_frame_media_id:
@@ -180,7 +220,7 @@ class VideoGenerationMixin:
                         f"Request mồi ({cap_rpcid}) không chứa starting_frame_media_id — kiểm tra chế độ Khung hình."
                     )
 
-                # 4. Build our deterministic eb1hJf request payload
+                # 5. Build our deterministic submit payload
                 u1 = str(uuid.uuid4()).upper()
                 u2 = str(uuid.uuid4()).upper()
                 gen_id = str(uuid.uuid4()).upper()
@@ -192,22 +232,24 @@ class VideoGenerationMixin:
                     starting_frame_media_id=starting_frame_media_id,
                     aspect_ratio=target_aspect,
                     seed=seed_to_use,
-                    model_key=model_key or VIDEO_MODEL_KEY,
+                    model_key=model_key or "",
                     crop_box=cap_crop_box,
+                    last_frame_media_id=cap_last_id,
+                    last_frame_crop=cap_last_crop,
                     u1=u1,
                     u2=u2,
                     gen_id=gen_id,
                     count=count,
                     resolution=capture_resolution,
                 )
-                our_body = encode_video_batchexecute_form(VIDEO_SUBMIT_RPC, our_args, at_param)
+                our_body = encode_video_batchexecute_form(cap_rpcid, our_args, at_param)
                 new_reqid = (app_reqid + 100000) if app_reqid is not None else 990001
-                fire_url = build_rpc_url_from_template(cap["url"], VIDEO_SUBMIT_RPC, new_reqid)
+                fire_url = build_rpc_url_from_template(cap["url"], cap_rpcid, new_reqid)
                 gap_ms = int(time.time() * 1000) - int(cap["ts_ms"] or 0)
 
                 self._log(
                     "step",
-                    f"Fire {VIDEO_SUBMIT_RPC} tất định (frame={starting_frame_media_id[:8]}..., seed={seed_to_use}, _reqid={new_reqid}, gap={gap_ms}ms)",
+                    f"Fire {cap_rpcid} tất định (frame={starting_frame_media_id[:8]}..., seed={seed_to_use}, _reqid={new_reqid}, gap={gap_ms}ms)",
                 )
 
                 # 5. Fire our eb1hJf in-page with x-harness-ours: 1
@@ -391,10 +433,11 @@ class VideoGenerationMixin:
                     self.disarm_video_hook(br)
                     app_reqid = extract_app_reqid(cap["url"])
                     token, at_param, app_args, cap_rpcid = parse_video_app_capture(cap["body"])
-                    if cap_rpcid not in (VIDEO_TEXT_SUBMIT_RPC, VIDEO_SUBMIT_RPC, VIDEO_INGREDIENTS_SUBMIT_RPC):
+                    if cap_rpcid not in VIDEO_SUBMIT_RPCS:
                         br.reload(settle_s=4.0)
                         raise BridgeError(
-                            f"Request mồi là {cap_rpcid} thay vì {VIDEO_TEXT_SUBMIT_RPC}/{VIDEO_INGREDIENTS_SUBMIT_RPC} "
+                            f"Request mồi là {cap_rpcid}, không thuộc nhóm submit đã capture "
+                            f"({', '.join(VIDEO_SUBMIT_RPCS)}) "
                             "(composer không ở sub-mode 'Thành phần') — hủy submit."
                         )
                 except (TokenParseError, CaptureTimeoutError) as cap_err:
@@ -410,80 +453,29 @@ class VideoGenerationMixin:
                 u2 = str(uuid.uuid4()).upper()
                 gen_id = str(uuid.uuid4()).upper()
 
-                if actual_ref_paths and isinstance(app_args, list) and app_args and isinstance(app_args[0], list) and app_args[0]:
-                    try:
-                        import copy
-                        base_spec = copy.deepcopy(app_args[0][0])
-                        specs = []
-                        eff_model_key = model_key or (base_spec[1] if len(base_spec) > 1 and isinstance(base_spec[1], str) else "abra_t2v_8s")
-                        is_360 = str(capture_resolution or "").strip().lower().startswith("360")
-                        if eff_model_key and is_360 and not eff_model_key.endswith("_360p"):
-                            eff_model_key = f"{eff_model_key}_360p"
+                cap_ref_ids = extract_reference_media_ids(app_args)
+                cap_video_ref, cap_video_frames = extract_reference_video_from_args(app_args)
 
-                        aspect_val = 1 if "9:16" in target_aspect else 2
-                        is_ingredients_spec = (
-                            cap_rpcid == VIDEO_INGREDIENTS_SUBMIT_RPC
-                            or (len(base_spec) > 1 and isinstance(base_spec[1], list))
-                        )
-                        for i in range(max(1, int(count))):
-                            s = copy.deepcopy(base_spec)
-                            if len(s) > 0 and isinstance(s[0], list):
-                                s[0] = [None, None, [[[clean_prompt]]]]
-                            if is_ingredients_spec:
-                                # MZZa6b: s[0]=prompt, s[1]=ingredients list, s[2]=model_key, s[3]=aspect, s[4]=seed, s[5]=uuid_slot
-                                r2v_model_key = eff_model_key.replace("abra_t2v", "abra_r2v") if "abra_t2v" in eff_model_key else eff_model_key
-                                if len(s) > 2:
-                                    s[2] = r2v_model_key
-                                if len(s) > 3:
-                                    s[3] = int(aspect_val)
-                                if len(s) > 4 and s[4] is not None:
-                                    s[4] = int(seed_to_use) if i == 0 else new_seed()
-                            else:
-                                # YhhmEf: s[0]=prompt, s[1]=model_key, s[2]=aspect, s[3]=seed, s[4]=uuid_slot
-                                if len(s) > 1:
-                                    s[1] = eff_model_key
-                                if len(s) > 2:
-                                    s[2] = int(aspect_val)
-                                if len(s) > 3:
-                                    s[3] = int(seed_to_use) if i == 0 else new_seed()
-                            uuid_idx = None
-                            for idx in range(len(s) - 1, 3, -1):
-                                slot = s[idx]
-                                if isinstance(slot, list) and len(slot) >= 6:
-                                    if slot[0] is None and slot[1] is None and slot[2] is None and slot[3] is None:
-                                        uuid_idx = idx
-                                        break
-                            if uuid_idx is None:
-                                uuid_idx = 5 if is_ingredients_spec else 4
-                            if uuid_idx < len(s) and isinstance(s[uuid_idx], list) and len(s[uuid_idx]) >= 6:
-                                s[uuid_idx][4] = u1 if i == 0 else str(uuid.uuid4()).upper()
-                                s[uuid_idx][5] = u2 if i == 0 else str(uuid.uuid4()).upper()
-                            specs.append(s)
+                if not model_key:
+                    raise BridgeError(
+                        "generate_text_video_flow needs the captured model_key "
+                        "(macaron_cookie_t2v_*_ / macaron_cookie_r2v_*_), because the duration "
+                        "is part of the key."
+                    )
 
-                        our_args = copy.deepcopy(app_args)
-                        our_args[0] = specs
-                        if len(our_args) > 1 and isinstance(our_args[1], list):
-                            ref = our_args[1]
-                            if len(ref) > 10 and isinstance(ref[10], list) and ref[10]:
-                                ref[10][0] = token
-                        if len(our_args) > 2 and isinstance(our_args[2], list) and our_args[2]:
-                            our_args[2][0] = gen_id
-                        self._log("info", f"ingredients live capture: đính kèm {len(actual_ref_paths)} ảnh, seed={seed_to_use}, model={eff_model_key}, x{count}")
-                    except Exception as exc:
-                        self._log("warn", f"Không đọc được spec từ app_args ({exc}) — dùng fallback build_text_video_args")
-                        our_args = build_text_video_args(
-                            project_id=active_pid,
-                            prompt=clean_prompt,
-                            recaptcha_token=token,
-                            aspect_ratio=target_aspect,
-                            seed=seed_to_use,
-                            model_key=model_key or "abra_t2v_8s",
-                            u1=u1,
-                            u2=u2,
-                            gen_id=gen_id,
-                            count=count,
-                            resolution=capture_resolution,
-                        )
+                if cap_rpcid == VIDEO_EDIT_RPC or cap_video_ref:
+                    our_args = build_video_edit_args(
+                        project_id=active_pid,
+                        prompt=clean_prompt,
+                        recaptcha_token=token,
+                        reference_video_media_id=cap_video_ref or "",
+                        aspect_ratio=target_aspect,
+                        reference_video_frame_count=cap_video_frames or 192,
+                        u1=u1,
+                        u2=u2,
+                        gen_id=gen_id,
+                        count=count,
+                    )
                 else:
                     our_args = build_text_video_args(
                         project_id=active_pid,
@@ -491,7 +483,8 @@ class VideoGenerationMixin:
                         recaptcha_token=token,
                         aspect_ratio=target_aspect,
                         seed=seed_to_use,
-                        model_key=model_key or "abra_t2v_8s",
+                        model_key=model_key,
+                        reference_image_media_ids=cap_ref_ids or None,
                         u1=u1,
                         u2=u2,
                         gen_id=gen_id,
@@ -499,7 +492,9 @@ class VideoGenerationMixin:
                         resolution=capture_resolution,
                     )
 
-                submit_rpc = cap_rpcid if cap_rpcid in (VIDEO_TEXT_SUBMIT_RPC, VIDEO_SUBMIT_RPC, VIDEO_INGREDIENTS_SUBMIT_RPC) else (VIDEO_INGREDIENTS_SUBMIT_RPC if actual_ref_paths else VIDEO_TEXT_SUBMIT_RPC)
+                submit_rpc = cap_rpcid if cap_rpcid in VIDEO_SUBMIT_RPCS else submit_rpc_for(
+                    SHAPE_VIDEO_REF if cap_video_ref else (SHAPE_IMAGE_REFS if cap_ref_ids else SHAPE_TEXT)
+                )
                 our_body = encode_video_batchexecute_form(submit_rpc, our_args, at_param)
                 new_reqid = (app_reqid + 100000) if app_reqid is not None else 990001
                 fire_url = build_rpc_url_from_template(cap["url"], submit_rpc, new_reqid)

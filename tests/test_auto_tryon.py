@@ -806,6 +806,7 @@ def test_build_video_args_and_parse_video_app_capture():
         starting_frame_media_id=sf_id,
         aspect_ratio="9:16",
         seed=567281629,
+        model_key=VIDEO_MODEL_KEY,
         u1="aaaa1111-2222-4333-8444-555566667777",
         u2="bbbb1111-2222-4333-8444-555566667777",
         gen_id="cccc1111-2222-4333-8444-555566667777",
@@ -817,6 +818,9 @@ def test_build_video_args_and_parse_video_app_capture():
     assert spec[2] == VIDEO_ASPECT_PORTRAIT
     assert spec[3] == 567281629
     assert spec[4][1] == sf_id
+    # No crop was passed and the composer sent none in the capture, so the slot stops at
+    # the media id — the builder must not invent a crop box.
+    assert spec[4] == [None, sf_id]
     # u1, u2, gen_id must be uppercase
     assert spec[5][4] == "AAAA1111-2222-4333-8444-555566667777"
     assert spec[5][5] == "BBBB1111-2222-4333-8444-555566667777"
@@ -833,6 +837,7 @@ def test_build_video_args_and_parse_video_app_capture():
         starting_frame_media_id=sf_id,
         aspect_ratio="16:9",
         seed=12345,
+        model_key=VIDEO_MODEL_KEY,
     )
     assert args_169[0][0][2] == VIDEO_ASPECT_LANDSCAPE
 
@@ -844,7 +849,24 @@ def test_build_video_args_and_parse_video_app_capture():
     assert rpcid_out == VIDEO_SUBMIT_RPC
     ext_sf_id, ext_crop = extract_starting_frame_from_eb1hjf_args(inner_out)
     assert ext_sf_id == sf_id
-    assert isinstance(ext_crop, list) and len(ext_crop) == 4
+    assert ext_crop is None, "a frame without a crop round-trips as None, not a default box"
+
+    # 3b. An explicit crop survives the round-trip unchanged.
+    crop_916 = [0.003875968992248069, None, 0.9961240310077519, 1]
+    args_crop = build_video_args(
+        project_id=project_id,
+        prompt="crop round-trip",
+        recaptcha_token=fake_token,
+        starting_frame_media_id=sf_id,
+        aspect_ratio="9:16",
+        model_key=VIDEO_MODEL_KEY,
+        crop_box=crop_916,
+    )
+    body_crop = encode_video_batchexecute_form(VIDEO_SUBMIT_RPC, args_crop, at_param)
+    _, _, inner_crop, _ = parse_video_app_capture(body_crop)
+    ext_sf_id, ext_crop = extract_starting_frame_from_eb1hjf_args(inner_crop)
+    assert ext_sf_id == sf_id
+    assert ext_crop == crop_916
 
     # 4. 1080p upsample builder (p0UkFb / veo_3_1_upsampler_1080p)
     from src.Bridge.flow_video_bridge import (

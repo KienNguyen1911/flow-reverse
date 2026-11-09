@@ -26,13 +26,15 @@ Architecture (see `docs/api_specs/flow_create_video.md`):
 
 Layout — this module is the public facade; the implementation lives in ``Bridge/flow_video/``:
 
-  constants       RPC ids, model keys, aspect enums, regexes, ``LogFn``
-  hook_js         ``VIDEO_HOOK_JS`` (in-page eb1hJf block + maseQ spy)
-  payload         pure payload builders (eb1hJf / YhhmEf / p0UkFb / jwpduf / as29s)
+  constants       RPC ids, model keys, aspect enums, 360p marker table, regexes, ``LogFn``
+  models          which key/RPC a submit shape uses, Omni 1.2's duration window
+  hook_js         ``VIDEO_HOOK_JS`` (in-page submit block + maseQ spy)
+  payload         pure payload builders (every captured submit layout, p0UkFb, jwpduf, as29s)
   parsing         pure parsers for captured decoys and RPC responses
   media_tools     FFmpeg/OpenCV helpers (last frame, strip audio, concat)
   prompt          ``sanitize_video_prompt``
-  composer        video composer DOM driving, reCAPTCHA readiness, tile cleanup
+  composer        video composer DOM driving, duration slider, reCAPTCHA readiness, tile cleanup
+  last_frame      the "Bắt đầu" / "Kết thúc" frame slots
   starting_frame  starting-frame upload/attach (paste -> maseQ, UI fallback)
   rpc             hook/capture, jwpduf polling, as29s, 1080p upsample, MP4 download
   generation      ``generate_video_flow`` / ``generate_text_video_flow`` orchestration
@@ -53,12 +55,14 @@ from typing import Optional
 if "FlowVideoBridge" in globals():
     for _name in (
         "constants",
+        "models",
         "hook_js",
         "payload",
         "parsing",
         "media_tools",
         "prompt",
         "composer",
+        "last_frame",
         "starting_frame",
         "rpc",
         "generation",
@@ -70,30 +74,62 @@ from .flow_video.composer import VideoComposerMixin  # noqa: E402
 from .flow_video.constants import (  # noqa: E402,F401
     DEFAULT_CROP_169,
     DEFAULT_CROP_916,
+    OMNI12_MAX_DURATION_S,
+    OMNI12_MAX_DURATION_S_WITH_LAST_FRAME,
+    OMNI12_MIN_DURATION_S,
     PROJECT_ITEMS_RPC,
+    SPEC_360P_MARKER_INDEX,
     VIDEO_ASPECT_LANDSCAPE,
     VIDEO_ASPECT_PORTRAIT,
+    VIDEO_EDIT_MODEL_KEY,
+    VIDEO_EDIT_RPC,
+    VIDEO_LAST_FRAME_SUBMIT_RPC,
     VIDEO_MEDIA_URL_RPC,
     VIDEO_MODEL_KEY,
     VIDEO_POLL_RPC,
     VIDEO_SUBMIT_RPC,
+    VIDEO_SUBMIT_RPCS,
     VIDEO_TEXT_SUBMIT_RPC,
     VIDEO_TOOL_ID,
     VIDEO_UPLOAD_RPC,
     VIDEO_UPSAMPLE_1080P_MODEL_KEY,
     VIDEO_UPSAMPLE_RPC,
+    VIDEO_INGREDIENTS_SUBMIT_RPC,
     LogFn,
 )
 from .flow_video.generation import VideoGenerationMixin  # noqa: E402
 from .flow_video.hook_js import VIDEO_HOOK_JS  # noqa: E402,F401
+from .flow_video.last_frame import (  # noqa: E402,F401
+    SLOT_LABEL_FIRST,
+    SLOT_LABEL_LAST,
+    LastFrameMixin,
+)
 from .flow_video.media_tools import (  # noqa: E402,F401
     concatenate_two_videos,
     condition_frame_for_policy_retry,
     extract_last_video_frame,
     strip_video_audio,
 )
+from .flow_video.models import (  # noqa: E402,F401
+    SHAPE_FIRST_AND_LAST_FRAME,
+    SHAPE_FIRST_FRAME,
+    SHAPE_IMAGE_REFS,
+    SHAPE_RPC,
+    SHAPE_TEXT,
+    SHAPE_VIDEO_REF,
+    Omni12Duration,
+    VideoModelKeyError,
+    omni12_duration,
+    omni12_model_key,
+    resolve_shape,
+    submit_rpc_for,
+)
 from .flow_video.parsing import (  # noqa: E402,F401
+    extract_frame_slot,
+    extract_last_frame_from_args,
     extract_media_records,
+    extract_reference_media_ids,
+    extract_reference_video_from_args,
     extract_signed_video_url,
     extract_starting_frame_from_eb1hjf_args,
     extract_video_submit_media_id,
@@ -105,6 +141,8 @@ from .flow_video.payload import (  # noqa: E402,F401
     build_jwpduf_args,
     build_text_video_args,
     build_video_args,
+    build_video_edit_args,
+    build_video_submit_args,
     build_video_upsample_1080p_args,
     encode_video_batchexecute_form,
 )
@@ -117,9 +155,16 @@ class FlowVideoBridge(
     VideoGenerationMixin,
     VideoRpcMixin,
     StartingFrameMixin,
+    LastFrameMixin,
     VideoComposerMixin,
 ):
-    """Protocol-level ("Bridge Mode") Video generation on Google Flow (`eb1hJf` + `jwpduf` + `as29s`)."""
+    """Protocol-level ("Bridge Mode") Video generation on Google Flow.
+
+    Submits through whichever RPC the captured composer state implies (`eb1hJf` for a
+    single frame, `nprQif` for first+last, `YhhmEf`/`MZZa6b` for Thành phần with/without
+    image references, `jIps6` for a video reference), then polls `jwpduf` and mints a
+    signed CDN URL through `as29s`.
+    """
 
     def __init__(
         self,

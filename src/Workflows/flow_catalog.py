@@ -33,6 +33,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from src.Bridge.flow_video.constants import OMNI12_MAX_DURATION_S_WITH_LAST_FRAME
+
 IMAGE_ASPECT_ENUM: dict[str, int] = {
     # captured from the blocked ogiZ0b request, one per composer radio
     "16:9": 3,
@@ -92,9 +94,15 @@ class MediaModel:
     fixed_duration_s: int = 8
     #: Aspect ratios the model accepts (empty = all of ``VIDEO_ASPECT_ORDER``).
     aspect_ratios: tuple[str, ...] = ()
+    #: Flow's own "this model retires on <date>" note, verbatim, when the menu shows one.
+    deprecated_note: str = ""
 
     def aspects(self) -> tuple[str, ...]:
         return self.aspect_ratios or VIDEO_ASPECT_ORDER
+
+    @property
+    def is_deprecated(self) -> bool:
+        return bool(self.deprecated_note)
 
 
 IMAGE_MODELS: tuple[MediaModel, ...] = (
@@ -117,6 +125,21 @@ IMAGE_MODELS: tuple[MediaModel, ...] = (
 
 VIDEO_MODELS: tuple[MediaModel, ...] = (
     MediaModel(
+        id="omni_1_2_flash",
+        label="Omni 1.2 Flash",
+        keys={
+            "i2v_dur": "macaron_cookie_i2v_{dur}s",
+            "i2v_fl_dur": "macaron_cookie_i2v_fl_{dur}s",
+            "t2v_dur": "macaron_cookie_t2v_{dur}s",
+            "r2v_dur": "macaron_cookie_r2v_{dur}s",
+        },
+        has_resolution=True,
+        has_duration=True,
+        # Observed 2026-11-09: the 4/6/8/10 radios are gone; a 3..15s slider took over.
+        durations_s=tuple(range(3, 16)),
+        fixed_duration_s=8,
+    ),
+    MediaModel(
         id="omni_1_1_flash",
         label="Omni 1.1 Flash",
         keys={
@@ -125,6 +148,8 @@ VIDEO_MODELS: tuple[MediaModel, ...] = (
         },
         has_resolution=True,
         has_duration=True,
+        #: Flow flags this model "Sẽ ngừng hoạt động vào ngày 5 thg 12" (retires 2026-12-05).
+        deprecated_note="Sẽ ngừng hoạt động vào ngày 5 thg 12",
     ),
     MediaModel(
         id="veo_3_1_lite",
@@ -150,6 +175,7 @@ VIDEO_MODELS: tuple[MediaModel, ...] = (
         },
         has_resolution=False,
         has_duration=False,
+        deprecated_note="Sẽ ngừng hoạt động vào ngày 5 thg 12",
     ),
     MediaModel(
         id="veo_3_1_quality",
@@ -162,6 +188,7 @@ VIDEO_MODELS: tuple[MediaModel, ...] = (
         },
         has_resolution=False,
         has_duration=False,
+        deprecated_note="Sẽ ngừng hoạt động vào ngày 5 thg 12",
     ),
 )
 
@@ -182,6 +209,10 @@ IMAGE_MODEL_ALIASES: dict[str, str] = {
 VIDEO_MODEL_ALIASES: dict[str, str] = {
     **{m.id: m.id for m in VIDEO_MODELS},
     **{m.label.lower(): m.id for m in VIDEO_MODELS},
+    #: Omni 1.2 Flash is the live default; the `macaron_cookie_*` family is not an alias
+    #: a caller should type, but an old stored config may name it.
+    "omni 1.2": "omni_1_2_flash",
+    "omni_1.2_flash": "omni_1_2_flash",
 }
 
 
@@ -206,10 +237,10 @@ def resolve_image_model(value: Optional[str]) -> MediaModel:
 
 
 def resolve_video_model(value: Optional[str]) -> MediaModel:
-    """Resolve an id / label to a video model (default: Omni 1.1 Flash)."""
+    """Resolve an id / label to a video model (default: Omni 1.2 Flash)."""
     key = _norm(value)
     if not key:
-        return VIDEO_MODELS_BY_ID["omni_1_1_flash"]
+        return VIDEO_MODELS_BY_ID["omni_1_2_flash"]
     model_id = VIDEO_MODEL_ALIASES.get(key)
     if not model_id:
         known = ", ".join(m.id for m in VIDEO_MODELS)
@@ -260,11 +291,17 @@ def video_model_key(
     duration_s: int = 8,
     resolution: str = "720p",
     aspect_ratio: str = "9:16",
+    has_last_frame: bool = False,
+    has_references: bool = False,
 ) -> str:
     """Model key for a video submit, or :class:`CatalogError` for unobserved combos.
 
-    ``sub_mode`` is ``"frames"`` (image→video, ``eb1hJf``) or ``"ingredients"``
-    (text→video, ``YhhmEf``).
+    ``sub_mode`` is ``"frames"`` (image→video) or ``"ingredients"`` (text/video→video).
+    ``has_last_frame`` selects the first+last-frame key on models that captured one; with
+    both frame slots filled Flow's duration window shrinks to 3..10s.
+    ``has_references`` selects the ``r2v`` (reference→video) family inside ``ingredients``:
+    the same composer sub-mode sends ``macaron_cookie_t2v_*`` without ingredient chips and
+    ``macaron_cookie_r2v_*`` with them (observed 2026-11-09).
     """
     m = model if isinstance(model, MediaModel) else resolve_video_model(model)  # type: ignore[arg-type]
     sub = _norm(sub_mode) or "frames"
@@ -273,16 +310,32 @@ def video_model_key(
 
     aspect = _aspect_suffix(aspect_ratio)
     prefix = "i2v" if sub == "frames" else "t2v"
+    if has_last_frame:
+        if sub != "frames":
+            raise CatalogError("Khung 'Kết thúc' chỉ có ở sub-mode 'Khung hình'.")
+        prefix = "i2v_fl"
+    elif has_references and sub == "ingredients":
+        if "r2v_dur" not in m.keys:
+            raise CatalogError(
+                f"{m.label} chưa capture model key r2v (video từ ảnh tham chiếu)."
+            )
+        prefix = "r2v"
+    elif has_references:
+        raise CatalogError("Ảnh tham chiếu chỉ có ở sub-mode 'Thành phần'.")
 
     if m.has_duration:
         dur = int(duration_s)
-        if dur not in m.durations_s:
+        allowed = video_durations(m, has_last_frame=has_last_frame)
+        if dur not in allowed:
             raise CatalogError(
-                f"{m.label} chỉ hỗ trợ duration {m.durations_s} (nhận {duration_s}s)."
+                f"{m.label} chỉ hỗ trợ duration {allowed[0]}..{allowed[-1]}s"
+                f"{' (có khung Kết thúc)' if has_last_frame else ''} (nhận {duration_s}s)."
             )
         template = m.keys.get(f"{prefix}_dur")
         if not template:
-            raise CatalogError(f"{m.label} không có model key {prefix} (duration-based) đã capture.")
+            raise CatalogError(
+                f"{m.label} không có model key {prefix} (duration-based) đã capture."
+            )
         key = template.replace("{dur}", str(dur))
         if _norm(resolution) == "360p":
             # Captured: 360p appends the suffix instead of a separate slot.
@@ -305,9 +358,20 @@ def video_model_key(
     return key
 
 
-def video_durations(model: MediaModel | str | None) -> tuple[int, ...]:
+def video_durations(model: MediaModel | str | None, *, has_last_frame: bool = False) -> tuple[int, ...]:
+    """Durations the composer offers for ``model``.
+
+    Flow narrows the range when the fringe state changes: with both frame slots filled
+    Omni 1.2's slider stops at 10s (observed 2026-11-09).
+    """
     m = model if isinstance(model, MediaModel) else resolve_video_model(model)  # type: ignore[arg-type]
-    return m.durations_s if m.has_duration else (m.fixed_duration_s,)
+    if not m.has_duration:
+        return (m.fixed_duration_s,)
+    if has_last_frame:
+        capped = tuple(d for d in m.durations_s if d <= OMNI12_MAX_DURATION_S_WITH_LAST_FRAME)
+        if capped:
+            return capped
+    return m.durations_s
 
 
 def video_resolutions(model: MediaModel | str | None) -> tuple[str, ...]:
@@ -380,8 +444,13 @@ def video_catalog() -> dict:
                 "aspect_ratios": list(m.aspects()),
                 "resolutions": list(video_resolutions(m)),
                 "durations_s": list(video_durations(m)),
+                "durations_with_last_frame_s": list(video_durations(m, has_last_frame=True)),
                 "has_resolution": m.has_resolution,
                 "has_duration": m.has_duration,
+                "has_last_frame": "i2v_fl_dur" in m.keys,
+                "has_reference_video": m.id == "omni_1_2_flash",
+                "is_deprecated": m.is_deprecated,
+                "deprecated_note": m.deprecated_note,
                 "model_keys": {
                     sub: {
                         aspect: video_model_key(m, sub_mode=sub, aspect_ratio=aspect,
@@ -403,10 +472,12 @@ def video_catalog() -> dict:
         "aspect_enums": dict(VIDEO_ASPECT_ENUM),
         "default_aspect_ratio": "9:16",
         "models": models,
-        "default_model": "omni_1_1_flash",
+        "default_model": "omni_1_2_flash",
         "counts": list(COUNTS),
         "default_count": 1,
         "supports_starting_frame": True,
+        "supports_last_frame": True,
+        "supports_video_reference": True,
         "supports_text_to_video": True,
         "auto_image_chain": True,
         "supports_seed": True,

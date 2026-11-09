@@ -1,17 +1,44 @@
-"""Video composer driving for :class:`FlowVideoBridge` (settings popover, sub-mode, reCAPTCHA readiness)."""
+"""Video composer driving for :class:`FlowVideoBridge` (settings popover, sub-mode, reCAPTCHA readiness).
+
+Two composer facts drive most of this module and were captured 0-credit (2026-11-09):
+
+* **Duration is a slider on Omni 1.2, radios on Omni 1.1/Veo.** ``flow-duration-slider``
+  wraps an ``input[type=range]`` whose value is ``seconds - 3`` (0..12 → 3..15 giây).
+  With both frame slots filled the max drops to 7 (3..10s). The older models still show
+  the ``Thời lượng video`` radio group.
+* **"Khung hình" has two slots: "Bắt đầu" and "Kết thúc".** Both are always rendered;
+  the last one becomes optional input. Filling it changes the submit RPC to ``nprQif``.
+"""
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Any, Optional
 
 from ..flow_bridge import FlowBridge, PageInteractionError
+from .constants import OMNI12_SLIDER_OFFSET_S
+
+#: ``flow-toggles`` groups whose label differs from the visible text, keyed by the label
+#: we address them with.
+GROUP_MODE = "Chế độ"
+GROUP_SUB_MODE = "Loại video"
+GROUP_ASPECT = "Tỷ lệ khung hình"
+GROUP_MODEL = None  # the model lives in its own button + nested menu, not a toggle group
+GROUP_RESOLUTION = "Độ phân giải video"
+GROUP_COUNT = "Số lượng kết quả đầu ra"
 
 
 def _count_needs_change(chip_text: str, want: int) -> bool:
     """Does the composer chip show a different batch count than ``want``?"""
     txt = str(chip_text or "")
     return f"x{want}" not in txt
+
+
+def parse_chip_duration(chip_text: str) -> Optional[int]:
+    """Read ``N giây`` (or ``Ns``) out of the composer chip, if present."""
+    match = re.search(r"(\d+)\s*(?:giây|giay|s)\b", str(chip_text or ""))
+    return int(match.group(1)) if match else None
 
 
 class VideoComposerMixin:
@@ -122,9 +149,15 @@ class VideoComposerMixin:
     ) -> str:
         """Drive the composer to Video + the requested sub-mode/config; returns the chip text.
 
-        Observed contract (see ``.turbo/node-config-parity/matrix.md``): Angular closes the
-        settings popover after a model pick, so every option group needs its own open; and
-        picking a Veo model removes the resolution + duration groups entirely.
+        Observed contract (``discovery/probe_video_model_matrix.py``):
+
+        * Angular closes the settings popover after a model pick, so every option group
+          needs its own open.
+        * Picking a Veo model removes the resolution + duration groups entirely.
+        * Omni 1.2 replaces the duration radio group with a slider, so duration is handled
+          by :meth:`_set_duration_slider` instead of :meth:`_pick_in_popover`.
+        * The sub-mode group's accessible label is ``Loại video`` (its item texts are
+          ``Khung hình`` / ``Thành phần``), not a label named after the sub-mode.
         """
         sub_label = "Khung hình" if sub_mode == "frames" else "Thành phần"
         aspect = "9:16" if "9:16" in str(target_aspect) else "16:9"
@@ -173,11 +206,7 @@ class VideoComposerMixin:
                 self._close_settings_popover(page)
 
         if offer_duration:
-            if self._open_settings_popover(page):
-                page.wait_for_timeout(420)
-                self._pick_in_popover(page, f"{duration_s} giây")
-                page.wait_for_timeout(300)
-                self._close_settings_popover(page)
+            self._apply_duration(page, duration_s)
 
         if _count_needs_change(_chip(), want_count):
             if self._open_settings_popover(page):
@@ -190,23 +219,139 @@ class VideoComposerMixin:
         page.wait_for_timeout(250)
         return _chip()
 
-    def _ensure_video_sub_mode(self, page: Any, sub_label: str) -> None:
-        """Make sure the composer is on the wanted sub-mode (Khung hình / Thành phần)."""
+    def _apply_duration(self, page: Any, duration_s: int) -> None:
+        """Set the clip length however the current model expresses it.
+
+        Omni 1.2 has a slider (``flow-duration-slider``); Omni 1.1 and Veo still have the
+        ``Thời lượng video`` radio group. Trying the slider first and falling back to the
+        radio keeps one code path for both, and the log names which one applied.
+        """
+        if self._set_duration_slider(page, duration_s) or self._pick_duration_radio(page, duration_s):
+            return
+        self._log("warn", f"Không đặt được thời lượng {duration_s}s trên composer")
+
+    def _set_duration_slider(self, page: Any, duration_s: int) -> bool:
+        """Drive Omni 1.2's ``Độ dài`` range input; returns False when there is none."""
+        if not self._open_settings_popover(page):
+            return False
+        page.wait_for_timeout(400)
+        state = page.evaluate(
+            """() => {
+            const sc = document.querySelector('.cdk-overlay-pane .settings-content');
+            const inp = sc && sc.querySelector('input[type=range].mdc-slider__input');
+            if (!inp) return null;
+            const host = sc.querySelector('flow-duration-slider');
+            const shown = host ? (host.innerText || '').replace(/\\s+/g, ' ').trim() : '';
+            return {min: inp.getAttribute('min'), max: inp.getAttribute('max'),
+                    value: inp.value, shown};
+          }"""
+        )
+        if not state:
+            self._close_settings_popover(page)
+            return False
         try:
-            has_start_slot = bool(
-                page.query_selector("flow-image-ingredient-chip")
-                or page.query_selector('//button[contains(., "Bắt đầu") or contains(., "Start")]')
+            vmin = int(state.get("min") or 0)
+            vmax = int(state.get("max") or 0)
+        except (TypeError, ValueError):
+            self._close_settings_popover(page)
+            return False
+
+        # The slider's own value is the displayed seconds minus an offset that is read off
+        # the DOM (a slider showing "8 giây" at value 5 has offset 3), so a change in Flow's
+        # numbering does not silently set the wrong length.
+        current_value = int(state.get("value") or 0)
+        current_shown = parse_chip_duration(state.get("shown") or "")
+        offset = OMNI12_SLIDER_OFFSET_S
+        if current_shown is not None:
+            offset = current_shown - current_value
+        target = max(vmin, min(vmax, int(duration_s) - offset))
+
+        page.evaluate(
+            """(target) => {
+            const inp = document.querySelector('.cdk-overlay-pane .settings-content input[type=range]');
+            if (!inp) return false;
+            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+            setter.call(inp, String(target));
+            inp.dispatchEvent(new Event('input', {bubbles: true}));
+            inp.dispatchEvent(new Event('change', {bubbles: true}));
+            return true;
+          }""",
+            target,
+        )
+        page.wait_for_timeout(350)
+        self._close_settings_popover(page)
+        if int(duration_s) - offset > vmax:
+            self._log(
+                "warn",
+                f"Composer chỉ cho tối đa {vmax + offset}s ở trạng thái hiện tại "
+                f"(yêu cầu {duration_s}s)",
             )
-            if sub_label == "Khung hình" and has_start_slot:
-                return
+        return True
+
+    def _pick_duration_radio(self, page: Any, duration_s: int) -> bool:
+        """Pick the ``Thời lượng video`` radio (Omni 1.1 / Veo); returns False when absent."""
+        if not self._open_settings_popover(page):
+            return False
+        page.wait_for_timeout(400)
+        has_group = bool(
+            page.evaluate(
+                """() => {
+                const sc = document.querySelector('.cdk-overlay-pane .settings-content');
+                if (!sc) return false;
+                const labels = [...sc.querySelectorAll('flow-toggles')]
+                  .map(g => g.getAttribute('aria-label') || '');
+                return labels.includes('Thời lượng video');
+              }"""
+            )
+        )
+        if not has_group:
+            self._close_settings_popover(page)
+            return False
+        picked = self._pick_in_popover(page, f"{duration_s} giây")
+        page.wait_for_timeout(300)
+        self._close_settings_popover(page)
+        return bool(picked)
+
+    def _ensure_video_sub_mode(self, page: Any, sub_label: str) -> None:
+        """Make sure the composer is on the wanted sub-mode (Khung hình / Thành phần).
+
+        The sub-mode group's accessible label is ``Loại video``; its items read
+        ``crop_free Khung hình`` / ``chrome_extension Thành phần``. Matching on the group
+        (instead of hoping the item text is unique in the popover) is what makes the
+        wrong-sub-mode failure go away rather than move around.
+        """
+        try:
             if not self._open_settings_popover(page):
                 return
             page.wait_for_timeout(420)
+            # The group only exists while the popover is open, so the check has to happen here.
+            if self._video_sub_mode_is(page, sub_label):
+                self._close_settings_popover(page)
+                return
             self._pick_in_popover(page, sub_label)
             page.wait_for_timeout(320)
             self._close_settings_popover(page)
         except Exception as exc:  # noqa: BLE001
             self._log("warn", f"Không đổi được sub-mode video sang {sub_label!r}: {exc}")
+
+    def _video_sub_mode_is(self, page: Any, sub_label: str) -> bool:
+        """Is the ``Loại video`` group currently showing ``sub_label`` as checked?"""
+        return bool(
+            page.evaluate(
+                """(label) => {
+                const n = s => (s || '').replace(/\\s+/g, ' ').trim();
+                const sc = document.querySelector('.cdk-overlay-pane .settings-content');
+                if (!sc) return false;
+                const group = [...sc.querySelectorAll('flow-toggles')]
+                  .find(g => (g.getAttribute('aria-label') || '') === 'Loại video');
+                if (!group) return false;
+                const items = [...group.querySelectorAll('mat-button-toggle')];
+                const hit = items.find(t => n(t.innerText).includes(label));
+                return !!(hit && hit.classList.contains('mat-button-toggle-checked'));
+              }""",
+                sub_label,
+            )
+        )
 
     def _ensure_ui_video_frames_mode(self, page: Any, target_aspect: str) -> None:
         """Backwards-compatible wrapper: Video → Khung hình → 8s → target_aspect → x1."""

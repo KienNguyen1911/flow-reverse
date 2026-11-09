@@ -76,17 +76,76 @@ def parse_video_app_capture(body: str) -> tuple[str, str, list, str]:
     return token, at_param, inner_args, rpcid
 
 
-def extract_starting_frame_from_eb1hjf_args(args: Any) -> tuple[Optional[str], Optional[list]]:
-    """Extract (starting_frame_media_id, crop_box) from captured eb1hJf args[0][0][4]."""
-    try:
-        slot = args[0][0][4]
-        if isinstance(slot, list) and len(slot) >= 2:
-            media_id = slot[1] if isinstance(slot[1], str) and _UUID_RE.match(slot[1]) else None
-            crop_box = slot[5] if len(slot) > 5 and isinstance(slot[5], list) else None
-            return (media_id.lower() if media_id else None), crop_box
-    except Exception:
-        pass
+def extract_frame_slot(slot: Any) -> tuple[Optional[str], Optional[list]]:
+    """Read ``(media_id, crop_box)`` out of one captured frame slot.
+
+    The slot shape is ``[null, media_id, ..., crop_box]`` — ``eb1hJf`` (single frame) and
+    ``nprQif`` (first + last) use the same layout, only the index differs.
+    """
+    if isinstance(slot, list) and len(slot) >= 2:
+        media_id = slot[1] if isinstance(slot[1], str) and _UUID_RE.match(slot[1]) else None
+        crop_box = slot[5] if len(slot) > 5 and isinstance(slot[5], list) else None
+        return (media_id.lower() if media_id else None), crop_box
     return None, None
+
+
+def extract_starting_frame_from_eb1hjf_args(args: Any) -> tuple[Optional[str], Optional[list]]:
+    """Extract (starting_frame_media_id, crop_box) from captured submit args[0][0][4]."""
+    try:
+        return extract_frame_slot(args[0][0][4])
+    except Exception:
+        return None, None
+
+
+def extract_last_frame_from_args(args: Any) -> tuple[Optional[str], Optional[list]]:
+    """Extract ``(last_frame_media_id, crop_box)`` from a captured ``nprQif`` decoy.
+
+    ``nprQif`` carries ``spec[4]`` = first frame and ``spec[5]`` = last frame; an
+    ``eb1hJf`` spec has the UUID slot at [5] instead, so a UUID-only slot reads as empty.
+    """
+    try:
+        return extract_frame_slot(args[0][0][5])
+    except Exception:
+        return None, None
+
+
+def extract_reference_media_ids(args: Any) -> list[str]:
+    """Read the ingredient media ids out of a captured ``MZZa6b`` decoy.
+
+    ``MZZa6b`` puts the reference list at ``args[0][0][1]`` as ``[[null, media_id], ...]``;
+    a ``YhhmEf`` spec has the model key there instead, so a non-list reads as empty.
+    """
+    ids: list[str] = []
+    try:
+        refs = args[0][0][1]
+    except Exception:
+        return ids
+    if not isinstance(refs, list):
+        return ids
+    for entry in refs:
+        if not isinstance(entry, list):
+            continue
+        for value in entry:
+            if isinstance(value, str) and _UUID_RE.match(value):
+                ids.append(value.lower())
+                break
+    return ids
+
+
+def extract_reference_video_from_args(args: Any) -> tuple[Optional[str], Optional[int]]:
+    """Read ``(video_media_id, frame_count)`` out of a captured ``jIps6`` decoy.
+
+    ``jIps6`` puts the clip at ``args[0][0][0]`` as ``[null, media_id, 0, frame_count]``.
+    """
+    try:
+        slot = args[0][0][0]
+    except Exception:
+        return None, None
+    if not isinstance(slot, list) or len(slot) < 2:
+        return None, None
+    media_id = slot[1] if isinstance(slot[1], str) and _UUID_RE.match(slot[1]) else None
+    frames = slot[3] if len(slot) > 3 and isinstance(slot[3], int) else None
+    return (media_id.lower() if media_id else None), frames
 
 
 def extract_media_records(data: Any, project_id: Optional[str] = None) -> list[list]:
