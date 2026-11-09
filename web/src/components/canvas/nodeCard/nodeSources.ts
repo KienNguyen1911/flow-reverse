@@ -7,6 +7,8 @@ export interface NodeSources {
   connectedSources: CanvasNode[];
   /** Primary (first) upstream node — the frame/video source for video & last_frame nodes. */
   upstream: CanvasNode | undefined;
+  /** Node wired to the "Kết thúc" slot (video nodes in `frames` mode only). */
+  lastFrameSource: CanvasNode | undefined;
   /** "Thành phần" là text→video: không cần frame nên không có nguồn nào bị chặn. */
   textToVideo: boolean;
   /** An upstream node has not produced its result yet. */
@@ -28,6 +30,10 @@ export function deriveNodeSources(n: CanvasNode, allNodes: CanvasNode[]): NodeSo
     .filter(Boolean) as CanvasNode[];
 
   const upstream = n.sourceImageId ? allNodes.find((i) => i.id === n.sourceImageId) : undefined;
+  // Second frame slot ("Kết thúc") — only meaningful in "Khung hình".
+  const lastFrameSource = n.videoLastFrameSourceId
+    ? allNodes.find((i) => i.id === n.videoLastFrameSourceId)
+    : undefined;
   const textToVideo = isVid && (n.videoSubMode ?? "frames") === "ingredients";
   const sourceBlocked =
     !isRef &&
@@ -51,6 +57,7 @@ export function deriveNodeSources(n: CanvasNode, allNodes: CanvasNode[]): NodeSo
     currentSids,
     connectedSources,
     upstream,
+    lastFrameSource,
     textToVideo,
     sourceBlocked,
     sourceOptions,

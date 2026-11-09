@@ -350,11 +350,20 @@ class VideoGenerationMixin:
         offer_resolution: bool = True,
         offer_duration: bool = True,
         capture_resolution: str = "720p",
+        video_reference_title: Optional[str] = None,
     ) -> Path:
-        """Text/ingredients→video via the composer's "Thành phần" sub-mode (``YhhmEf``).
+        """Text/ingredients→video via the composer's "Thành phần" sub-mode.
 
-        Supports prompt-only generation as well as attaching reference images as ingredient
-        chips (flow-image-ingredient-chip) via synthetic paste into div.ProseMirror.
+        Three submit shapes, all captured 0-credit:
+
+        * prompt only → ``YhhmEf``, key ``macaron_cookie_t2v_<n>s``
+        * ≥1 image reference chip → ``MZZa6b``, key ``macaron_cookie_r2v_<n>s``
+        * a **video** reference chip → ``jIps6``, key ``abra_edit``; the duration lives in
+          the clip, not in the key, so ``model_key`` is ignored on that path.
+
+        ``video_reference_title`` mounts a clip already in the project (``None`` takes the
+        first one). Supplying it implies the ``jIps6`` path; image references in
+        ``reference_paths`` are ignored in that case because Flow fires one submit RPC.
         """
         dest_p = Path(dest_path).resolve()
         dest_p.parent.mkdir(parents=True, exist_ok=True)
@@ -421,8 +430,18 @@ class VideoGenerationMixin:
                 br.type_prompt(clean_prompt)
                 time.sleep(jitter(0.4, 0.1, 0.2))
 
-                # 3. Attach ingredient reference images if provided
-                if actual_ref_paths:
+                # 3. Attach the reference. A video reference and image references are
+                #    mutually exclusive: the app fires exactly one submit RPC, and mounting a
+                #    video chip takes precedence (it is what the caller asked for).
+                if video_reference_title is not None:
+                    if not self.attach_video_reference(br, title_match=video_reference_title):
+                        br.reload(settle_s=4.0)
+                        raise BridgeError(
+                            "Không gắn được clip tham chiếu vào 'Thành phần' — Flow chỉ nhận "
+                            "clip có sẵn trong dự án (tab Video của picker). Hủy submit thay vì "
+                            "tạo video không tham chiếu."
+                        )
+                elif actual_ref_paths:
                     self.attach_video_ingredients(br, actual_ref_paths, settle_s=3.0)
 
                 time.sleep(jitter(0.4, 0.1, 0.2))

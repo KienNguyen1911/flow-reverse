@@ -63,6 +63,7 @@ if "FlowVideoBridge" in globals():
         "prompt",
         "composer",
         "last_frame",
+        "video_ref",
         "starting_frame",
         "rpc",
         "generation",
@@ -104,6 +105,7 @@ from .flow_video.last_frame import (  # noqa: E402,F401
     SLOT_LABEL_LAST,
     LastFrameMixin,
 )
+from .flow_video.video_ref import VideoReferenceMixin  # noqa: E402,F401
 from .flow_video.media_tools import (  # noqa: E402,F401
     concatenate_two_videos,
     condition_frame_for_policy_retry,
@@ -156,6 +158,7 @@ class FlowVideoBridge(
     VideoRpcMixin,
     StartingFrameMixin,
     LastFrameMixin,
+    VideoReferenceMixin,
     VideoComposerMixin,
 ):
     """Protocol-level ("Bridge Mode") Video generation on Google Flow.

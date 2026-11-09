@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from ...Bridge.flow_video.constants import VIDEO_EDIT_MODEL_KEY
 from ...Workflows.flow_catalog import (
     VIDEO_SUB_MODES,
     CatalogError,
@@ -81,6 +82,12 @@ class NodeVideoBody(BaseModel):
     #: model/aspect/resolution/duration/count control, so user values are not applied.
     agent_mode: bool = False
     frame_path: Optional[str] = None        # attached image (path or /api/... URL)
+    #: Last frame for the "Kết thúc" slot ("Khung hình" only). Adding it switches the submit
+    #: to `nprQif` and caps the duration at 10s.
+    last_frame_path: Optional[str] = None
+    #: Title (substring) of a project clip to mount as a "Thành phần" video reference. Set it
+    #: to take the `jIps6` path (model key `abra_edit`, duration not in the key).
+    video_reference_title: Optional[str] = None
     reference_image_path: Optional[str] = None
     reference_image_paths: Optional[list[str]] = None
     image_prompt: Optional[str] = None      # used only when auto_image generates the frame
@@ -171,20 +178,35 @@ def build_router(ctx: AppContext) -> APIRouter:
 
     @router.post("/api/node/video")
     def api_node_video(body: NodeVideoBody):
+        sub_mode = str(body.sub_mode or "frames").strip().lower()
+        # A video reference only exists in "Thành phần", and it changes the whole submit
+        # (jIps6 / abra_edit) — so it decides the sub-mode rather than being ignored.
+        if body.video_reference_title is not None:
+            sub_mode = "ingredients"
+        # A last frame only exists in "Khung hình"; it also narrows the duration window, so it
+        # must be known BEFORE the duration is validated (3..10s instead of 3..15s).
+        has_last_frame = bool(body.last_frame_path) and sub_mode == "frames"
         try:
             ratio = normalize_video_ratio(body.aspect_ratio)
             model_info = resolve_video_model(body.model)
             resolution = normalize_video_resolution(body.resolution, model=model_info.id)
-            duration = validate_video_duration(body.duration_s, model=model_info.id)
-            sub_mode = str(body.sub_mode or "frames").strip().lower()
+            duration = validate_video_duration(
+                body.duration_s, model=model_info.id, has_last_frame=has_last_frame
+            )
             if sub_mode not in VIDEO_SUB_MODES:
                 raise UnsupportedOptionError(
                     f"Sub-mode video {body.sub_mode!r} không hợp lệ. Chọn: {', '.join(VIDEO_SUB_MODES)}."
                 )
             count = normalize_count(body.count)
-            model_key = video_model_key(
-                model_info, sub_mode=sub_mode, duration_s=duration,
-                resolution=capture_resolution(model_info, resolution), aspect_ratio=ratio,
+            model_key = (
+                # A video reference leaves the Omni family: `abra_edit`, duration in the clip.
+                VIDEO_EDIT_MODEL_KEY
+                if body.video_reference_title is not None
+                else video_model_key(
+                    model_info, sub_mode=sub_mode, duration_s=duration,
+                    resolution=capture_resolution(model_info, resolution), aspect_ratio=ratio,
+                    has_last_frame=has_last_frame,
+                )
             )
             image_ratio, _image_enum = resolve_image_aspect(body.image_aspect_ratio)
         except (AspectNotVerifiedError, UnsupportedOptionError, ValueError) as e:
@@ -213,6 +235,11 @@ def build_router(ctx: AppContext) -> APIRouter:
             )
         if sub_mode == "frames" and body.frame_path and not resolve_input_path(body.frame_path).is_file():
             raise HTTPException(status_code=400, detail=f"Không tìm thấy ảnh đính kèm: {body.frame_path}")
+        if has_last_frame and not resolve_input_path(body.last_frame_path).is_file():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Không tìm thấy ảnh khung 'Kết thúc': {body.last_frame_path}",
+            )
         if not body.dry_run:
             if not body.confirm:
                 raise HTTPException(status_code=400,
@@ -223,6 +250,8 @@ def build_router(ctx: AppContext) -> APIRouter:
         job = manager.submit("node_video", {
             "prompt": body.prompt.strip(),
             "frame_path": body.frame_path,
+            "last_frame_path": body.last_frame_path if has_last_frame else None,
+            "video_reference_title": body.video_reference_title,
             "reference_image_path": all_refs[0] if all_refs else None,
             "reference_image_paths": all_refs if all_refs else None,
             "image_prompt": body.image_prompt,
@@ -251,7 +280,7 @@ def build_router(ctx: AppContext) -> APIRouter:
             "resolution": resolution, "duration_s": duration,
             "model": model_info.id, "model_label": model_info.label,
             "model_key": model_key, "sub_mode": sub_mode, "count": count,
-            "frame_source": frame_source,
+            "frame_source": frame_source, "has_last_frame": has_last_frame,
         }
 
     @router.post("/api/node/last_frame")

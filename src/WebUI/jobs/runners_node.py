@@ -117,6 +117,8 @@ class NodeJobsMixin:
                 lambda: svc.generate_video(
                     prompt=params["prompt"],
                     frame_path=params.get("frame_path"),
+                    last_frame_path=params.get("last_frame_path"),
+                    video_reference_title=params.get("video_reference_title"),
                     reference_image_path=params.get("reference_image_path"),
                     reference_image_paths=params.get("reference_image_paths"),
                     aspect_ratio=params.get("aspect_ratio") or "9:16",

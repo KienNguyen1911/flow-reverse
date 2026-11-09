@@ -42,10 +42,10 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Iterable, Literal, Optional
+from typing import Any, Callable, Iterable, Literal, Optional
 
 from ..Bridge.flow_bridge import DEFAULT_CDP_URL
-from ..Bridge.flow_video_bridge import FlowVideoBridge
+from ..Bridge.flow_video_bridge import FlowVideoBridge, VIDEO_EDIT_MODEL_KEY
 from .account_pool import ReferenceMediaRegistry, sha256_file
 from .flow_client import FlowClient
 from .flow_models import GenerationResult, ReferenceTemplate, parse_project_ref
@@ -360,6 +360,9 @@ class NodeVideoResult:
     duration_s: int = VIDEO_DURATION_S
     frame_path: Optional[str] = None
     frame_source: Optional[Literal["provided", "generated"]] = None
+    #: Ảnh khung "Kết thúc" đã gắn (None = video một khung). Khi có, submit đi RPC
+    #: `nprQif` và Flow hạ trần thời lượng xuống 10s.
+    last_frame_path: Optional[str] = None
     reference_image_paths: Optional[list[str]] = None
     image_prompt: Optional[str] = None
     watermark_removed: bool = False
@@ -837,9 +840,15 @@ class MediaService:
         model: Optional[str] = None,
         count: int = 1,
         reference_paths: Optional[list[Path | str]] = None,
+        video_reference_title: Optional[str] = None,
         on_event: Optional[Callable[..., None]] = None,
     ) -> Path:
-        """Bridge-level text/ingredients video call (``YhhmEf``, sub-mode "Thành phần") under the lock."""
+        """Bridge-level text/ingredients video call under the lock.
+
+        ``video_reference_title`` switches the submit to the video-reference path (``jIps6``,
+        key ``abra_edit``) by mounting a clip from the project; image references are ignored
+        then because Flow fires a single submit RPC.
+        """
         plan = plan_video_submit(
             aspect_ratio=aspect_ratio,
             model=model,
@@ -868,6 +877,7 @@ class MediaService:
                     seed=seed,
                     resolution=res_label,
                     reference_paths=reference_paths,
+                    video_reference_title=video_reference_title,
                     model_key=key,
                     model_label=model_info.label,
                     count=n,
@@ -894,6 +904,7 @@ class MediaService:
                         seed=seed,
                         resolution=res_label,
                         reference_paths=reference_paths,
+                        video_reference_title=video_reference_title,
                         model_key=key,
                         model_label=model_info.label,
                         count=n,
@@ -928,6 +939,8 @@ class MediaService:
         sub_mode: str = "frames",
         count: int = 1,
         agent_mode: bool = False,
+        last_frame_path: Optional[Path | str] = None,
+        video_reference_title: Optional[str] = None,
         on_event: Optional[Callable[..., None]] = None,
     ) -> NodeVideoResult:
         """Generate ``count`` videos for one node, mirroring the Flow composer.
@@ -936,7 +949,8 @@ class MediaService:
 
         * ``sub_mode="frames"`` (Khung hình / image→video, ``eb1hJf``): needs a starting
           frame; when ``frame_path`` is omitted and ``auto_image`` is true an image is
-          generated first.
+          generated first. Supplying ``last_frame_path`` fills the composer's "Kết thúc"
+          slot, which switches the submit to `nprQif` and caps the duration at 10s.
         * ``sub_mode="ingredients"`` (Thành phần / text→video, ``YhhmEf``): prompt-driven,
           with optional reference images uploaded as ingredient chips into the composer.
 
@@ -945,6 +959,9 @@ class MediaService:
         defaults are used and the result says so.
         """
         t0 = time.time()
+        # A last frame only exists in the "Khung hình" sub-mode; the ingredients composer has
+        # no "Kết thúc" slot, so drop it rather than silently ignoring it later.
+        wants_last_frame = bool(last_frame_path) and str(sub_mode or "frames").strip().lower() == "frames"
         plan = plan_video_submit(
             aspect_ratio=aspect_ratio,
             model=model,
@@ -953,6 +970,7 @@ class MediaService:
             duration_s=duration_s,
             count=count,
             agent_mode=agent_mode,
+            has_last_frame=wants_last_frame,
         )
         ratio, model_info, sub = plan.ratio, plan.model, plan.sub_mode
         res_label, duration = plan.resolution, plan.duration_s
@@ -989,6 +1007,11 @@ class MediaService:
         with self._lock:
             project = self.resolve_project(project_id, workspace_project_id=workspace_project_id, on_event=on_event)
             run_id, run_dir = _unique_run_dir(self.out_root, "video")
+            last_frame: Optional[Path] = None
+            if wants_last_frame:
+                last_frame = resolve_input_path(last_frame_path)  # type: ignore[arg-type]
+                if not last_frame.is_file():
+                    raise FileNotFoundError(f"Không tìm thấy ảnh khung 'Kết thúc': {last_frame_path}")
             frame_source: Optional[Literal["provided", "generated"]] = None
             frame: Optional[Path] = None
             planned_image_prompt: Optional[str] = None
@@ -1061,12 +1084,15 @@ class MediaService:
                 duration_s=duration,
                 frame_path=str(frame) if frame else None,
                 frame_source=frame_source,
+                last_frame_path=str(last_frame) if last_frame else None,
                 reference_image_paths=[str(p) for p in actual_ref_paths] if actual_ref_paths else None,
                 image_prompt=planned_image_prompt,
                 dry_run=dry_run,
                 model=model_info.id,
                 model_label=model_info.label,
-                model_key=model_key,
+                # A video reference takes the `jIps6` path, whose key is `abra_edit`: the
+                # duration lives in the clip, so the plan's Omni key would misreport it.
+                model_key=VIDEO_EDIT_MODEL_KEY if video_reference_title is not None else model_key,
                 sub_mode=sub,
                 count=n,
                 agent_mode=agent_mode,
@@ -1108,6 +1134,7 @@ class MediaService:
                     model=model_info.id,
                     count=n,
                     reference_paths=actual_ref_paths if actual_ref_paths else None,
+                    video_reference_title=video_reference_title,
                     on_event=on_event,
                 )
             else:
@@ -1132,6 +1159,7 @@ class MediaService:
                     timeout_s=timeout_s,
                     model=model_info.id,
                     count=n,
+                    last_frame_path=last_frame,
                     on_event=on_event,
                 )
             if self._project_cache:

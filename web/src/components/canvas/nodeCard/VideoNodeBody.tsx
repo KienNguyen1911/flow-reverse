@@ -8,6 +8,10 @@ import { sourceLabel, type NodeSources } from "./nodeSources";
 import type { NodeOptionLists } from "./optionLists";
 import type { CardDropdown, NodeBodyActions } from "./types";
 
+//: With both frame slots filled Flow caps the clip at 10s (slider max 12 → 7). Mirrors
+//: ``OMNI12_MAX_DURATION_S_WITH_LAST_FRAME`` in ``src/Bridge/flow_video/constants.py``.
+const LAST_FRAME_MAX_DURATION_S = 10;
+
 /** Video-generation node body: frame source, prompt and option pills. */
 export function VideoNodeBody({
   n,
@@ -106,14 +110,21 @@ export function VideoNodeBody({
     }));
   }, [activeVideoModel, resolutions, n.resolution]);
 
+  // Flow narrows the duration window when both frame slots are filled: the Omni 1.2 slider's
+  // max drops from 15s to 10s. Filtering here keeps the UI from offering a length the server
+  // would clamp anyway.
+  const hasLastFrame = !!(n.videoLastFrameSourceId && (n.videoSubMode ?? "frames") === "frames");
+  const maxDurationS = hasLastFrame ? LAST_FRAME_MAX_DURATION_S : Infinity;
+
   const videoDurationItems = useMemo(() => {
-    const list = activeVideoModel?.durations_s ?? [4, 6, 8, 10];
+    const list = (activeVideoModel?.durations_s ?? [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
+      .filter((d) => d <= maxDurationS);
     return list.map((d) => ({
       value: d,
       label: `${d} giây`,
       hint: `${d}s`,
     }));
-  }, [activeVideoModel]);
+  }, [activeVideoModel, maxDurationS]);
 
   const videoCountItems = useMemo(() => {
     const list = videoCounts.length ? videoCounts : [1, 2, 3, 4];
@@ -216,6 +227,29 @@ export function VideoNodeBody({
               Thành phần: có thể nối ảnh tham chiếu hoặc chỉ dùng prompt.
             </p>
           )}
+          {/* Video reference: Flow leaves the Omni family here (`jIps6` / `abra_edit`) and the
+              clip supplies the motion, so it takes precedence over image references. */}
+          <label className="flex flex-col gap-0.5">
+            <span className="text-[10px] font-semibold text-mut">
+              Clip tham chiếu (tùy chọn)
+            </span>
+            <input
+              type="text"
+              value={n.videoReferenceTitle ?? ""}
+              onChange={(e) =>
+                actions.onFieldChange({ videoReferenceTitle: e.target.value || null })
+              }
+              placeholder="Tên clip có sẵn trong dự án…"
+              title="Gắn clip có sẵn trong dự án làm tham chiếu (RPC jIps6, model abra_edit). Có clip thì ảnh tham chiếu bị bỏ qua."
+              className="h-7 px-2 rounded-ctl border border-line2 bg-panel2 text-[10.5px] text-fg placeholder:text-mut focus:border-acc outline-none"
+            />
+          </label>
+          {n.videoReferenceTitle ? (
+            <p className="text-[10px] text-warn leading-snug">
+              Có clip tham chiếu: submit đi <code>jIps6</code> (model <code>abra_edit</code>),
+              thời lượng lấy từ clip — ảnh tham chiếu sẽ bị bỏ qua.
+            </p>
+          ) : null}
           {sourceBlocked && (
             <p className="text-[10px] text-warn leading-snug">
               Node nguồn chưa chạy xong — video sẽ chờ/bỏ qua khi chạy workflow.
@@ -376,11 +410,13 @@ export function VideoNodeBody({
               onSelect={(val) => actions.onFieldChange({ resolution: String(val) })}
             />
             <NodeDropdownPill
-              value={`${n.videoDurationS ?? 8}s`}
+              value={`${Math.min(n.videoDurationS ?? 8, maxDurationS)}s`}
               title={
                 activeVideoModel && !activeVideoModel.has_duration
                   ? `Model ${activeVideoModel.label} cố định thời lượng (${n.videoDurationS ?? 8}s)`
-                  : "Thời lượng mỗi video — bấm để đổi"
+                  : hasLastFrame
+                    ? `Đã gắn khung "Kết thúc" nên Flow giới hạn tối đa ${LAST_FRAME_MAX_DURATION_S}s`
+                    : "Thời lượng mỗi video — bấm để đổi"
               }
               id="videoDuration"
               isOpen={dropdown.open === "videoDuration"}
@@ -391,7 +427,7 @@ export function VideoNodeBody({
               onClose={dropdown.close}
               header="Thời lượng video"
               items={videoDurationItems}
-              selectedValue={n.videoDurationS ?? 8}
+              selectedValue={Math.min(n.videoDurationS ?? 8, maxDurationS)}
               onSelect={(val) => actions.onFieldChange({ videoDurationS: Number(val) })}
             />
             <NodeDropdownPill
@@ -469,6 +505,47 @@ export function VideoNodeBody({
                 }
               }}
             />
+            {/* "Kết thúc" slot — only in "Khung hình". Adding it switches the submit to
+                `nprQif` and caps the clip at 10s, so the pill stays hidden in ingredients. */}
+            {(n.videoSubMode ?? "frames") === "frames" && (
+              <NodeDropdownPill
+                label="Kết thúc"
+                value={
+                  n.videoLastFrameSourceId
+                    ? sourceLabel(
+                        sources.sourceOptions.find((s) => s.id === n.videoLastFrameSourceId) ?? {
+                          id: n.videoLastFrameSourceId,
+                          type: "ref",
+                        } as CanvasNode,
+                      )
+                    : "Trống"
+                }
+                title="Ảnh khung kết thúc (nối ảnh đầu → ảnh cuối). Có khung cuối thì tối đa 10s."
+                id="videoLastFrame"
+                isOpen={dropdown.open === "videoLastFrame"}
+                onToggle={() => dropdown.toggle("videoLastFrame")}
+                onClose={dropdown.close}
+                header="Khung kết thúc"
+                width="min-w-[200px]"
+                align="right"
+                items={[
+                  { value: "", label: "Không dùng khung cuối", hint: "1 khung" },
+                  ...sources.sourceOptions
+                    .filter((src) => src.id !== n.sourceImageId)
+                    .map((src) => ({
+                      value: src.id,
+                      label: sourceLabel(src),
+                      hint: src.type === "ref" ? "Upload" : "Ảnh",
+                    })),
+                ]}
+                selectedValue={n.videoLastFrameSourceId ?? ""}
+                onSelect={(val) =>
+                  actions.onFieldChange({
+                    videoLastFrameSourceId: val ? String(val) : null,
+                  })
+                }
+              />
+            )}
           </>
         )}
       </div>

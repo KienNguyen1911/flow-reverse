@@ -326,6 +326,73 @@ def test_node_video_requires_confirm(client: TestClient):
     assert "confirm" in r.json()["detail"]
 
 
+def test_node_video_last_frame_switches_key_and_caps_duration(client: TestClient, tmp_path: Path):
+    """A last frame is not an option: it changes the RPC, the key and the duration ceiling.
+
+    Flow caps the clip at 10s once both frame slots are filled (slider max 12 → 7), so a
+    15s request must be rejected rather than silently submitted at the wrong length.
+    """
+    first = tmp_path / "first.png"
+    last = tmp_path / "last.png"
+    for p in (first, last):
+        p.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+
+    base = {
+        "prompt": "x",
+        "model": "omni_1_2_flash",
+        "sub_mode": "frames",
+        "resolution": "720p",
+        "auto_image": False,
+        "dry_run": True,
+        "frame_path": str(first),
+        "last_frame_path": str(last),
+    }
+
+    r = client.post("/api/node/video", json={**base, "duration_s": 5})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["has_last_frame"] is True
+    assert body["model_key"] == "macaron_cookie_i2v_fl_5s"
+
+    # 10s is the last frame's ceiling; 11s and 15s are out of range for that shape.
+    assert client.post("/api/node/video", json={**base, "duration_s": 10}).status_code == 200
+    for too_long in (11, 15):
+        r = client.post("/api/node/video", json={**base, "duration_s": too_long})
+        assert r.status_code == 400, f"{too_long}s must be rejected with a last frame"
+        assert "Kết thúc" in r.json()["detail"]
+
+    # Without the last frame the same 15s is valid again, and the key loses `_fl`.
+    r = client.post("/api/node/video", json={**base, "duration_s": 15, "last_frame_path": None})
+    assert r.status_code == 200, r.text
+    assert r.json()["model_key"] == "macaron_cookie_i2v_15s"
+    assert r.json()["has_last_frame"] is False
+
+
+def test_node_video_video_reference_takes_the_edit_path(client: TestClient):
+    """A clip reference leaves the Omni family entirely: `jIps6` / `abra_edit`.
+
+    It also implies the ingredients sub-mode and makes image references irrelevant, because
+    Flow fires exactly one submit RPC.
+    """
+    r = client.post(
+        "/api/node/video",
+        json={
+            "prompt": "x",
+            "model": "omni_1_2_flash",
+            "duration_s": 5,
+            "resolution": "720p",
+            "auto_image": False,
+            "dry_run": True,
+            "video_reference_title": "Fashion model",
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["model_key"] == "abra_edit"
+    # Requested `frames` was overridden: a video reference only exists in "Thành phần".
+    assert body["sub_mode"] == "ingredients"
+
+
 def test_node_prompt_limit_is_7200(client: TestClient):
     """Prompt dài (>5.000 ký tự) phải qua được validate; chỉ chặn khi vượt 7.200."""
     ok = client.post(

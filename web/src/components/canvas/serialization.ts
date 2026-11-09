@@ -123,6 +123,12 @@ export function canvasStateToGraph(state?: WorkspaceCanvasState | null): {
       videoSubMode: optionalStr(r.videoSubMode) ?? "frames",
       videoCount: typeof r.videoCount === "number" ? r.videoCount : 1,
       videoDurationS: typeof r.videoDurationS === "number" ? r.videoDurationS : 8,
+      ...(typeof r.videoLastFrameSourceId === "string" && r.videoLastFrameSourceId
+        ? { videoLastFrameSourceId: r.videoLastFrameSourceId }
+        : {}),
+      ...(typeof r.videoReferenceTitle === "string" && r.videoReferenceTitle
+        ? { videoReferenceTitle: r.videoReferenceTitle }
+        : {}),
       agentMode: typeof r.agentMode === "boolean" ? r.agentMode : false,
       autoImagePrompt: str(r.autoImagePrompt),
       removeWatermark: typeof r.removeWatermark === "boolean" ? r.removeWatermark : true,

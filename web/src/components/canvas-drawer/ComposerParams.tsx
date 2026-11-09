@@ -106,7 +106,7 @@ export function VideoParams({ node, opts, onUpdateNode }: ParamsProps) {
   /** Model video đang chọn quyết định nhóm nào còn tồn tại trong composer. */
   const activeVideoModel = selectedVideoModel(opts, node?.videoModel);
   const videoResolutions = activeVideoModel?.resolutions ?? ["360p", "720p", "1080p"];
-  const videoDurations = activeVideoModel?.durations_s ?? [4, 6, 8, 10];
+  const videoDurations = activeVideoModel?.durations_s ?? [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
   const videoHasResolution = activeVideoModel?.has_resolution ?? true;
   const videoHasDuration = activeVideoModel?.has_duration ?? true;
   const videoAspects = activeVideoModel?.aspect_ratios ?? opts?.video.aspect_ratios ?? ["16:9", "9:16"];

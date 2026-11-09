@@ -429,6 +429,10 @@ export interface NodeVideoRequest {
   /** Flow đang ở chế độ "Tác nhân": bỏ qua cấu hình do user chọn. */
   agent_mode?: boolean;
   frame_path?: string | null;
+  /** Ảnh khung "Kết thúc" (`frames` only) — bật RPC `nprQif`, trần thời lượng hạ xuống 10s. */
+  last_frame_path?: string | null;
+  /** Tiêu đề (substring) clip trong dự án để gắn làm tham chiếu video — bật `jIps6`/`abra_edit`. */
+  video_reference_title?: string | null;
   reference_image_path?: string | null;
   reference_image_paths?: string[];
   image_prompt?: string | null;

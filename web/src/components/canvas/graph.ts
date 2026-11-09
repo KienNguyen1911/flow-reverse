@@ -4,6 +4,11 @@ import type { CanvasNode, NodeType } from "./types";
 // Pure queries over the node graph: who feeds whom, what a node resolves its
 // upstream media to, and whether a new link would form a loop.
 
+//: Duration a new video node starts at when the catalog is not loaded yet. Once the card
+//: mounts it adopts the selected model's own `durations_s`, so this only covers the first
+//: render. Matches the backend default `VIDEO_DURATION_S` in `src/Workflows/media_options.py`.
+const DEFAULT_VIDEO_DURATION_S = 8;
+
 export type SourceResult =
   | { ok: true; url: string | null; urls: string[] }
   | { ok: false; reason: string };
@@ -129,10 +134,14 @@ export function newNode(type: NodeType, opts: NodeMediaOptions | null, x: number
     imageAspectRatio: "16:9",
     imageModel: opts?.image.default_model ?? "nano_banana_2_1",
     imageCount: opts?.image.default_count ?? 1,
-    videoModel: opts?.video.default_model ?? "omni_1_1_flash",
+    videoModel: opts?.video.default_model ?? "omni_1_2_flash",
     videoSubMode: opts?.video.default_sub_mode ?? "frames",
     videoCount: opts?.video.default_count ?? 1,
-    videoDurationS: 8,
+    // Preferred length when creating a node. The model's own `durations_s` wins once the
+    // card mounts and the catalog is loaded; this is only the pre-fetch fallback.
+    videoDurationS: DEFAULT_VIDEO_DURATION_S,
+    videoLastFrameSourceId: null,
+    videoReferenceTitle: null,
     agentMode: false,
     autoImagePrompt: "",
     removeWatermark: true,

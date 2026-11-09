@@ -37,8 +37,19 @@ export interface CanvasDrawerNode {
   videoSubMode?: string;
   /** Số video mỗi lần chạy (x1..x4). */
   videoCount?: number;
-  /** Thời lượng video yêu cầu (4/6/8/10s; Veo khoá 8s). */
+  /** Thời lượng video yêu cầu (3..15s cho Omni 1.2; Veo khoá 8s). Danh sách đọc từ `durations_s`. */
   videoDurationS?: number;
+  /**
+   * Ảnh khung "Kết thúc" (chỉ sub-mode `frames`). Gắn vào thì Flow đổi RPC sang `nprQif`
+   * và hạ trần thời lượng xuống 10s — UI phải lọc lại `durations_s` khi field này có giá trị.
+   * Trỏ tới node nguồn (ref/image/last_frame) giống `sourceImageId`, không phải URL thô.
+   */
+  videoLastFrameSourceId?: string | null;
+  /**
+   * Tiêu đề clip trong dự án để gắn làm tham chiếu video (chỉ sub-mode `ingredients`).
+   * Có giá trị thì Flow bỏ họ Omni: RPC `jIps6`, model key `abra_edit`, duration nằm ở clip.
+   */
+  videoReferenceTitle?: string | null;
   /**
    * Flow composer đang ở chế độ "Tác nhân" (Agent). Khi bật, Flow ẩn toàn bộ
    * model/tỷ lệ/độ phân giải/thời lượng/số lượng ⇒ node không cho chọn và chỉ gửi prompt.

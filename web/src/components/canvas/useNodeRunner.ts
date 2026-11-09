@@ -149,6 +149,17 @@ export function useNodeRunner(params: {
           const needsFrame = subMode === "frames";
           const isIngredients = subMode === "ingredients";
           const framePath = needsFrame ? srcRes.url : undefined;
+          // Resolve the "Kết thúc" slot to a media URL the backend can read.
+          const lastFrameRes =
+            needsFrame && n.videoLastFrameSourceId
+              ? resolveSource(
+                  nodesRef.current,
+                  { ...n, sourceImageId: n.videoLastFrameSourceId } as CanvasNode,
+                  dry,
+                )
+              : null;
+          const lastFramePath =
+            lastFrameRes && lastFrameRes.ok ? (lastFrameRes.url ?? undefined) : undefined;
           const autoImage = needsFrame && !framePath;
           const refPaths = isIngredients && srcRes.urls && srcRes.urls.length > 0 ? srcRes.urls : undefined;
           promise = api.nodeVideo({
@@ -159,6 +170,9 @@ export function useNodeRunner(params: {
             count: n.videoCount ?? 1,
             agent_mode: !!n.agentMode,
             frame_path: framePath,
+            last_frame_path: lastFramePath,
+            video_reference_title:
+              isIngredients && n.videoReferenceTitle ? n.videoReferenceTitle : undefined,
             reference_image_path: isIngredients ? (refPaths?.[0] ?? undefined) : undefined,
             reference_image_paths: isIngredients ? refPaths : undefined,
             auto_image: autoImage,
