@@ -60,6 +60,55 @@ body {
   background: transparent;
 }
 
+/* Duration range input (video composer parity).
+   `appearance-none` removes the native track, so the thumb has to be drawn here or the
+   control would be a bare line with nothing to grab. */
+input[type="range"].duration-range {
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--color-line2);
+  border-radius: 999px;
+  height: 6px;
+}
+input[type="range"].duration-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--color-acc);
+  border: 2px solid var(--color-panel);
+  cursor: pointer;
+  transition: transform 120ms ease;
+}
+input[type="range"].duration-range::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+input[type="range"].duration-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--color-acc);
+  border: 2px solid var(--color-panel);
+  cursor: pointer;
+}
+input[type="range"].duration-range::-moz-range-track {
+  background: var(--color-line2);
+  height: 6px;
+  border-radius: 999px;
+}
+input[type="range"].duration-range:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-acc) 60%, transparent);
+  outline-offset: 3px;
+}
+input[type="range"].duration-range:disabled {
+  cursor: not-allowed;
+}
+input[type="range"].duration-range:disabled::-webkit-slider-thumb {
+  background: var(--color-mut);
+  cursor: not-allowed;
+}
+
 /* Confirm dialog. */
 dialog.confirm-dialog {
   border: 1px solid var(--color-line2);

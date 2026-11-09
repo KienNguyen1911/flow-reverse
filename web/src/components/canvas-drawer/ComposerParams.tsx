@@ -1,4 +1,6 @@
 import type { NodeMediaOptions } from "../../types";
+import { LAST_FRAME_MAX_DURATION_S } from "../../durationScale";
+import { DurationSlider } from "../DurationSlider";
 import type { CanvasDrawerNode } from "./types";
 
 /**
@@ -107,6 +109,13 @@ export function VideoParams({ node, opts, onUpdateNode }: ParamsProps) {
   const activeVideoModel = selectedVideoModel(opts, node?.videoModel);
   const videoResolutions = activeVideoModel?.resolutions ?? ["360p", "720p", "1080p"];
   const videoDurations = activeVideoModel?.durations_s ?? [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+  // Flow lowers the ceiling to 10s once both frame slots are filled (slider max 12 → 7).
+  const videoHasLastFrame =
+    !!node?.videoLastFrameSourceId && (node?.videoSubMode ?? "frames") === "frames";
+  // A video reference leaves the Omni family entirely: `jIps6` / `abra_edit` takes its length
+  // from the clip, so whatever the slider says is ignored.
+  const videoUsesClipLength =
+    (node?.videoSubMode ?? "frames") === "ingredients" && !!node?.videoReferenceTitle;
   const videoHasResolution = activeVideoModel?.has_resolution ?? true;
   const videoHasDuration = activeVideoModel?.has_duration ?? true;
   const videoAspects = activeVideoModel?.aspect_ratios ?? opts?.video.aspect_ratios ?? ["16:9", "9:16"];
@@ -220,7 +229,7 @@ export function VideoParams({ node, opts, onUpdateNode }: ParamsProps) {
             ))}
           </select>
         </label>
-        <label
+        <div
           className={`rounded-ctl border border-line2 bg-panel2 p-2.5 flex flex-col gap-1 ${
             videoHasDuration ? "" : "opacity-50"
           }`}
@@ -230,20 +239,17 @@ export function VideoParams({ node, opts, onUpdateNode }: ParamsProps) {
               : `${activeVideoModel?.label ?? "Model này"} cố định ${videoDurations[0] ?? 8}s — composer Flow ẩn nhóm thời lượng`
           }
         >
-          <span className="text-[10px] text-mut block">Thời lượng</span>
-          <select
+          {/* Slider, not a select: Omni 1.2 exposes a continuous 3..15s range, so discrete
+              chips would misrepresent what Flow actually offers. */}
+          <DurationSlider
+            options={videoDurations}
             value={node.videoDurationS ?? videoDurations[0] ?? 8}
-            disabled={!videoHasDuration}
-            onChange={(e) => onUpdateNode?.(node.id, { videoDurationS: Number(e.target.value) })}
-            className="h-7 rounded-ctl border border-line2 bg-panel px-1.5 text-[11.5px] text-fg outline-none focus:border-acc cursor-pointer disabled:cursor-not-allowed disabled:text-mut"
-          >
-            {videoDurations.map((d) => (
-              <option key={d} value={d}>
-                {d} giây
-              </option>
-            ))}
-          </select>
-        </label>
+            maxAllowed={videoHasLastFrame ? LAST_FRAME_MAX_DURATION_S : undefined}
+            enabled={videoHasDuration}
+            onChange={(seconds) => onUpdateNode?.(node.id, { videoDurationS: seconds })}
+            clipLengthOverrides={videoUsesClipLength}
+          />
+        </div>
         <label className="rounded-ctl border border-line2 bg-panel2 p-2.5 flex flex-col gap-1">
           <span className="text-[10px] text-mut block">Số lượng</span>
           <select

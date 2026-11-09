@@ -10,5 +10,5 @@
     "rootDir": "src",
     "types": []
   },
-  "files": ["src/jobLifecycle.ts"]
+  "files": ["src/jobLifecycle.ts", "src/durationScale.ts"]
 }

@@ -1,16 +1,14 @@
 import { useMemo } from "react";
 import { Image as ImageIcon, Plus } from "@phosphor-icons/react";
 import { NodeDropdownPill, OrderBadge } from "../../node-badge/NodeBadges";
+import { LAST_FRAME_MAX_DURATION_S } from "../../../durationScale";
+import { DurationSlider } from "../../DurationSlider";
 import { PromptPreviewCard } from "../../prompt/PromptBits";
 import type { CanvasNode, FocusLink, HoverRefInfo } from "../types";
 import { PromptAgentRow } from "./PromptAgentRow";
 import { sourceLabel, type NodeSources } from "./nodeSources";
 import type { NodeOptionLists } from "./optionLists";
 import type { CardDropdown, NodeBodyActions } from "./types";
-
-//: With both frame slots filled Flow caps the clip at 10s (slider max 12 → 7). Mirrors
-//: ``OMNI12_MAX_DURATION_S_WITH_LAST_FRAME`` in ``src/Bridge/flow_video/constants.py``.
-const LAST_FRAME_MAX_DURATION_S = 10;
 
 /** Video-generation node body: frame source, prompt and option pills. */
 export function VideoNodeBody({
@@ -111,20 +109,16 @@ export function VideoNodeBody({
   }, [activeVideoModel, resolutions, n.resolution]);
 
   // Flow narrows the duration window when both frame slots are filled: the Omni 1.2 slider's
-  // max drops from 15s to 10s. Filtering here keeps the UI from offering a length the server
-  // would clamp anyway.
-  const hasLastFrame = !!(n.videoLastFrameSourceId && (n.videoSubMode ?? "frames") === "frames");
-  const maxDurationS = hasLastFrame ? LAST_FRAME_MAX_DURATION_S : Infinity;
+  // max drops from 15s to 10s. The slider shows the cap instead of hiding the values.
+  const maxDurationS =
+    n.videoLastFrameSourceId && (n.videoSubMode ?? "frames") === "frames"
+      ? LAST_FRAME_MAX_DURATION_S
+      : undefined;
 
-  const videoDurationItems = useMemo(() => {
-    const list = (activeVideoModel?.durations_s ?? [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
-      .filter((d) => d <= maxDurationS);
-    return list.map((d) => ({
-      value: d,
-      label: `${d} giây`,
-      hint: `${d}s`,
-    }));
-  }, [activeVideoModel, maxDurationS]);
+  const videoDurationOptions = useMemo(
+    () => activeVideoModel?.durations_s ?? [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    [activeVideoModel],
+  );
 
   const videoCountItems = useMemo(() => {
     const list = videoCounts.length ? videoCounts : [1, 2, 3, 4];
@@ -410,27 +404,6 @@ export function VideoNodeBody({
               onSelect={(val) => actions.onFieldChange({ resolution: String(val) })}
             />
             <NodeDropdownPill
-              value={`${Math.min(n.videoDurationS ?? 8, maxDurationS)}s`}
-              title={
-                activeVideoModel && !activeVideoModel.has_duration
-                  ? `Model ${activeVideoModel.label} cố định thời lượng (${n.videoDurationS ?? 8}s)`
-                  : hasLastFrame
-                    ? `Đã gắn khung "Kết thúc" nên Flow giới hạn tối đa ${LAST_FRAME_MAX_DURATION_S}s`
-                    : "Thời lượng mỗi video — bấm để đổi"
-              }
-              id="videoDuration"
-              isOpen={dropdown.open === "videoDuration"}
-              onToggle={() => {
-                if (activeVideoModel && !activeVideoModel.has_duration) return;
-                dropdown.toggle("videoDuration");
-              }}
-              onClose={dropdown.close}
-              header="Thời lượng video"
-              items={videoDurationItems}
-              selectedValue={Math.min(n.videoDurationS ?? 8, maxDurationS)}
-              onSelect={(val) => actions.onFieldChange({ videoDurationS: Number(val) })}
-            />
-            <NodeDropdownPill
               value={`x${n.videoCount ?? 1}`}
               title="Số video mỗi lần chạy (x1..x4) — bấm để đổi"
               id="videoCount"
@@ -549,6 +522,20 @@ export function VideoNodeBody({
           </>
         )}
       </div>
+
+      {/* Duration as a slider, mirroring Flow's own `flow-duration-slider`: Omni 1.2 has a
+          continuous 3..15s range, not the old 4/6/8/10 chips. Veo fixes the length, so the
+          control degrades to a read-out there. */}
+      <DurationSlider
+        options={videoDurationOptions}
+        value={n.videoDurationS ?? activeVideoModel?.durations_s[0] ?? 8}
+        maxAllowed={maxDurationS}
+        enabled={activeVideoModel?.has_duration ?? true}
+        onChange={(seconds) => actions.onFieldChange({ videoDurationS: seconds })}
+        clipLengthOverrides={
+          (n.videoSubMode ?? "frames") === "ingredients" && !!n.videoReferenceTitle
+        }
+      />
     </>
   );
 }
