@@ -146,7 +146,7 @@ export const GROUPS: Group[] = [
         method: "POST",
         path: "/api/upload_reference",
         title: "Upload ảnh tham chiếu i2i",
-        desc: "Nhận ảnh tham chiếu dạng multipart/form-data, lưu vào out/references/ để dùng trong batch i2i.",
+        desc: "Nhận ảnh tham chiếu dạng multipart/form-data, lưu vào out/references/. Dùng làm node ref hoặc đính vào node ảnh.",
         notes: ["Thân request là multipart với field file, không phải JSON."],
         curl: `curl -s -X POST ${BASE}/api/upload_reference -F "file=@./shot_001.jpg"`,
         res: `{
@@ -161,7 +161,7 @@ export const GROUPS: Group[] = [
         method: "GET",
         path: "/api/references/{name}",
         title: "Xem ảnh tham chiếu",
-        desc: "Phục vụ lại ảnh đã upload, dùng để xem trước trong UI trước khi chạy batch i2i.",
+        desc: "Phục vụ lại ảnh đã upload, dùng để xem trước trong UI trước khi gắn vào node.",
         curl: `curl -s -o ref.jpg ${BASE}/api/references/1760862000123_shot_001.jpg`,
       },
     ],
@@ -175,7 +175,7 @@ export const GROUPS: Group[] = [
         method: "GET",
         path: "/api/pool",
         title: "Snapshot toàn bộ pool",
-        desc: "Số account, working set hiện tại, batch đang chạy và trạng thái từng account. Không đánh thức trình duyệt nào.",
+        desc: "Số account, working set hiện tại và trạng thái từng account. Không đánh thức trình duyệt nào.",
         tryIt: true,
         curl: `curl -s ${BASE}/api/pool`,
         res: `{
@@ -184,8 +184,6 @@ export const GROUPS: Group[] = [
   "target_jobs_per_account": 25,
   "max_active_browsers": 4,
   "working_set": ["flow_main"],
-  "current_batch": null,
-  "last_batch": null,
   "accounts": [
     {
       "id": "flow_main",
@@ -207,7 +205,7 @@ export const GROUPS: Group[] = [
         method: "POST",
         path: "/api/pool/config",
         title: "Cấu hình tải pool",
-        desc: "Lưu hai nút điều tải của pool, có hiệu lực ngay cho batch kế tiếp.",
+        desc: "Lưu hai nút điều tải của pool, có hiệu lực ngay cho job kế tiếp.",
         notes: [
           "target_jobs_per_account trong 1..500, mặc định 25 ảnh mỗi account.",
           "max_active_browsers trong 1..16, mặc định 4, mỗi CloakBrowser tốn khoảng 500MB RAM.",

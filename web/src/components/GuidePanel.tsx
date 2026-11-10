@@ -27,7 +27,7 @@ export function GuidePanel() {
         <div>
           <h2 className="text-[15.5px] font-bold text-fg">Huong dan & Quy chuan Van hanh</h2>
           <p className="text-[11.5px] text-mut">
-            Quy tinh credit, tao anh hang loat va dieu phoi trinh duyet CloakBrowser
+            Quy tinh credit, chay node tren canvas va dieu phoi trinh duyet CloakBrowser
           </p>
         </div>
       </div>
@@ -37,7 +37,7 @@ export function GuidePanel() {
         {(
           [
             { key: "credit", label: "Credit & Che do Chay", icon: <Coins size={14} /> },
-            { key: "batch", label: "Batch & Pool", icon: <Images size={14} /> },
+            { key: "batch", label: "Canvas & Pool", icon: <Images size={14} /> },
             { key: "safety", label: "An toan", icon: <ShieldCheck size={14} /> },
             { key: "shortcuts", label: "Meo & Phim tat", icon: <Keyboard size={14} /> },
           ] as { key: TabKey; label: string; icon: React.ReactNode }[]
@@ -101,34 +101,33 @@ export function GuidePanel() {
             <div className="rounded-ctl border border-line2 bg-panel2 p-4">
               <div className="flex items-center gap-2 text-fg font-bold mb-2">
                 <Images size={16} className="text-acc" />
-                <span>Cu phap & Quy chuan Batch Prompt</span>
+                <span>Chay node tren canvas</span>
               </div>
               <p>
-                Trong che do Batch, ban co nhieu prompt cung mot luc:
+                Moi node la <strong className="text-fg">mot lan goi doc lap</strong> len Flow:
               </p>
               <ul className="mt-2 space-y-1.5 list-disc list-inside text-dim">
-                <li>Moi dong van ban tuong ung voi <strong className="text-fg">1 anh doc lap</strong>. Dong trong duoc tu dong bo qua.</li>
-                <li>Ho tro toi da <strong className="text-fg">300 anh/batch</strong> trong mot luot chay.</li>
-                <li>Moi dong co do dai toi da 2000 ky tu.</li>
+                <li>Bon loai node: <strong className="text-fg">ref</strong> (anh tham chieu), <strong className="text-fg">image</strong>, <strong className="text-fg">video</strong>, <strong className="text-fg">last_frame</strong> (cat khung cuoi de noi chuoi video).</li>
+                <li>Chay <strong className="text-fg">Workflow</strong> se chay theo nhom; moi nhom la mot don vi doc lap — node loi chi dung nhom do.</li>
+                <li>Node anh nhan toi da <strong className="text-fg">x4</strong> anh mot lan (o chon so luong tren node).</li>
+                <li>Prompt toi da 7200 ky tu <em>(gia tri doc tu backend, xem tab Docs API)</em>.</li>
               </ul>
             </div>
 
             <div className="rounded-ctl border border-line2 bg-panel2 p-4">
               <div className="flex items-center gap-2 text-fg font-bold mb-2">
                 <Cpu size={16} className="text-acc" />
-                <span>Cong thuc Phan bo Tai & Tiet kiem RAM</span>
+                <span>Dieu phoi Browser Pool</span>
               </div>
               <p>
-                He thong phan bo tai khoan song song theo cong thuc:
+                Moi profile trong <code className="font-mono text-acc">browser_vault/</code> la mot account.
+                Browser <strong className="text-fg">mo theo nhu cau</strong>, khong mo san tat ca khi khoi dong:
               </p>
-              <div className="my-2 rounded bg-panel px-3 py-2 font-mono text-[12px] text-acc border border-line2">
-                N_alloc = min(N, M_RAM, ceil(J / Q_target))
-              </div>
               <ul className="space-y-1.5 list-disc list-inside text-dim">
-                <li><strong className="text-fg">J:</strong> Tong so anh trong batch.</li>
-                <li><strong className="text-fg">Q_target:</strong> Nguong anh tren moi account (mac dinh 25 anh/account).</li>
-                <li><strong className="text-fg">M_RAM:</strong> Gioi han so trinh duyet chay dong thoi (mac dinh 4) de chong qua tai RAM.</li>
-                <li><strong className="text-fg">Co che Standby:</strong> Cac tai khoan chua den luot hoac ranh roi se luon duoc dong trinh duyet de giai phong 100% RAM. Khi can phan viec, he thong tu danh thuc (wake).</li>
+                <li><strong className="text-fg">Wake:</strong> account duoc danh thuc khi duoc cap cho mot job.</li>
+                <li><strong className="text-fg">Standby:</strong> account ranh duoc dong trinh duyet de giai phong RAM.</li>
+                <li><strong className="text-fg">M_RAM:</strong> gioi han so trinh duyet chay dong thoi (mac dinh 4) de chong qua tai RAM.</li>
+                <li><strong className="text-fg">Sticky account:</strong> chon dung account cho mot nhom de giu cung phien.</li>
               </ul>
             </div>
 
@@ -138,7 +137,7 @@ export function GuidePanel() {
                 <span>Anh tham chieu Image-to-Image (i2i)</span>
               </div>
               <p className="mt-1">
-                Dien duong dan tep anh cuc bo (vi du: <code className="font-mono text-acc">out/outputs/.../shot_001.jpg</code>). He thong se tu dong chuyen tat ca cac dong prompt trong batch sang che do tham chieu i2i, giup dien mao nhan vat va phong cach hinh anh xuyen suot.
+                Keo anh tu <strong className="text-fg">Kho Assets</strong> vao canvas lam node <code className="font-mono text-acc">ref</code>, roi noi node do vao node anh. Moi node anh nhan nhieu anh tham chieu cung luc.
               </p>
             </div>
           </div>
@@ -152,7 +151,7 @@ export function GuidePanel() {
                 <span>Nguyen tac Khong can thiep Tab Trinh duyet</span>
               </div>
               <p>
-                Khi mot tac vu (tao anh hoac batch) dang chay:
+                Khi mot tac vu (chay node hoac workflow) dang chay:
               </p>
               <ul className="mt-2 space-y-1.5 list-disc list-inside text-dim">
                 <li>Playground ket noi va dieu khien truc tiep tab Flow trong <strong className="text-fg">CloakBrowser</strong> qua giao thuc CDP.</li>
