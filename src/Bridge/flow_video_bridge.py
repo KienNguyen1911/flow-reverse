@@ -49,9 +49,9 @@ import importlib
 import sys
 from typing import Optional
 
-# ``importlib.reload(flow_video_bridge)`` (WebUI hot-reloads the bridge per auto-tryon job)
-# re-executes only this file; reload the implementation modules too so edits under
-# ``Bridge/flow_video/`` apply. On first import ``FlowVideoBridge`` is not yet in globals.
+# ``importlib.reload(flow_video_bridge)`` in a long-lived process re-executes only this file;
+# reload the implementation modules too so edits under ``Bridge/flow_video/`` apply.
+# On first import ``FlowVideoBridge`` is not yet in globals.
 if "FlowVideoBridge" in globals():
     for _name in (
         "constants",

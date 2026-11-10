@@ -512,14 +512,10 @@ def test_video_agent_mode_uses_defaults(tmp_path):
 
 def test_resolve_project_workspace_lazy_create(tmp_path):
     from src.WebUI.workspace import WorkspaceStore
-    from src.WebUI.jobs.projects_store import ProjectsStore
 
     ws_file = tmp_path / "workspace.json"
     ws_store = WorkspaceStore(ws_file)
     project = ws_store.create("Lookbook He 2026")
-
-    pj_file = tmp_path / "projects.json"
-    pj_store = ProjectsStore(pj_file)
 
     image = FakeImageClient(tmp_path / "nodes")
     created_id = "22222222-2222-4222-8222-222222222222"
@@ -533,7 +529,6 @@ def test_resolve_project_workspace_lazy_create(tmp_path):
         image_client=image,
         video_bridge=video,
         workspace_store=ws_store,
-        projects_store=pj_store,
     )
 
     events = []
@@ -544,8 +539,6 @@ def test_resolve_project_workspace_lazy_create(tmp_path):
     assert ws_store.get_flow_project(project.id, "acc_flow_01") == created_id
     # Check event emitted
     assert any("Đã khởi tạo & gắn Google Flow Project mới" in m for k, m in events)
-    # Check saved in ProjectsStore
-    assert any(p.id == created_id for p in pj_store.list())
 
     # Next call returns cached mapping without calling create_project
     image.create_project = lambda title, on_event=None: pytest.fail("Should not call create_project again")
@@ -555,7 +548,6 @@ def test_resolve_project_workspace_lazy_create(tmp_path):
 
 def test_generate_image_404_recovery(tmp_path):
     from src.WebUI.workspace import WorkspaceStore
-    from src.WebUI.jobs.projects_store import ProjectsStore
 
     ws_file = tmp_path / "workspace.json"
     ws_store = WorkspaceStore(ws_file)
@@ -563,9 +555,6 @@ def test_generate_image_404_recovery(tmp_path):
 
     stale_pid = "33333333-3333-4333-8333-333333333333"
     ws_store.set_flow_project(project.id, "acc_flow_01", stale_pid)
-
-    pj_file = tmp_path / "projects.json"
-    pj_store = ProjectsStore(pj_file)
 
     image = FakeImageClient(tmp_path / "nodes")
     new_pid = "44444444-4444-4444-8444-444444444444"
@@ -590,7 +579,6 @@ def test_generate_image_404_recovery(tmp_path):
         image_client=image,
         video_bridge=video,
         workspace_store=ws_store,
-        projects_store=pj_store,
     )
 
     events = []
@@ -608,7 +596,6 @@ def test_generate_image_404_recovery(tmp_path):
 
 def test_generate_video_404_recovery_auto_image(tmp_path):
     from src.WebUI.workspace import WorkspaceStore
-    from src.WebUI.jobs.projects_store import ProjectsStore
 
     ws_file = tmp_path / "workspace.json"
     ws_store = WorkspaceStore(ws_file)
@@ -616,9 +603,6 @@ def test_generate_video_404_recovery_auto_image(tmp_path):
 
     stale_pid = "55555555-5555-4555-8555-555555555555"
     ws_store.set_flow_project(project.id, "acc_flow_01", stale_pid)
-
-    pj_file = tmp_path / "projects.json"
-    pj_store = ProjectsStore(pj_file)
 
     image = FakeImageClient(tmp_path / "nodes")
     new_pid = "66666666-6666-4666-8666-666666666666"
@@ -649,7 +633,6 @@ def test_generate_video_404_recovery_auto_image(tmp_path):
         image_client=image,
         video_bridge=video,
         workspace_store=ws_store,
-        projects_store=pj_store,
     )
 
     res = svc.generate_video(
@@ -673,7 +656,6 @@ def test_generate_video_404_recovery_auto_image(tmp_path):
 
 def test_generate_video_404_recovery_provided_frame(tmp_path):
     from src.WebUI.workspace import WorkspaceStore
-    from src.WebUI.jobs.projects_store import ProjectsStore
 
     ws_file = tmp_path / "workspace.json"
     ws_store = WorkspaceStore(ws_file)
@@ -681,9 +663,6 @@ def test_generate_video_404_recovery_provided_frame(tmp_path):
 
     stale_pid = "77777777-7777-4777-8777-777777777777"
     ws_store.set_flow_project(project.id, "acc_flow_01", stale_pid)
-
-    pj_file = tmp_path / "projects.json"
-    pj_store = ProjectsStore(pj_file)
 
     image = FakeImageClient(tmp_path / "nodes")
     new_pid = "88888888-8888-4888-8888-888888888888"
@@ -708,7 +687,6 @@ def test_generate_video_404_recovery_provided_frame(tmp_path):
         image_client=image,
         video_bridge=video,
         workspace_store=ws_store,
-        projects_store=pj_store,
     )
 
     frame = tmp_path / "test_frame.png"
@@ -728,7 +706,6 @@ def test_generate_video_404_recovery_provided_frame(tmp_path):
 
 def test_generate_video_404_recovery_ingredients(tmp_path):
     from src.WebUI.workspace import WorkspaceStore
-    from src.WebUI.jobs.projects_store import ProjectsStore
 
     ws_file = tmp_path / "workspace.json"
     ws_store = WorkspaceStore(ws_file)
@@ -736,9 +713,6 @@ def test_generate_video_404_recovery_ingredients(tmp_path):
 
     stale_pid = "99999999-9999-4999-8999-999999999999"
     ws_store.set_flow_project(project.id, "acc_flow_01", stale_pid)
-
-    pj_file = tmp_path / "projects.json"
-    pj_store = ProjectsStore(pj_file)
 
     image = FakeImageClient(tmp_path / "nodes")
     new_pid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -763,7 +737,6 @@ def test_generate_video_404_recovery_ingredients(tmp_path):
         image_client=image,
         video_bridge=video,
         workspace_store=ws_store,
-        projects_store=pj_store,
     )
 
     res = svc.generate_video(

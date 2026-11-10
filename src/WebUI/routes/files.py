@@ -18,11 +18,12 @@ def build_router(ctx: AppContext) -> APIRouter:
     out_root = ctx.out_root
     asset_root = ctx.asset_root
     asset_meta = ctx.asset_meta
+    node_out = ctx.manager.node_out
     router = APIRouter()
 
     @router.get("/api/gallery")
     def api_gallery():
-        return {"runs": scan_gallery(out_root, asset_meta)}
+        return {"runs": scan_gallery(out_root, asset_meta, node_out=node_out)}
 
     @router.get("/api/files/{run}/{name}")
     def api_file(run: str, name: str):

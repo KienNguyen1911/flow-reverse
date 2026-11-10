@@ -11,16 +11,14 @@
 
 | Thao tác | Credit |
 | :--- | :--- |
-| `status`, `refresh projects`, `create project` | **0** |
-| `Dry-run` (nav → type → click → capture → build, không fire) | **0** |
-| `Tạo ảnh` (fire thật) được Google nhận | **~1 credit** |
-| `Tạo ảnh` bị Google từ chối | **0 credit** |
-| `Dry-run` batch / capture template i2i (đính ảnh + chặn) | **0 credit** |
-| Batch N ảnh (fire thật) | **≤ N credit** — chỉ tính ảnh Google nhận |
+| `status`, `pool`, `node/options` | **0** |
+| `Dry-run` node (nav → type → click → capture → build, không fire) | **0** |
+| Node ảnh / video chạy thật, được Google nhận | **~1 credit mỗi node** |
+| Node ảnh / video bị Google từ chối | **0 credit** |
 
-- Mọi real run **bắt buộc** qua dialog xác nhận trong UI. API cũng chặn: thiếu `confirm=true`
-  thì `/api/generate` trả `400` và không có gì được gửi đi.
-- Breaker đang mở (cooldown sau lỗi phiên/anti-busy) → `/api/generate` trả `423`.
+- Mọi real run **bắt buộc** qua dialog xác nhận trên canvas (xem §4.3).
+- Breaker đang mở (cooldown sau lỗi phiên/anti-busy) → job trả lỗi ngay, không fire.
+- Job `node_*` là đơn vị tính credit: **số node chạy thật = số lần tiêu credit tối đa**.
 
 ---
 
@@ -63,38 +61,50 @@ cd web && npm install && npm run build   # trên Windows dùng cmd: npm ...
 
 ## 4. Sử dụng UI
 
-### 4.1 Chọn dự án
-- Dropdown "Dự án" load từ registry (`out/playground_projects.json`).
-- `↻` refresh: gọi UpteDb qua bridge (0 credit) để cập nhật danh sách 6 dự án cloud.
-- `+` tạo dự án mới (jHPbke, 0 credit, tạo **thật** trong tài khoản).
-- `/><` (link icon) thêm dự án ngoài danh sách bằng UUID hoặc URL project.
+UI chỉ có **một màn hình: bảng canvas**. Không còn tab "Tạo ảnh", "Tạo video", "Video Thử Đồ",
+"Thư viện" hay "Hướng dẫn" — những thứ đó đã được chuyển thành node + Settings modal.
 
-### 4.2 Dry-run (0 credit)
-Chạy đúng pipeline: nav về trang chủ → mở project → type prompt → click Generate (hook chặn
-request của app, 0 credit) → đọc capture → dựng request của ta. Kết quả hiện trong thẻ
-"Dry-run thành công" kèm seed + thư mục run. Dùng để kiểm tra trước khi tiêu credit.
+### 4.1 Khung màn hình
 
-### 4.3 Tạo ảnh thật (~1 credit)
-1. Nhập prompt → bấm **Tạo ảnh** → dialog xác nhận hiện project/seed/prompt/credit.
-2. Bấm **Tạo ảnh** trong dialog → job chạy (~20–40 s): fire request, long-poll, tải ảnh signed URL.
-3. Kết quả: thẻ ảnh kèm seed (echo khớp = xác nhận kiểm soát tham số), kích thước, media id,
-   nút tải ảnh + "Mở trong Flow". Trang project trong CloakBrowser cũng tự reload để ảnh hiện trên UI Flow.
+| Vùng | Nội dung |
+| :--- | :--- |
+| **TopBar** | Logo · chọn/quản lý Project · **Kho Assets** (phím `A`) · **Mẫu Workflow** · Chạy Workflow · chip Pool · nút Settings |
+| **Canvas** (toàn màn hình) | 4 loại node: `ref` (ảnh tham chiếu), `image`, `video`, `last_frame`. Kéo thả, nối nguồn, nhóm (group) là đơn vị chạy độc lập |
+| **Kho Assets** (drawer trái) | Ảnh đã tải lên / kết quả đã sinh của project, ghim, kéo vào canvas |
+| **Settings modal** | 5 tab: Thư viện · Tài khoản (pool) · AI Agent · Hướng dẫn · Docs API |
 
-### 4.4 Nhật ký job
-- Job lẻ chạy 1 worker; batch chạy **1 worker thread cho mỗi account được cấp** (log có tiền tố account).
-  Log realtime (poll 800 ms): timestamp, kind,
-  message; chip trạng thái `Đang chờ / Đang chạy / Hoàn tất / Bị từ chối / Lỗi` + đồng hồ elapsed.
-- Cuối job luôn có thẻ kết quả (dry-run / ảnh / reject / lỗi / tạo dự án / refresh).
+### 4.2 Project
 
-### 4.5 Gallery
-- Quét `out/playground/*/meta.json`; chỉ hiện run có file ảnh thật. Click thẻ để mở ảnh gốc.
-- Ảnh phục vụ qua `/api/files/<run>/<file>` (serve local, không phụ thuộc signed URL đã hết hạn).
+Hai khái niệm project song song — đừng lẫn:
+
+- **Workspace project** (local): nhóm canvas + viewport + quyền sở hữu asset. Quản lý qua nút Project trên
+  TopBar (`ProjectManagerModal`): tạo / đổi tên / nhân bản / xoá / đặt thumbnail. Canvas tự lưu (autosave).
+- **Flow project** (Google UUID): nơi ảnh/video thực sự được sinh ra. Không cần chọn tay — mỗi workspace
+  project được map sang một Flow project riêng theo từng account, và được **tạo tự động** ở lần chạy đầu
+  (`MediaService.resolve_project`).
+
+### 4.3 Chạy node & workflow
+
+- **Chạy 1 node**: nút Run trên thân node → dialog xác nhận (credit ước tính) → job `node_image` /
+  `node_video` / `node_last_frame`.
+- **Chạy Workflow** (TopBar): chạy toàn bộ canvas theo nhóm. Mỗi **group là một đơn vị độc lập** —
+  node lỗi chỉ dừng nhóm đó, các nhóm khác vẫn chạy tiếp. Có thể chọn vùng (chọn node) để chỉ chạy các
+  nhóm liên quan.
+- **Dry-run (0 credit)**: chạy đúng pipeline nhưng chặn request của app để thu capture và dựng body của ta.
+  Dùng để kiểm tra prompt/selector trước khi tiêu credit.
+- Tiến trình realtime: node đổi màu theo trạng thái, log xem trong drawer phải của node (tab Logs / Error).
+
+### 4.4 Dữ liệu trên canvas
+
+- Node `ref` nhận ảnh upload hoặc kéo từ Kho Assets.
+- Node `image` → ra ảnh; node `video` → ra video (có thể nhận ảnh/frame từ node trước làm frame đầu).
+- Node `last_frame` → cắt frame cuối của video để nối chuỗi video tiếp theo.
+- Thư viện: Settings → **Thư viện** (quét `out/playground/*/meta.json`, chỉ hiện run có file thật).
 
 ---
 
-## 5. Pool N tài khoản & Batch
+## 5. Pool N tài khoản
 
-### 5.1 Cơ chế pool
 - Mỗi profile trong `browser_vault/` là 1 account của pool (`flow_main` + profile khác nếu bạn thêm).
   Tuỳ chọn cấu hình tại `configs/accounts_pool.json` (`target_jobs_per_account`, `max_active_browsers`,
   `port_base`, danh sách `accounts`); không có file / danh sách rỗng → pool tự dò profile trong vault
@@ -102,34 +112,14 @@ request của app, 0 credit) → đọc capture → dựng request của ta. K�
 - **Browser mở theo nhu cầu (on-demand):** account chỉ được đánh thức khi được cấp cho job; pool ghi PID
   vào `out/pids/<profile>.pid` để chỉ đóng browser *do pool mở* khi hibernate (browser bạn tự mở →
   `not_managed`, pool không đóng).
-- **Số account chạy song song:** `N_alloc = min(N_avail, M_RAM, max(1, ⌈J / Q_target⌉))` — J = số ảnh,
-  `Q_target` = ảnh/account (mặc định 25), `M_RAM` = trần browser song song (mặc định 4). Sửa nhanh trong
-  UI (ô Q_target ở chế độ batch) hoặc `POST /api/pool/config`.
+- **Số account chạy song song:** `N_alloc = min(N_avail, M_RAM, max(1, ⌈J / Q_target⌉))` — J = số job,
+  `Q_target` = job/account (mặc định 25), `M_RAM` = trần browser song song (mặc định 4). Sửa trong
+  Settings → **Tài khoản** hoặc `POST /api/pool/config`.
 - **Hot spare & failover:** account không được cấp ở trạng thái *standby*. Khi account đang chạy dính
-  429/401/403 hoặc cooldown, pool tự thăng cấp 1 standby thay thế; ảnh đang dở được trả về hàng đợi
-  (tối đa 2 lần thử/ảnh). Breaker/cooldown lưu riêng từng account tại `out/breakers/<account>.json`.
-- Chip **Pool** trên TopBar: hover để xem danh sách account (port, đang mở/standby, cooldown); chip
-  "Batch N_alloc" hiện khi có account đang chạy.
-
-### 5.2 Batch nhiều ảnh (t2i + i2i)
-- Panel trái → bật **"Chế độ batch"**: mỗi dòng là 1 prompt/ảnh. Điền **"Ảnh tham chiếu i2i"** (đường
-  dẫn file local) → *mọi dòng chạy i2i*; bỏ trống → t2i.
-- Nút **Tạo batch (N ảnh)** mở dialog xác nhận (số ảnh, t2i/i2i, N_alloc dự kiến); **Batch dry-run**
-  luôn 0 credit.
-- Chạy theo **wave phụ thuộc** khi item có `depends_on_shot_id` (dùng qua API/storyboard JSON — ví dụ
-  `configs/storyboard_100.json`): wave sau chờ ảnh anchor của wave trước, ảnh tham chiếu được resolve
-  từ shot đã xong.
-- Tiến độ per-item (status/mode/account/link ảnh) hiện trực tiếp trong khung Nhật ký khi batch đang chạy.
-- Xong job: ảnh được copy sang `out/outputs/<slug dự án>/` (tên kiểu NLE `shot_XXX_t2i.jpg` /
-  `shot_XXX_i2i.jpg`) để mang sang Premiere/Resolve.
-
-### 5.3 i2i — template-replay (lần đầu 0 credit)
-- Lần đầu dùng một ảnh tham chiếu trên một account: job **tự đính ảnh vào `<input type=file>` của app**,
-  để app dựng request i2i, rồi **chặn lại** (0 credit) và lưu làm template — cache theo
-  `account + sha256(file)` trong `configs/reference_media_cache.json` (gitignored).
-- Các shot sau (cùng account, cùng ảnh): replay template với token reCAPTCHA/seed/prompt/UUID mới,
-  **không upload lại**. Nhờ vậy batch i2i 100 ảnh chỉ "trả giá" capture 1 lần/account/ảnh tham chiếu.
-- Đặc tả kỹ thuật + recipe discovery khi UI Flow đổi: `docs/api_specs/flow_image2image.md`.
+  429/401/403 hoặc cooldown, pool tự thăng cấp 1 standby thay thế; job đang dở được trả về hàng đợi
+  (tối đa 2 lần thử/job). Breaker/cooldown lưu riêng từng account tại `out/breakers/<account>.json`.
+- Chip **Pool** trên TopBar: hover để xem danh sách account (port, đang mở/standby, cooldown).
+- CRUD account (thêm/xoá/sửa proxy/port) nằm ở Settings → **Tài khoản**.
 
 ---
 
@@ -142,9 +132,8 @@ request của app, 0 credit) → đọc capture → dựng request của ta. K�
 | `out/playground/<ts>_<slug>/our_request_body.txt` + `our_args.pretty.json` | request của ta (dựng từ builder) |
 | `out/playground/<ts>_<slug>/response.txt` | response batchexecute (chỉ có khi real run) |
 | `out/playground/<ts>_<slug>/*.jpg` | ảnh đã tải |
-| `out/playground_projects.json` | registry dự án hiển thị trong UI |
+| `out/playground_projects.json` | registry Flow project (do `MediaService` tự cập nhật) |
 | `out/bridge_state.json` | circuit breaker CLI/legacy (UI pool dùng `out/breakers/`) |
-| `out/outputs/<slug>/` | ảnh batch đã xong (tên kiểu NLE `shot_XXX_t2i.jpg` / `shot_XXX_i2i.jpg`) |
 | `out/pool_state.json` | trạng thái pool (role, counters, `last_used_at` từng account) |
 | `out/breakers/<account>.json` | circuit breaker riêng từng account |
 | `out/pids/<profile>.pid` | PID browser do pool mở (để hibernate an toàn) |
@@ -161,31 +150,20 @@ Job history chỉ nằm trong RAM; restart server không mất ảnh/artifacts �
 | `GET /api/status` | health: CDP, browser, tab Flow, breaker |
 | `GET /api/pool` | snapshot pool: accounts (port, status, role), N_alloc, cooldown, cache i2i |
 | `POST /api/pool/config` `{"target_jobs_per_account": 25, "max_active_browsers": 4}` | sửa Q_target / trần browser song song |
-| `POST /api/pool/accounts/{id}/wake` / `.../hibernate` / `.../reset` | đánh thức / hạ nhiệt / reset account |
-| `GET /api/projects` | registry dự án |
-| `POST /api/projects/refresh` | job UpteDb (0 credit) |
-| `POST /api/projects/create` `{"title": "...", "confirm": true}` | job jHPbke (0 credit, tạo thật) |
-| `POST /api/projects` `{"ref": "<uuid hoặc URL>"}` | thêm dự án ngoài danh sách (không gọi mạng) |
-| `DELETE /api/projects/{id}` | bỏ khỏi registry (không xóa trên Google) |
-| `POST /api/generate` | job `dry_run` (không cần confirm) hoặc `generate` (bắt buộc `confirm: true`; `423` nếu breaker mở) |
-| `POST /api/batch` | batch `dry_run` (không cần confirm) hoặc chạy thật (`confirm: true`; `423` nếu toàn bộ account cooldown); nhận `items[]` hoặc `storyboard_path` |
+| `GET /api/pool/accounts/{id}/wake` / `.../hibernate` / `.../reset` | đánh thức / hạ nhiệt / reset account |
+| `POST /api/node/image` · `POST /api/node/video` · `POST /api/node/last_frame` | **job của canvas** — một node = một lần gọi độc lập |
+| `GET /api/node/options` | option thật của composer (tỷ lệ, model, giới hạn) — nguồn chân lý duy nhất |
 | `GET /api/jobs` / `GET /api/jobs/{id}` | job list / chi tiết kèm events |
 | `GET /api/gallery` | danh sách run có ảnh |
 | `GET /api/files/{run}/{file}` | file trong run dir |
 | `GET /api/circuit/clear[?account=<id>]` | reset cooldown breaker (mặc định **mọi account**, idempotent) |
 
-Ví dụ chạy thật bằng script (sau khi tự chịu trách nhiệm credit):
+Ví dụ chạy một node ảnh bằng script (sau khi tự chịu trách nhiệm credit):
 
 ```bash
-curl -X POST http://127.0.0.1:4000/api/generate -H "Content-Type: application/json" \
-  -d '{"project_id":"<uuid>","prompt":"một chú vịt vàng bơi hồ","dry_run":false,"confirm":true}'
-```
-
-Batch nhiều ảnh (kể cả i2i + phụ thuộc) bằng storyboard JSON:
-
-```bash
-curl -X POST http://127.0.0.1:4000/api/batch -H "Content-Type: application/json" \
-  -d '{"project_id":"<uuid>","storyboard_path":"configs/storyboard_100.json","dry_run":false,"confirm":true}'
+curl -X POST http://127.0.0.1:4000/api/node/image -H "Content-Type: application/json" \
+  -d '{"prompt":"một chú vịt vàng bơi hồ","aspect_ratio":"9:16"}'
+# → {"job_id": "j_..."}  → poll GET /api/jobs/{job_id}
 ```
 
 ---
@@ -202,7 +180,6 @@ curl -X POST http://127.0.0.1:4000/api/batch -H "Content-Type: application/json"
 | `401/403` | Phiên Google hỏng → đăng nhập lại trong CloakBrowser; breaker 30 phút |
 | Job "không tìm thấy ô prompt" | UI Flow đổi cấu trúc → cập nhật selector `div.ProseMirror` / `button.generate-icon-button` trong `src/Bridge/flow_bridge.py` |
 | Job i2i báo "không thấy `<input type=file>` trong composer" | UI Flow đổi → chạy `python discovery/probe_i2i_composer.py --fresh --project <uuid>` rồi làm theo `docs/api_specs/flow_image2image.md` §4 |
-
 ---
 
 ## 9. Ghi chú kỹ thuật
@@ -212,8 +189,7 @@ curl -X POST http://127.0.0.1:4000/api/batch -H "Content-Type: application/json"
 - Hook fetch (block+capture `ogiZ0b`) chỉ bật trong lúc job chạy và tự disarm; cuối mỗi lần
   generate trang được reload sạch.
 - Token reCAPTCHA / `at` / `_reqid` **luôn đọc tươi** từ capture của app, không hard-code.
-- Ảnh test UI (QA): `out/ui_shots/` — chụp lại bằng `python traces/phase4/shot_webui.py`
-  và `python traces/phase4/ui_dry_run.py` (e2e dry-run qua chính UI, 0 credit).
+- Ảnh test UI (QA): `out/ui_shots/` (gitignored).
 
 Xem thêm: `docs/api_specs/flow_transport.md` (bridge mode), `docs/api_specs/flow_create_image.md`,
-`docs/api_specs/flow_image2image.md`, `src/Workflows/account_pool.py` (N-account pool).
+`docs/api_specs/node_media_api.md` (lớp node của canvas), `src/Workflows/account_pool.py` (N-account pool).

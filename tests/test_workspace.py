@@ -15,7 +15,6 @@ from src.WebUI.workspace import DEFAULT_PROJECT_NAME
 def make_client(base: Path) -> TestClient:
     app = create_app(
         out_dir=base / "playground",
-        projects_file=base / "projects.json",
         pool_config=base / "pool.json",
         pool_state=base / "pool_state.json",
         web_dist=base / "dist",

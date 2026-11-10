@@ -1,7 +1,6 @@
 import type {
   AccountDetail,
   AddAccountPayload,
-  BatchItemRequest,
   GalleryRun,
   Job,
   NodeImageRequest,
@@ -10,9 +9,7 @@ import type {
   NodeVideoRequest,
   PoolAccount,
   PoolInfo,
-  Project,
   Status,
-  TryOnRunManifest,
   UpdateAccountPayload,
   AgentSkillInfo,
   LocalAgentConfig,
@@ -81,37 +78,11 @@ function assetScopeQuery(projectId?: string | null, scope?: "project" | "all") {
 export const api = {
   status: () => fetch("/api/status").then(j<Status>),
 
-  projects: () => fetch("/api/projects").then(j<{ projects: Project[] }>),
-
-  addProject: (ref: string, title?: string) =>
-    post("/api/projects", { ref, title }).then(j<{ ok: boolean; id: string }>),
-
-  removeProject: (id: string) =>
-    fetch(`/api/projects/${id}`, { method: "DELETE" }).then(j<{ ok: boolean }>),
-
-  refreshProjects: () => post("/api/projects/refresh", {}).then(j<{ job_id: string }>),
-
-  createProject: (title: string) =>
-    post("/api/projects/create", { title, confirm: true }).then(j<{ job_id: string }>),
-
-  generate: (p: {
-    project_id: string;
-    prompt: string;
-    aspect?: number;
-    seed?: number | null;
-    dry_run?: boolean;
-    remove_watermark?: boolean;
-    confirm?: boolean;
-    workspace_project_id?: string | null;
-  }) => post("/api/generate", p).then(j<{ job_id: string }>),
-
   job: (id: string) => fetch(`/api/jobs/${id}`).then(j<Job>),
 
   jobs: (limit = 50) => fetch(`/api/jobs?limit=${limit}`).then(j<{ jobs: Job[] }>),
 
   gallery: () => fetch("/api/gallery").then(j<{ runs: GalleryRun[] }>),
-
-  clearCircuit: () => fetch("/api/circuit/clear").then(j<{ ok: boolean }>),
 
   // -- N-account pool (plan Task 4) ---------------------------------------- //
 
@@ -145,33 +116,6 @@ export const api = {
 
   nextPoolPort: () => fetch("/api/pool/next_port").then(j<{ next_port: number }>),
 
-  batch: (p: {
-    project_id?: string;
-    items?: BatchItemRequest[];
-    storyboard_path?: string;
-    aspect?: number;
-    dry_run?: boolean;
-    remove_watermark?: boolean;
-    confirm?: boolean;
-    dest_dir?: string;
-    workspace_project_id?: string | null;
-  }) => post("/api/batch", p).then(j<{ job_id: string }>),
-
-  uploadReference: async (file: File, projectId?: string | null) => {
-    const fd = new FormData();
-    fd.append("file", file);
-    if (projectId) fd.append("project_id", projectId);
-    const r = await fetch("/api/upload_reference", { method: "POST", body: fd });
-    return j<{
-      ok: boolean;
-      path: string;
-      filename: string;
-      url: string;
-      size: number;
-      projectId?: string | null;
-    }>(r);
-  },
-
   upload: async (file: File, projectId?: string | null) => {
     const fd = new FormData();
     fd.append("file", file);
@@ -186,30 +130,6 @@ export const api = {
       projectId?: string | null;
     }>(r);
   },
-
-  tryonStart: (p: {
-    first_frame_path?: string;
-    garment_path?: string;
-    transfer_image?: string;
-    extra_images?: string[];
-    shopee_url?: string;
-    product_dir?: string;
-    model_path?: string;
-    project_id?: string;
-    dry_run?: boolean;
-    confirm?: boolean;
-    auto_stitch?: boolean;
-    image_prompt?: string;
-    video_prompt_1?: string;
-    video_prompt_2?: string;
-    aspect_ratio?: string;
-    remove_watermark?: boolean;
-    single_video?: boolean;
-    resume_run_id?: string;
-    start_from_step?: number;
-  }) => post("/api/tryon/start", p).then(j<{ job_id: string }>),
-
-  tryonRuns: () => fetch("/api/tryon/runs").then(j<{ runs: TryOnRunManifest[] }>),
 
   // -- canvas nodes (image / video) -----------------------------------------
   nodeOptions: () => fetch("/api/node/options").then(j<NodeMediaOptions>),
@@ -282,9 +202,6 @@ export const api = {
 
   deliveries: () => fetch("/api/deliveries").then(j<{ deliveries: DeliveryListItem[] }>),
 
-  deliveryManifest: (slug: string) =>
-    fetch(`/api/deliveries/${encodeURIComponent(slug)}`).then(j<Record<string, unknown>>),
-
   deliveryFileUrl: (slug: string, relPath: string) =>
     `/api/deliveries/${encodeURIComponent(slug)}/${relPath
       .split("/")
@@ -295,11 +212,6 @@ export const api = {
   workspaceProjects: () =>
     fetch("/api/workspace/projects").then(
       j<{ projects: WorkspaceProject[]; legacyMigrated?: boolean }>,
-    ),
-
-  workspaceProject: (id: string) =>
-    fetch(`/api/workspace/projects/${encodeURIComponent(id)}`).then(
-      j<{ project: WorkspaceProject }>,
     ),
 
   createWorkspaceProject: (p: {

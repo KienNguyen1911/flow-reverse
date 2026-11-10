@@ -14,8 +14,8 @@ from typing import Optional
 from ..Workflows.account_pool import AccountPoolManager
 from ..Workflows.flow_client import DEFAULT_CDP_URL
 from .asset_scan import migration_asset_entries
-from .jobs import JobManager, ProjectsStore
-from .settings import DEFAULT_OUT, DEFAULT_PROJECTS_FILE, ROOT
+from .jobs import JobManager
+from .settings import DEFAULT_OUT, ROOT
 from .workspace import DEFAULT_PROJECT_NAME, AssetMetaStore, WorkspaceStore
 
 
@@ -23,7 +23,6 @@ from .workspace import DEFAULT_PROJECT_NAME, AssetMetaStore, WorkspaceStore
 class AppContext:
     pool: AccountPoolManager
     manager: JobManager
-    store: ProjectsStore
     workspace: WorkspaceStore
     asset_meta: AssetMetaStore
     out_root: Path
@@ -37,7 +36,6 @@ class AppContext:
 def build_context(
     cdp_url: str = DEFAULT_CDP_URL,
     out_dir: Optional[Path] = None,
-    projects_file: Optional[Path] = None,
     pool_config: Optional[Path] = None,
     pool_state: Optional[Path] = None,
     workspace_file: Optional[Path] = None,
@@ -46,7 +44,6 @@ def build_context(
 ) -> AppContext:
     out_root = Path(out_dir) if out_dir else DEFAULT_OUT
     asset_root = out_root.parent if out_dir else (ROOT / "out")
-    store = ProjectsStore(Path(projects_file) if projects_file else DEFAULT_PROJECTS_FILE)
     workspace = WorkspaceStore(
         Path(workspace_file) if workspace_file else (out_root.parent / "flowbench_workspace.json")
     )
@@ -59,7 +56,7 @@ def build_context(
         out_root=out_root,
         default_cdp_url=cdp_url,
     )
-    manager = JobManager(pool=pool, store=store, out_root=out_root)
+    manager = JobManager(pool=pool, out_root=out_root)
     manager.asset_meta = asset_meta
     manager.workspace = workspace
 
@@ -79,7 +76,6 @@ def build_context(
     return AppContext(
         pool=pool,
         manager=manager,
-        store=store,
         workspace=workspace,
         asset_meta=asset_meta,
         out_root=out_root,

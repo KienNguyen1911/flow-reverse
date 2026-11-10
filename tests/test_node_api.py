@@ -15,7 +15,6 @@ def client(tmp_path_factory) -> TestClient:
     base = tmp_path_factory.mktemp("node_api")
     app = create_app(
         out_dir=base / "playground",
-        projects_file=base / "projects.json",
         pool_config=base / "pool.json",
         pool_state=base / "pool_state.json",
         web_dist=base / "dist",

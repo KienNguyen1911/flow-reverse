@@ -31,7 +31,7 @@
 **Google Flow** (trải nghiệm Nano Banana 2.1) là ứng dụng web Single Page Application (SPA) xây dựng trên nền Angular (`AiSandboxAngularFrontend`). Ứng dụng cung cấp công cụ AI tạo hình ảnh và video chất lượng cao từ câu lệnh văn bản (`text2image`) hoặc hình ảnh tham chiếu (`image2image`).
 
 Mục tiêu kỹ thuật của dự án `rev-flow`:
-- Xây dựng một **client tự động hoá lập trình (Python CLI / Web UI Playground)** có khả năng thực thi hàng loạt (storyboard 50–100 ảnh cho dựng phim).
+- Xây dựng một **client tự động hoá lập trình (Python CLI / Web UI Canvas)** thực thi các lần sinh ảnh/video độc lập có kiểm soát credit.
 - Điều phối **cụm nhiều tài khoản Google (Dynamic N-Account Pool)** mà không gây tràn bộ nhớ RAM.
 - **Bảo toàn hạn mức (Zero-Credit Safety):** Đảm bảo trong suốt quá trình phân tích và thử nghiệm, hạn mức tài khoản (~1 credit/lần sinh ảnh thành công) không bị lãng phí do lỗi request.
 
@@ -574,7 +574,10 @@ Trong đó:
 2. **Wear-Leveling & Affinity:** Lần chạy tiếp theo sẽ ưu tiên các tài khoản có `total_completed` thấp nhất và có sẵn cache `media_id` của ảnh tham chiếu.
 3. **Hot-Spare Failover:** Nếu tài khoản đang chạy gặp lỗi `429` hoặc `401`, pool tự động cách ly tài khoản đó và **đánh thức ngay một tài khoản dự phòng (`acc_03`)** vào thế chỗ mà không làm gián đoạn tiến trình chung.
 
-### 8.3. Điều Phối Phụ Thuộc Storyboard DAG ([`src/WebUI/jobs.py`](file:///D:/Dev/rev-flow/src/WebUI/jobs.py))
+### 8.3. Điều Phối Phụ Thuộc Storyboard DAG (lịch sử — đã gỡ khỏi source)
+
+> Ghi chú 2026-11: `batch_generate`/`BatchRunner` (và `/api/batch`) đã được xoá; canvas chạy
+> từng node độc lập. Mục này giữ lại như tài liệu về thuật toán phân đợt phụ thuộc.
 Để sản xuất bộ 100 ảnh đồng nhất phong cách cho video dài, pipeline phân bổ các shot thành các đợt phụ thuộc (Dependency Waves):
 - **Wave 1 (Anchor Shots):** Tạo 10–12 ảnh mốc nhân vật và bối cảnh chính bằng `text2image` (`anchor_char_01`, `anchor_env_01`) và các cảnh b-roll độc lập.
 - **Wave 2 (Continuity Shots):** Các cảnh hành động `image2image` có trường `depends_on_shot_id` trỏ vào kết quả của Wave 1. Thuật toán tự động lấy file ảnh xuất ra từ Wave 1 làm ảnh tham chiếu cho Wave 2.
@@ -682,5 +685,5 @@ Bản đồ liên kết trực tiếp tới các module và tài liệu trong kh
 - [`src/Workflows/flow_models.py`](file:///D:/Dev/rev-flow/src/Workflows/flow_models.py) — Pydantic DTOs, request builders, `build_args_from_template` và form encoder.
 - [`src/Workflows/flow_client.py`](file:///D:/Dev/rev-flow/src/Workflows/flow_client.py) — Client cấp cao, CLI, Circuit Breaker và kiểm soát xác nhận credit.
 - [`src/Workflows/account_pool.py`](file:///D:/Dev/rev-flow/src/Workflows/account_pool.py) — Bộ điều phối cụm N tài khoản với Demand-Based Allocation và Hot-Spare.
-- [`src/WebUI/app.py`](file:///D:/Dev/rev-flow/src/WebUI/app.py) & [`src/WebUI/jobs.py`](file:///D:/Dev/rev-flow/src/WebUI/jobs.py) — Backend FastAPI, hàng đợi background job và điều phối DAG Storyboard.
+- [`src/WebUI/app.py`](file:///D:/Dev/rev-flow/src/WebUI/app.py) & [`src/WebUI/jobs/`](file:///D:/Dev/rev-flow/src/WebUI/jobs/) — Backend FastAPI, hàng đợi background job và điều phối DAG Storyboard.
 - [`tests/test_account_pool.py`](file:///D:/Dev/rev-flow/tests/test_account_pool.py) — Bộ kiểm thử tự động cho toán học cấp phát pool, wear-leveling và i2i template.

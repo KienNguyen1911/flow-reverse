@@ -73,7 +73,7 @@ Ghi chú quan trọng:
 | `aspect_ratio` | Tỷ lệ đã verify (mặc định `16:9`); alias `portrait`/`landscape`/`square` được chuẩn hoá |
 | `aspect` | Enum int thô (thắng `aspect_ratio`) — dành cho giá trị đã capture thủ công |
 | `seed` | 1..2³¹−1 (int32), bỏ trống = random |
-| `reference_image_path` | Ảnh đính kèm (i2i). Nhận path hoặc URL `/api/uploads/...`, `/api/references/...`, `/api/assets/...`, `/api/tryon/files/...` |
+| `reference_image_path` | Ảnh đính kèm (i2i). Nhận path hoặc URL `/api/uploads/...`, `/api/references/...`, `/api/assets/...` |
 | `project_id` | Bỏ trống → tự resolve: tab đang mở → dự án mới nhất → tạo mới |
 | `dry_run` | Chỉ capture + dựng payload, **không fire** (0 credit, không tạo file) |
 | `remove_watermark` | Xoá watermark ✦ ngay trong core ảnh (mặc định true) |

@@ -188,10 +188,10 @@ Mở `http://127.0.0.1:4000` — UI "Flow Bench" phải hiện ra. Nếu báo *"
 
 ## 9. Quy tắc an toàn (đọc trước khi vận hành)
 
-- **Credit:** `status` / `list-projects` / `create-project` / `dry-run` = **0 credit**; ảnh thật ≈ **1 credit/ảnh**
-  (bị từ chối = 0). Mọi real run cần người dùng xác nhận (UI có dialog, API yêu cầu `confirm: true`).
+- **Credit:** `status` / `node/options` / `dry-run` = **0 credit**; node chạy thật ≈ **1 credit/node**
+  (bị từ chối = 0). Mọi real run cần người dùng xác nhận trên canvas.
 - **Circuit breaker:** lỗi `401/403` → cooldown 30 phút; `429` → 10 phút; 3 lần anti-abuse liên tiếp → 30 phút.
-  Khi breaker mở, `/api/generate` trả `423` — không cố thử lại liên tục; xem "Xử lý sự cố".
+  Khi breaker mở, job báo lỗi ngay — không cố thử lại liên tục; xem "Xử lý sự cố".
 - **Không sửa** `fingerprint_seed`, `platform`, `timezone_id`, `locale` trên profile đang dùng.
 - Không commit `browser_vault/`, `traces/`, `out/` (đã có `.gitignore` — chứa cookie phiên và token).
 - Dự án chỉ dành cho học tập/nghiên cứu; tuân thủ ToS của Google Flow (xem `README.md` mục 5).

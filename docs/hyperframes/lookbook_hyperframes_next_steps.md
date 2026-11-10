@@ -90,7 +90,8 @@ assets/items/item_3_bag.png
 assets/items/item_4_sandals.png
 ```
 
-**Lấy ảnh ở đâu:** ảnh sản phẩm thật (Shopee đã có sẵn bộ tải ở `src/Workflows/shopee_downloader.py`).
+**Lấy ảnh ở đâu:** ảnh sản phẩm thật — upload qua canvas (`/api/upload`) hoặc sinh từ node ảnh
+(`is_item` + `item_name` để chép vào `out/items/<project_id>/`).
 
 **Tách nền:** dùng công cụ ngoài pipeline:
 
@@ -200,7 +201,7 @@ tương tự là đủ.
 
 ## Bước 7 — Thêm API + nút trên UI
 
-- Route trong `src/WebUI/app.py`, phục vụ file output theo mẫu route `/api/tryon/files` đã có.
+- Route trong `src/WebUI/app.py`, phục vụ file output theo mẫu route `/api/node/files` đã có.
 - Nút **"Dựng lookbook"** đặt cạnh nút run của node đã có video,
   trong `web/src/components/`.
 

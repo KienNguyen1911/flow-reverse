@@ -3,8 +3,8 @@
 Two distinct project concepts coexist in the app:
 
 * **Flow project** (``project_id`` on generation requests) — the Google Flow
-  UUID that owns generated media server-side.  Its registry lives in
-  :class:`src.WebUI.jobs.ProjectsStore` and is unchanged.
+  UUID that owns generated media server-side. Mapped per account inside this
+  module (``get_flow_project`` / ``set_flow_project``); no separate registry.
 * **Workspace project** (this module) — the local UI grouping of a canvas
   graph, its viewport and the assets uploaded/generated while it was active.
 

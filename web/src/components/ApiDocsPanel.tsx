@@ -74,9 +74,7 @@ function EndpointCard({ ep }: { ep: Ep }) {
   const limits = useLimits();
   // Notes chứa placeholder để tài liệu không lệch với giới hạn backend thật.
   const fill = (s: string) =>
-    s
-      .replaceAll("{max_prompt}", String(limits.max_prompt_chars))
-      .replaceAll("{max_batch}", String(limits.max_batch_items));
+    s.replaceAll("{max_prompt}", String(limits.max_prompt_chars));
 
   return (
     <div className="overflow-hidden rounded-ctl border border-line2 bg-panel2">

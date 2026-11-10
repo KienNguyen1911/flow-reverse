@@ -4,19 +4,14 @@ One dispatcher thread runs jobs; each job acquires account(s) from the
 :class:`~src.Workflows.account_pool.AccountPoolManager`. The per-kind runners live
 in sibling modules and are mixed into :class:`JobManager`:
 
-  * :mod:`.runners_single`   generate / dry_run / list_projects / create_project
-  * :mod:`.batch`            batch_generate (N_alloc accounts in parallel)
   * :mod:`.runners_node`     node_image / node_video / node_last_frame
-  * :mod:`.runners_workflow` auto_tryon / delivery_build
+  * :mod:`.runners_workflow` delivery_build
 
 Job kinds:
-  generate        ogiZ0b  (~1 credit if accepted; requires confirm at the API)
-  dry_run         capture + build only, never fires (0 credit)
-  batch_generate  J items (t2i/i2i) across the allocated working set
-  create_project  jHPbke  (0 credit; creates a REAL project in the account)
-  list_projects   UpteDb  (0 credit read)
   node_image      one canvas image node (MediaService, optional i2i attachment)
   node_video      one canvas video node (MediaService, i2v or image→video chain)
+  node_last_frame extract a video's last frame for chaining (0 credit)
+  delivery_build  gather existing runs into a HyperFrames material kit (0 credit)
 """
 
 from __future__ import annotations
@@ -32,18 +27,14 @@ from ...Bridge.flow_bridge import jitter
 from ...Workflows.account_pool import AccountPoolManager, ActiveAccount, PoolUnavailableError
 from ...Workflows.flow_client import CircuitOpenError, FlowClient
 from ...Workflows.node_retry import NodeExecutionError, RetryAborted
-from .batch import BatchRunner
 from .model import Job
-from .projects_store import ProjectsStore
 from .runners_node import NodeJobsMixin
-from .runners_single import SingleJobsMixin
 from .runners_workflow import WorkflowJobsMixin
 
 
-class JobManager(SingleJobsMixin, NodeJobsMixin, WorkflowJobsMixin):
-    def __init__(self, pool: AccountPoolManager, store: ProjectsStore, out_root: Path):
+class JobManager(NodeJobsMixin, WorkflowJobsMixin):
+    def __init__(self, pool: AccountPoolManager, out_root: Path):
         self.pool = pool
-        self.store = store
         self.out_root = Path(out_root)
         self.node_out = self.out_root.parent / "nodes"
         self.asset_meta = None  # injected by create_app (AssetMetaStore)
@@ -152,21 +143,6 @@ class JobManager(SingleJobsMixin, NodeJobsMixin, WorkflowJobsMixin):
 
     def _dispatch(self, job: Job) -> None:
         kind = job.kind
-        if kind in ("generate", "dry_run"):
-            self._run_single(job, dry_run=(kind == "dry_run"))
-            return
-        if kind == "batch_generate":
-            BatchRunner(self, job).run()
-            return
-        if kind == "list_projects":
-            self._run_project_op(job)
-            return
-        if kind == "create_project":
-            self._run_project_op(job)
-            return
-        if kind == "auto_tryon":
-            self._run_auto_tryon(job)
-            return
         if kind == "node_image":
             self._run_node_image(job)
             return

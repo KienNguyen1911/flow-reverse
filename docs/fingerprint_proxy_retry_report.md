@@ -112,7 +112,7 @@ Scheme hỗ trợ: `http`, `https`, `socks5`, `socks5h`. Thiếu scheme ⇒ `htt
 ### 2.2 Luồng dữ liệu
 
 ```
-UI (AccountManagerModal)
+UI (Settings → Tài khoản, `AccountPanel`)
   → PATCH /api/pool/accounts/{id}  {proxy, proxy_bypass, clear_proxy}
   → AccountPoolManager.update_account()
       ├─ normalize_proxy_value()  (validate sớm, lỗi rõ ràng)
@@ -129,7 +129,7 @@ UI (AccountManagerModal)
 | `src/BrowserHost/launch_profile.py` | `normalize_proxy()`, `proxy_to_url()`, `describe_proxy()`; validate trong `validate_and_repair()`; `build_command()` chỉ thêm `--proxy-server` khi có proxy. |
 | `src/Workflows/account_pool.py` | `AccountConfig.proxy / proxy_bypass / proxy_managed`; `normalize_proxy_value()`; `proxy_label()`; `add_account(proxy=…)`, `update_account(proxy=…, clear_proxy=…)`; `_sync_profile_proxy()` ghi vào vault; snapshot/detail trả label **không chứa mật khẩu**. |
 | `src/WebUI/app.py` | `AddAccountBody`/`UpdateAccountBody` có `proxy`, `proxy_bypass`, `clear_proxy`. |
-| `web/src/types.ts`, `api.ts`, `AccountManagerModal.tsx` | Ô nhập proxy khi tạo account, editor proxy từng account, badge `🌐 proxy` / `🌐 Direct IP`. |
+| `web/src/types.ts`, `api.ts`, `AccountPanel.tsx` | Ô nhập proxy khi tạo account, editor proxy từng account, badge `🌐 proxy` / `🌐 Direct IP`. |
 | `browser_vault/_template/config.json` | Ghi chú định dạng proxy + `proxy_bypass`. |
 
 ### 2.4 Tương thích ngược
@@ -164,7 +164,7 @@ filter, prominent-people…) **không** retry — propagate ngay như cũ.
 | File | Thay đổi |
 | :--- | :--- |
 | `src/Workflows/node_retry.py` | **Mới.** Policy + detection + sleep có thể hủy. |
-| `src/WebUI/jobs.py` | `Job.cancel_event` / `Job.cancel()` / `Job.cancelled`; `_run_node_image` và `_run_node_video` bọc bằng `run_with_retry`; dispatcher bắt `NodeExecutionError` → `job.error = "[EXECUTION_ERROR] …"`; bắt `RetryAborted` → job dừng sạch. |
+| `src/WebUI/jobs/runners_node.py` | `Job.cancel_event` / `Job.cancel()` / `Job.cancelled`; `_run_node_image` và `_run_node_video` bọc bằng `run_with_retry`; dispatcher bắt `NodeExecutionError` → `job.error = "[EXECUTION_ERROR] …"`; bắt `RetryAborted` → job dừng sạch. |
 | `src/WebUI/app.py` | `POST /api/jobs/{jid}/cancel`. |
 | `src/Workflows/account_pool.py` | `report_item_result(..., status="cancelled")` không tính là lỗi account. |
 | `web/src/components/CanvasDrawer.tsx` | Banner "Đang chờ để tự động thử lại" + nút **Dừng chờ**, nút **Dừng** ở footer khi node đang chạy; nhánh chẩn đoán lỗi `UNUSUAL_ACTIVITY` riêng. |

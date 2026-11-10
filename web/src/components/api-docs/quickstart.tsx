@@ -7,10 +7,10 @@ import { CodeBlock } from "./CodeBlock";
 // Quickstart snippets
 // --------------------------------------------------------------------------- //
 
-const CURL_START = `# 1) Tạo ảnh thử (0 credit), phản hồi ngay với job_id
-curl -s -X POST ${BASE}/api/generate \\
+const CURL_START = `# 1) Tạo một node ảnh (thêm "dry_run": true để chạy thử 0 credit)
+curl -s -X POST ${BASE}/api/node/image \\
   -H "content-type: application/json" \\
-  -d '{"project_id":"3f9a2c1b7e","prompt":"Bình minh trên vịnh, ống kính 35mm","aspect":3,"dry_run":true}'
+  -d '{"prompt":"Bình minh trên vịnh, ống kính 35mm","aspect_ratio":"16:9"}'
 
 # 2) Poll đến khi state là succeeded / failed / rejected
 curl -s ${BASE}/api/jobs/j_20261019_170000_ab12cd`;
@@ -35,19 +35,17 @@ def wait_job(job_id: str, timeout_s: int = 300) -> dict:
 
 # Chạy thật: confirm=True, khoảng 1 credit/ảnh nếu Google không từ chối
 r = requests.post(
-    f"{BASE}/api/generate",
+    f"{BASE}/api/node/image",
     json={
-        "project_id": "3f9a2c1b7e",
         "prompt": "Bình minh trên vịnh, ống kính 35mm",
-        "aspect": 3,
+        "aspect_ratio": "16:9",
         "seed": 1647032552,
-        "dry_run": False,
         "confirm": True,
     },
     timeout=15,
 )
 job = wait_job(r.json()["job_id"])
-print(job["state"], (job.get("result") or {}).get("image_url"))`;
+print(job["state"], (job.get("result") or {}).get("file_url"))`;
 
 export function StartIntro() {
   return (
@@ -71,8 +69,7 @@ export function StartIntro() {
             <code className="font-mono text-acc">confirm: true</code>;{" "}
             <code className="font-mono text-acc">dry_run: true</code> chạy thử toàn pipeline với 0
             credit.
-          </li>
-          <li>
+          </li>          <li>
             <strong className="text-fg">Lỗi:</strong> HTTP 4xx/5xx kèm thân{" "}
             <code className="font-mono text-acc">{'{"detail": "..."}'}</code>; mã 423 nghĩa là mọi
             account đang cooldown hoặc bị tắt.

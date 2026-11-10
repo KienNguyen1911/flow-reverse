@@ -47,7 +47,7 @@ Ràng buộc nghiệp vụ (Schema không diễn đạt được, `src/Workflows
 | Lớp | Đọc gì | Code |
 | :-- | :-- | :-- |
 | Prompt agent | `clips[].role` / `motion_prompt`, `shots[]` rơi vào clip | `src/Workflows/prompt_agent.py` |
-| Delivery export | `clips`, `items`, `shots` → file + manifest | `src/Workflows/delivery.py` |
+| Delivery export | `clips`, `items`, `shots` → file + manifest | `src/Workflows/delivery/` (package) |
 | Editor | `delivery.json.timeline` | HyperFrames desktop |
 
 Trước đây mỗi lớp tự đoán: agent hardcode timeline từng giây trong khi sanitizer xoá

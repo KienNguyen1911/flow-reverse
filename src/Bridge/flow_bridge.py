@@ -40,8 +40,8 @@ from typing import Callable, Optional
 
 from playwright.sync_api import CDPSession, Page
 
-# ``importlib.reload(flow_bridge)`` (WebUI hot-reloads the bridge per auto-tryon job) re-executes
-# only this file; reload the implementation modules too so edits under ``Bridge/flow/`` apply.
+# ``importlib.reload(flow_bridge)`` in a long-lived process re-executes only this file;
+# reload the implementation modules too so edits under ``Bridge/flow/`` apply.
 # On first import ``FlowBridge`` is not yet in globals, so this is a no-op.
 if "FlowBridge" in globals():
     for _name in ("common", "hook_js", "protocol", "session", "composer", "references", "transport"):

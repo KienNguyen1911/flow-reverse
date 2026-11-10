@@ -8,9 +8,9 @@ backend-only change is enough.
 
 Resolution order (first hit wins):
 
-1. environment: ``FLOWBENCH_MAX_PROMPT_CHARS`` / ``FLOWBENCH_MAX_BATCH_ITEMS``
-2. ``configs/limits.json``: ``{"max_prompt_chars": 7200, "max_batch_items": 300}``
-3. the defaults below
+1. environment: ``FLOWBENCH_MAX_PROMPT_CHARS``
+2. ``configs/limits.json``: ``{"max_prompt_chars": 7200}``
+3. the default below
 
 Bad input never disables generation: non-numeric, empty, ≤0 or unset values fall
 back to the default, and absurdly large ones are clamped to 200.000.
@@ -34,9 +34,6 @@ LIMITS_CONFIG = ROOT / "configs" / "limits.json"
 #: a lookbook prompt with detailed garment descriptions and still leaves the
 #: composer responsive.
 DEFAULT_MAX_PROMPT_CHARS = 7200
-#: One batch job fans out over the account pool; 300 keeps a single job under
-#: the per-account queue depth that the pool scheduler can drain safely.
-DEFAULT_MAX_BATCH_ITEMS = 300
 
 _MIN = 1
 _MAX = 200_000
@@ -47,12 +44,10 @@ _cached: Optional["Limits"] = None
 @dataclass(frozen=True)
 class Limits:
     max_prompt_chars: int = DEFAULT_MAX_PROMPT_CHARS
-    max_batch_items: int = DEFAULT_MAX_BATCH_ITEMS
 
     def as_dict(self) -> dict:
         return {
             "max_prompt_chars": self.max_prompt_chars,
-            "max_batch_items": self.max_batch_items,
         }
 
 
@@ -90,11 +85,7 @@ def load_limits(path: Optional[Path | str] = None) -> Limits:
         os.environ.get("FLOWBENCH_MAX_PROMPT_CHARS") or cfg.get("max_prompt_chars"),
         DEFAULT_MAX_PROMPT_CHARS,
     )
-    batch = _clamp(
-        os.environ.get("FLOWBENCH_MAX_BATCH_ITEMS") or cfg.get("max_batch_items"),
-        DEFAULT_MAX_BATCH_ITEMS,
-    )
-    limits = Limits(max_prompt_chars=prompt, max_batch_items=batch)
+    limits = Limits(max_prompt_chars=prompt)
     if path is None:
         _cached = limits
     return limits

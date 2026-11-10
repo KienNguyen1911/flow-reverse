@@ -3,17 +3,13 @@
 This service is the single entry point for "one node = one generation" flows. It
 wraps the protocol cores (:class:`~src.Workflows.flow_client.FlowClient` for
 images, :class:`~src.Bridge.flow_video_bridge.FlowVideoBridge` for videos) and
-adds the concerns that every caller needs but that previously lived only inside
-the try-on pipeline or the WebUI job layer:
+adds the concerns that every caller needs:
 
 * project resolution (explicit → project open in the tab → newest project → create);
 * optional i2i reference-image template cache (account + sha256);
 * video watermark removal (images already handle it inside ``FlowClient``);
 * per-CDP-tab serialization, so two canvas nodes cannot drive the same tab at once;
 * node run directories under ``out/nodes/`` with deterministic naming.
-
-Nothing here depends on ``auto_tryon_pipeline`` — the pipeline is a consumer,
-not an owner, of image/video generation.
 
 Usage::
 
@@ -42,7 +38,7 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Iterable, Literal, Optional
+from typing import Any, Callable, Literal, Optional
 
 from ..Bridge.flow_bridge import DEFAULT_CDP_URL
 from ..Bridge.flow_video_bridge import FlowVideoBridge, VIDEO_EDIT_MODEL_KEY
@@ -226,7 +222,7 @@ def node_options(config_path: Optional[Path | str] = None) -> dict:
 # --------------------------------------------------------------------------- #
 
 
-def resolve_input_path(raw: Path | str, *, run_roots: Iterable[Path | str] = ()) -> Path:
+def resolve_input_path(raw: Path | str) -> Path:
     """Map an attachment reference (path or ``/api/...`` URL) to a local file.
 
     The returned path may not exist; callers validate with ``is_file()`` so the
@@ -239,15 +235,7 @@ def resolve_input_path(raw: Path | str, *, run_roots: Iterable[Path | str] = ())
         m = re.match(r"^/api/([a-z_]+)/(.+)$", s)
         if m:
             kind, rel = m.group(1), m.group(2)
-            if kind == "tryon":
-                rel = re.sub(r"^files/", "", rel)
-                roots = [Path(r) for r in (run_roots or [ROOT / "out" / "affiliate_runs"])]
-                for root in roots:
-                    cand = (root / rel).resolve()
-                    if cand.is_file():
-                        return cand
-                return (roots[0] / rel).resolve()
-            elif kind == "node":
+            if kind == "node":
                 return (DEFAULT_NODE_OUT / re.sub(r"^files/", "", rel)).resolve()
             elif kind == "uploads":
                 return (ROOT / "out" / "uploads" / rel).resolve()
@@ -400,7 +388,6 @@ class MediaService:
         image_client: Optional[FlowClient] = None,
         video_bridge: Optional[FlowVideoBridge] = None,
         workspace_store: Optional[Any] = None,
-        projects_store: Optional[Any] = None,
     ):
         self.cdp_url = cdp_url
         self.out_root = Path(out_dir) if out_dir else DEFAULT_NODE_OUT
@@ -410,7 +397,6 @@ class MediaService:
         self._lock = cdp_lock(cdp_url)
         self._project_cache: Optional[str] = None
         self.workspace_store = workspace_store
-        self.projects_store = projects_store
         self.image = image_client or FlowClient(
             cdp_url=cdp_url,
             out_dir=self.out_root,
@@ -438,17 +424,6 @@ class MediaService:
         except Exception:
             return None
 
-    def _get_projects_store(self) -> Optional[Any]:
-        if self.projects_store is not None:
-            return self.projects_store
-        try:
-            from ..WebUI.jobs.projects_store import ProjectsStore
-            pj_file = (self.out_root.parent / "playground_projects.json") if self.out_root else (ROOT / "out" / "playground_projects.json")
-            self.projects_store = ProjectsStore(pj_file)
-            return self.projects_store
-        except Exception:
-            return None
-
     def _lazy_create_workspace_project(
         self,
         workspace_project_id: str,
@@ -462,13 +437,6 @@ class MediaService:
         new_pid = parse_project_ref(created.id)
         if ws_store:
             ws_store.set_flow_project(workspace_project_id, self.account_id, new_pid)
-        pj_store = self._get_projects_store()
-        if pj_store:
-            from ..Workflows.flow_models import ProjectInfo
-            if isinstance(created, ProjectInfo):
-                pj_store.upsert(created)
-            else:
-                pj_store.upsert(ProjectInfo(id=new_pid, title=getattr(created, "title", title), source="created"))
         self._project_cache = new_pid
         self._emit(on_event, "info", f"Đã khởi tạo & gắn Google Flow Project mới [{new_pid}] cho Workspace [{ws_name}] trên account [{self.account_id}]")
         return new_pid

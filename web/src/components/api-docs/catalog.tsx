@@ -1,4 +1,4 @@
-import { Folder, ListChecks, Lightning, Sparkle, Users } from "@phosphor-icons/react";
+import { ListChecks, Lightning, Users } from "@phosphor-icons/react";
 import { JOB_POLL_MS, TERMINAL_STATES } from "../../jobLifecycle";
 import { BASE } from "./base";
 import { StartIntro } from "./quickstart";
@@ -42,68 +42,6 @@ export const GROUPS: Group[] = [
     ],
   },
   {
-    key: "gen",
-    label: "Tạo ảnh",
-    icon: <Sparkle size={14} />,
-    endpoints: [
-      {
-        method: "POST",
-        path: "/api/generate",
-        title: "Tạo 1 ảnh",
-        desc: "Gửi một prompt lên Google Flow qua tab đang mở. Phản hồi ngay với job_id, kết quả nằm trong job.result.",
-        notes: [
-          "dry_run = true bỏ qua bước tính phí, chạy hết pipeline với 0 credit và không cần confirm.",
-          "confirm = true là bắt buộc khi dry_run = false, thiếu sẽ bị 400.",
-          "seed nhận nguyên trong 1..2147483647, bỏ trống để Google tự chọn.",
-          "HTTP 423 khi toàn bộ pool đang cooldown hoặc bị tắt.",
-        ],
-        body: `{
-  "project_id": "3f9a2c1b7e",
-  "prompt": "Bình minh hy vọng, nhìn từ phía sau, tông điện ảnh",
-  "aspect": 3,
-  "seed": 1647032552,
-  "dry_run": false,
-  "confirm": true
-}`,
-        curl: `curl -s -X POST ${BASE}/api/generate \\
-  -H "content-type: application/json" \\
-  -d '{"project_id":"3f9a2c1b7e","prompt":"Bình minh hy vọng, nhìn từ phía sau","aspect":3,"dry_run":false,"confirm":true}'`,
-        res: `{
-  "job_id": "j_20261019_170000_ab12cd"
-}`,
-      },
-      {
-        method: "POST",
-        path: "/api/batch",
-        title: "Batch nhiều ảnh",
-        desc: "Chạy nhiều shot trong một job, phân bổ đồng thời trên N account theo target_jobs_per_account.",
-        notes: [
-          "Bắt buộc có items hoặc storyboard_path, ít nhất một trong hai.",
-          "project_id tùy chọn, bỏ trống thì từng account tự chọn project đang mở.",
-          "Mỗi shot tối đa {max_prompt} ký tự, một batch tối đa {max_batch} ảnh.",
-          "mode bỏ trống sẽ tự suy luận t2i hoặc i2i, i2i cần reference_image_path.",
-          "depends_on_shot_id để shot sau chờ shot trước, nếu shot gốc lỗi thì shot phụ bị skipped.",
-        ],
-        body: `{
-  "project_id": "3f9a2c1b7e",
-  "aspect": 3,
-  "dry_run": true,
-  "items": [
-    { "id": "shot_001", "prompt": "Gara Slee khởi động, cảnh rộng", "seed": 1469349908 },
-    { "id": "shot_002", "prompt": "Xe máy lao ra phố đêm", "depends_on_shot_id": "shot_001" },
-    { "id": "shot_003", "prompt": "Cận cảnh tay ga", "mode": "i2i", "reference_image_path": "out/references/1760862000123_shot_001.jpg" }
-  ]
-}`,
-        curl: `curl -s -X POST ${BASE}/api/batch \\
-  -H "content-type: application/json" \\
-  -d '{"project_id":"3f9a2c1b7e","aspect":3,"dry_run":true,"items":[{"id":"shot_001","prompt":"Gara Slee khởi động"},{"id":"shot_002","prompt":"Xe máy lao ra phố đêm"}]}'`,
-        res: `{
-  "job_id": "j_20261019_170230_cd34ef"
-}`,
-      },
-    ],
-  },
-  {
     key: "jobs",
     label: "Jobs & Ảnh",
     icon: <ListChecks size={14} />,
@@ -119,11 +57,11 @@ export const GROUPS: Group[] = [
   "jobs": [
     {
       "id": "j_20261019_170230_cd34ef",
-      "kind": "batch_generate",
+      "kind": "node_image",
       "state": "succeeded",
       "created_ms": 1760862000123,
       "event_count": 42,
-      "result": { "batch": true, "total": 40, "ok": 38, "rejected": 1, "failed": 1 }
+      "result": { "status": "ok", "run_id": "20261019_170230_a1b2c3", "file_url": "/api/node/files/20261019_170230_a1b2c3/image.jpg" }
     }
   ]
 }`,
@@ -427,91 +365,6 @@ export const GROUPS: Group[] = [
         res: `{
   "ok": true,
   "accounts": ["flow_main"]
-}`,
-      },
-    ],
-  },
-  {
-    key: "projects",
-    label: "Dự án",
-    icon: <Folder size={14} />,
-    endpoints: [
-      {
-        method: "GET",
-        path: "/api/projects",
-        title: "Danh sách dự án",
-        desc: "Registry dự án đã lưu cục bộ, sắp xếp theo lần dùng gần nhất.",
-        tryIt: true,
-        curl: `curl -s ${BASE}/api/projects`,
-        res: `{
-  "projects": [
-    {
-      "id": "3f9a2c1b7e",
-      "title": "Storyboard 40 cảnh",
-      "source": "manual",
-      "last_used_ts": 1760862000
-    }
-  ]
-}`,
-      },
-      {
-        method: "POST",
-        path: "/api/projects",
-        title: "Thêm dự án thủ công",
-        desc: "Ghi một dự án vào registry local, accept cả id lẫn URL. Không gọi Google nên 0 credit.",
-        notes: ["ref nhận id dạng 3f9a2c1b7e hoặc URL project Flow.", "400 nếu ref không parse được."],
-        body: `{
-  "ref": "3f9a2c1b7e",
-  "title": "Storyboard 40 cảnh"
-}`,
-        curl: `curl -s -X POST ${BASE}/api/projects \\
-  -H "content-type: application/json" \\
-  -d '{"ref":"3f9a2c1b7e","title":"Storyboard 40 cảnh"}'`,
-        res: `{
-  "ok": true,
-  "id": "3f9a2c1b7e"
-}`,
-      },
-      {
-        method: "DELETE",
-        path: "/api/projects/{pid}",
-        title: "Xóa dự án",
-        desc: "Gỡ dự án khỏi registry local, không đụng gì tới dữ liệu trên Google.",
-        curl: `curl -s -X DELETE ${BASE}/api/projects/3f9a2c1b7e`,
-        res: `{
-  "ok": true
-}`,
-      },
-      {
-        method: "POST",
-        path: "/api/projects/refresh",
-        title: "Đồng bộ dự án từ Google",
-        desc: "Khởi tạo job đọc lại danh sách dự án thật từ tài khoản Google, 0 credit.",
-        curl: `curl -s -X POST ${BASE}/api/projects/refresh \\
-  -H "content-type: application/json" \\
-  -d '{}'`,
-        res: `{
-  "job_id": "j_20261019_171500ef12ab"
-}`,
-      },
-      {
-        method: "POST",
-        path: "/api/projects/create",
-        title: "Tạo dự án mới",
-        desc: "Tạo một dự án mới trên tài khoản Google. 0 credit nhưng là thao tác thật nên bắt buộc confirm.",
-        notes: [
-          "confirm = true là bắt buộc, thiếu sẽ bị 400.",
-          "Chạy qua job create_project, poll GET /api/jobs/{id} để theo dõi.",
-        ],
-        body: `{
-  "title": "Storyboard 40 cảnh",
-  "confirm": true
-}`,
-        curl: `curl -s -X POST ${BASE}/api/projects/create \\
-  -H "content-type: application/json" \\
-  -d '{"title":"Storyboard 40 cảnh","confirm":true}'`,
-        res: `{
-  "job_id": "j_20261019_171500ef12ab"
 }`,
       },
     ],

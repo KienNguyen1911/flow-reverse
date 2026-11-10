@@ -11,7 +11,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.Bridge.flow_video_bridge import concatenate_two_videos, strip_video_audio
-from src.WebUI.app import AutoTryOnBody, BatchBody, GenerateBody
+from src.WebUI.app import NodeImageBody, NodeVideoBody
 from src.Workflows.watermark_remover import (
     clean_image_array,
     detect_flow_star_watermark,
@@ -130,14 +130,9 @@ def test_remove_video_watermark(tmp_path: Path) -> None:
 
 
 def test_api_models_default_remove_watermark() -> None:
-    g = GenerateBody(project_id="12345678-1234-1234-1234-123456789abc", prompt="test")
-    assert g.remove_watermark is True
-
-    b = BatchBody(items=[])
-    assert b.remove_watermark is True
-
-    t = AutoTryOnBody(first_frame_path="assets/sample_first_frame.png")
-    assert t.remove_watermark is True
+    """Canvas nodes strip the watermark unless the caller explicitly opts out."""
+    assert NodeImageBody(prompt="test").remove_watermark is True
+    assert NodeVideoBody(prompt="test").remove_watermark is True
 
 
 def test_concatenate_two_videos_stream_copy_and_no_audio(tmp_path: Path) -> None:

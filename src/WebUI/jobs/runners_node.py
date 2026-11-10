@@ -46,7 +46,6 @@ class NodeJobsMixin:
             registry=self.pool.registry,
             log=lambda kind, msg: job.add_event(kind, f"[{aid}] {msg}"),
             workspace_store=getattr(self, "workspace", None),
-            projects_store=getattr(self, "store", None),
         )
 
     def _run_node_image(self, job: Job) -> None:

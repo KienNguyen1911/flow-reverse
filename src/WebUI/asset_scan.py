@@ -1,6 +1,6 @@
 """Disk scanners behind the gallery and asset-drawer endpoints.
 
-Pure functions over ``out/`` (playground runs, node outputs, try-on runs, uploads):
+Pure functions over ``out/`` (node outputs, uploads, legacy playground runs):
 they return plain dicts shaped for the UI and never touch the network.
 """
 
@@ -17,11 +17,21 @@ from .settings import ROOT
 from .workspace import AssetMetaStore
 
 
-def scan_gallery(out_root: Path, asset_meta: Optional[AssetMetaStore] = None) -> list[dict]:
+def _scan_run_dirs(
+    root: Path,
+    url_prefix: str,
+    asset_meta: Optional[AssetMetaStore],
+) -> list[dict]:
+    """One gallery entry per run dir under *root* that holds a meta.json + real image.
+
+    Both producers write the same ``meta.json`` shape through
+    ``FlowClient._write_meta``, so the only thing that differs between them is where
+    the run dir lives and which route serves its files.
+    """
     runs: list[dict] = []
-    if not out_root.exists():
+    if not root.exists():
         return runs
-    for d in sorted(out_root.iterdir(), reverse=True):
+    for d in sorted(root.iterdir(), reverse=True):
         if not d.is_dir() or d.name.startswith("_"):
             continue
         mp = d / "meta.json"
@@ -42,7 +52,7 @@ def scan_gallery(out_root: Path, asset_meta: Optional[AssetMetaStore] = None) ->
         runs.append({
             "run": d.name,
             "file": fp.name,
-            "url": f"/api/files/{d.name}/{fp.name}",
+            "url": f"{url_prefix}/{d.name}/{fp.name}",
             "prompt": meta.get("prompt"),
             "title": meta.get("title"),
             "project_id": meta.get("project_id"),
@@ -57,6 +67,32 @@ def scan_gallery(out_root: Path, asset_meta: Optional[AssetMetaStore] = None) ->
             "file_bytes": meta.get("file_bytes"),
             "status": meta.get("status"),
         })
+    return runs
+
+
+def scan_gallery(
+    out_root: Path,
+    asset_meta: Optional[AssetMetaStore] = None,
+    node_out: Optional[Path] = None,
+) -> list[dict]:
+    """Every generated image worth showing in Settings → Thư viện.
+
+    Two sources, newest first:
+
+    * ``node_out`` (``out/nodes``) — what the canvas produces today; served by ``/api/node/files``.
+    * ``out_root`` (``out/playground``) — legacy batch/playground runs; served by ``/api/files``.
+    """
+    runs = _scan_run_dirs(
+        node_out if node_out is not None else out_root.parent / "nodes",
+        "/api/node/files",
+        asset_meta,
+    )
+    runs += _scan_run_dirs(out_root, "/api/files", asset_meta)
+
+    def _sort_key(run: dict) -> str:
+        return str(run.get("created_ts") or "")
+
+    runs.sort(key=_sort_key, reverse=True)
     return runs
 
 
@@ -202,47 +238,10 @@ def scan_output_assets(
                         "source": "canvas_image_node",
                     }, f"output:{d.name}"))
 
-    # 2. Affiliate / Try-on runs (out/affiliate_runs)
-    aff_dir = (out_root.parent / "affiliate_runs" if out_root.name == "playground" else out_root / "affiliate_runs")
-    if aff_dir.exists():
-        for d in aff_dir.iterdir():
-            if not d.is_dir() or d.name.startswith("_"):
-                continue
-            manifest_file = d / "manifest.json"
-            meta = {}
-            if manifest_file.exists():
-                try:
-                    meta = json.loads(manifest_file.read_text(encoding="utf-8"))
-                except Exception:
-                    pass
-            for v in d.glob("*.mp4"):
-                if v.stat().st_size < 10000:
-                    continue
-                thumb = d / "first_frame.jpg"
-                if not thumb.exists():
-                    thumb = d / "model.jpg"
-                thumb_url = f"/api/tryon/files/{d.name}/{thumb.name}" if thumb.exists() else None
-                url = f"/api/tryon/files/{d.name}/{v.name}"
-                if url in seen_urls:
-                    continue
-                seen_urls.add(url)
-                items.append(add_project_fields({
-                    "id": f"tryon_{d.name}_{v.name}",
-                    "run_id": d.name,
-                    "name": f"{d.name} - {v.name}",
-                    "category": "video",
-                    "url": url,
-                    "thumbnail_url": thumb_url,
-                    "prompt": meta.get("image_prompt") or meta.get("video_prompt_1") or "",
-                    "created_ts": meta.get("created_ts") or v.stat().st_mtime,
-                    "duration_s": 16 if "16s" in v.name else 8,
-                    "resolution": "1080p",
-                    "size_bytes": v.stat().st_size,
-                    "source": "tryon",
-                }, f"output:{d.name}"))
-
-    # 3. Top-level runs (Playground / scan_gallery)
-    gallery_runs = scan_gallery(out_root, asset_meta)
+    # 3. Top-level runs (legacy playground batch output)
+    # `node_out` is passed so this never re-lists the canvas run dirs already added in
+    # section 1 — otherwise every node image would show up twice in Kho Assets.
+    gallery_runs = scan_gallery(out_root, asset_meta, node_out=node_out)
     for run in gallery_runs:
         url = run.get("url")
         if not url or url in seen_urls:
@@ -294,6 +293,6 @@ def migration_asset_entries(
         key = item.get("key")
         if key:
             entries[key] = "output"
-    for run in scan_gallery(out_root, asset_meta):
+    for run in scan_gallery(out_root, asset_meta, node_out=node_out):
         entries[f"gallery:{run['run']}"] = "gallery"
     return list(entries.items())

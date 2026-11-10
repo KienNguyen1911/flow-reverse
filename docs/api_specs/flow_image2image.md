@@ -85,9 +85,9 @@ lưu tại `out/playground/ref_<tên file>*/` gồm `app_request_body.txt` + `re
 ## 5. Lệnh script nhanh (không cần UI)
 
 ```bash
-# 0 credit — capture template cho 1 account (in registry qua WebUI/API sau đó)
+# 0 credit — capture template cho 1 account
 python -m src.Workflows.flow_client status
-# i2i qua WebUI: bật "Chế độ batch", điền "Ảnh tham chiếu i2i", dán danh sách prompt
-# hoặc POST /api/batch {"project_id": "...", "items": [{"prompt": "...", "mode": "i2i",
-#   "reference_image_path": "out/outputs/<project>/anchor.png"}], "confirm": true}
+# i2i qua node ảnh: đính ảnh tham chiếu bằng reference_image_path
+# POST /api/node/image {"prompt": "...", "aspect_ratio": "9:16",
+#   "reference_image_path": "out/uploads/<file>.png", "confirm": true}
 ```

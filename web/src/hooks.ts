@@ -5,10 +5,8 @@ import type {
   GalleryRun,
   NodeMediaOptions,
   PoolInfo,
-  Project,
   ScriptClipOption,
   Status,
-  TryOnRunManifest,
   AssetUploadedItem,
   AssetOutputItem,
   WorkspaceProject,
@@ -18,11 +16,10 @@ export { useJob, useJobs } from "./jobWatcher";
 
 /** Fallback khi chưa gọi được `/api/node/options` — khớp default trong
  *  `src/Workflows/limits.py`. Chỉ là lưới an toàn cho UI, không phải nguồn chân lý. */
-export const FALLBACK_LIMITS = { max_prompt_chars: 7200, max_batch_items: 300 } as const;
+export const FALLBACK_LIMITS = { max_prompt_chars: 7200 } as const;
 
 export interface Limits {
   max_prompt_chars: number;
-  max_batch_items: number;
 }
 
 // Nhiều component cùng cần limits ⇒ giữ một promise dùng chung, chỉ fetch 1 lần.
@@ -93,7 +90,6 @@ function fetchLimits(): Promise<Limits> {
       .nodeOptions()
       .then((o) => ({
         max_prompt_chars: o.limits?.max_prompt_chars ?? FALLBACK_LIMITS.max_prompt_chars,
-        max_batch_items: o.limits?.max_batch_items ?? FALLBACK_LIMITS.max_batch_items,
       }))
       .catch(() => {
         // Cho phép thử lại ở lần mount sau (server có thể chưa lên).
@@ -186,33 +182,6 @@ export function usePool(intervalMs = 4000) {
   return { pool, error, refresh: tick };
 }
 
-/** Project registry. */
-export function useProjects() {
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const refresh = async () => {
-    setLoading(true);
-    try {
-      const r = await api.projects();
-      setProjects(r.projects);
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  return { projects, loading, error, refresh };
-}
-
 /** Workspace projects: local canvas groups with their persisted state. */
 export function useWorkspaceProjects() {
   const [projects, setProjects] = useState<WorkspaceProject[]>([]);
@@ -262,32 +231,6 @@ export function useGallery() {
   useEffect(() => {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  return { runs, loading, error, refresh };
-}
-
-/** History of try-on video runs. */
-export function useTryOnRuns() {
-  const [runs, setRuns] = useState<TryOnRunManifest[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const refresh = async (quiet = false) => {
-    if (!quiet) setLoading(true);
-    try {
-      const r = await api.tryonRuns();
-      setRuns(r.runs);
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    refresh();
   }, []);
 
   return { runs, loading, error, refresh };

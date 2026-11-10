@@ -11,17 +11,16 @@ Serves:
   /api/pool              N-account pool: active working set vs standby (wakes nothing)
   /api/pool/config       tuning: target_jobs_per_account, max_active_browsers
   /api/pool/accounts/{id}/{wake|hibernate|reset}   per-account actions
-  /api/projects          registry of projects (GET list, POST add, DELETE remove)
-  /api/projects/refresh  job: UpteDb list-projects (0 credit)
-  /api/projects/create   job: jHPbke create-project (0 credit, needs confirm)
-  /api/generate          job: ogiZ0b generate image (needs confirm unless dry_run)
-  /api/batch             job: J images across N_alloc accounts (needs confirm unless dry_run)
   /api/node/options      canvas node options (verified aspect enums, video limits)
   /api/node/image        job: one canvas image node (prompt, ratio, optional attachment)
   /api/node/video        job: one canvas video node (prompt, ratio, attachment or image→video)
+  /api/node/last_frame   job: extract a video's last frame for chaining (0 credit)
   /api/node/files/{p}    generated node media (out/nodes)
   /api/jobs, /api/jobs/{id}
-  /api/gallery           past runs (scans out/playground/*/meta.json)
+  /api/workspace/projects  local canvas projects (graph + asset ownership)
+  /api/assets/*          asset drawer: uploads, generated outputs, pinning
+  /api/deliveries        HyperFrames material kits (0 credit)
+  /api/gallery           generated images (scans out/nodes + legacy out/playground)
   /api/files/{run}/{name}
   /                      the built playground UI (web/dist)
 
@@ -49,12 +48,9 @@ from .routes import (
     assets,
     deliveries,
     files,
-    generate,
     jobs,
     node,
     pool,
-    projects,
-    tryon,
     workspace,
 )
 from .settings import DEFAULT_WEB_DIST
@@ -62,14 +58,12 @@ from .settings import DEFAULT_WEB_DIST
 # Re-exported: tests/scripts import request bodies and path constants from here.
 from .asset_scan import scan_gallery, scan_output_assets, scan_uploaded_assets  # noqa: F401
 from .routes.agent import AgentConfigBody, GenerateNodePromptBody, TestAgentBody  # noqa: F401
-from .routes.generate import BatchBody, BatchItemBody, GenerateBody  # noqa: F401
 from .routes.node import NodeImageBody, NodeLastFrameBody, NodeVideoBody  # noqa: F401
-from .routes.tryon import AutoTryOnBody  # noqa: F401
-from .settings import DEFAULT_OUT, DEFAULT_PROJECTS_FILE, MAX_PROMPT_CHARS, ROOT  # noqa: F401
+from .settings import DEFAULT_OUT, MAX_PROMPT_CHARS, ROOT  # noqa: F401
 
 
 def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
-               projects_file: Optional[Path] = None, web_dist: Optional[Path] = None,
+               web_dist: Optional[Path] = None,
                pool_config: Optional[Path] = None, pool_state: Optional[Path] = None,
                workspace_file: Optional[Path] = None,
                asset_meta_file: Optional[Path] = None,
@@ -77,7 +71,6 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
     ctx = build_context(
         cdp_url=cdp_url,
         out_dir=out_dir,
-        projects_file=projects_file,
         pool_config=pool_config,
         pool_state=pool_state,
         workspace_file=workspace_file,
@@ -88,7 +81,6 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
     app = FastAPI(title="Flow Bench", version="0.2.0")
     app.state.pool = ctx.pool
     app.state.manager = ctx.manager
-    app.state.store = ctx.store
     app.state.out_root = ctx.out_root
     app.state.workspace = ctx.workspace
     app.state.asset_meta = ctx.asset_meta
@@ -105,14 +97,11 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
 
     app.include_router(pool.build_router(ctx))
     app.include_router(workspace.build_router(ctx))
-    app.include_router(projects.build_router(ctx))
-    app.include_router(generate.build_router(ctx))
     app.include_router(node.build_router(ctx))
     app.include_router(deliveries.build_router(ctx))
     app.include_router(jobs.build_router(ctx))
     app.include_router(files.build_router(ctx))
     app.include_router(assets.build_router(ctx))
-    app.include_router(tryon.build_router(ctx))
     app.include_router(agent.build_router())
 
     # -- static UI ------------------------------------------------------------ #
@@ -127,7 +116,7 @@ def create_app(cdp_url: str = DEFAULT_CDP_URL, out_dir: Optional[Path] = None,
             return JSONResponse({
                 "ok": True,
                 "note": "UI chưa build (web/dist trống). Chạy: cd web && npm install && npm run build",
-                "api": ["/api/status", "/api/projects", "/api/generate", "/api/jobs", "/api/gallery"],
+                "api": ["/api/status", "/api/node/options", "/api/workspace/projects", "/api/jobs", "/api/gallery"],
             })
 
     return app

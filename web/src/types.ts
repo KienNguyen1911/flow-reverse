@@ -166,54 +166,16 @@ export interface JobResult {
   id?: string;
   title?: string | null;
   account_id?: string | null;
-  // -- batch fields (kind === "batch_generate") ---------------------------- //
-  batch?: boolean;
-  total?: number;
-  ok?: number;
-  dry_run?: number;
-  rejected?: number;
-  failed?: number;
-  skipped?: number;
-  pending?: number;
-  n_alloc?: number;
-  accounts?: string[];
-  output_dir?: string;
-  items?: BatchItemResult[];
-}
-
-export interface BatchItemResult {
-  idx: number;
-  shot_id?: string | null;
-  prompt: string;
-  mode: string;
-  status: "pending" | "running" | "ok" | "dry_run" | "rejected" | "failed" | "skipped" | string;
-  account_id?: string | null;
-  attempts: number;
-  error?: string | null;
-  output_path?: string | null;
-  result?: JobResult | null;
-}
-
-export interface BatchItemRequest {
-  prompt: string;
-  seed?: number | null;
-  mode?: "t2i" | "i2i";
-  reference_image_path?: string | null;
-  depends_on_shot_id?: string | null;
-  id?: string | null;
-  filename?: string | null;
 }
 
 export interface Job {
   id: string;
-  kind: "generate" | "dry_run" | "create_project" | "list_projects" | "batch_generate" | string;
+  kind: "node_image" | "node_video" | "node_last_frame" | "delivery_build" | string;
   params: {
     project_id?: string;
     prompt?: string;
     aspect?: number;
     seed?: number | null;
-    title?: string;
-    items?: BatchItemRequest[];
     dry_run?: boolean;
     remove_watermark?: boolean;
   };
@@ -244,48 +206,6 @@ export interface GalleryRun {
   elapsed_s?: number | null;
   file_bytes?: number | null;
   status?: string | null;
-}
-
-export interface TryOnStepInfo {
-  id: number;
-  key: string;
-  label: string;
-  desc?: string;
-  status: "pending" | "running" | "succeeded" | "failed" | string;
-  error?: string | null;
-}
-
-export interface TryOnRunManifest {
-  run_id: string;
-  status: "succeeded" | "failed" | "running" | string;
-  product_title?: string;
-  dest_dir?: string;
-  shopee_images?: string[];
-  model_image_path?: string;
-  garment_image_path?: string;
-  image_prompt?: string;
-  first_frame_path?: string | null;
-  video_prompt_1?: string;
-  video_prompt_2?: string;
-  video_1_path?: string | null;
-  last_frame_path?: string | null;
-  video_2_path?: string | null;
-  final_video_path?: string | null;
-  elapsed_s?: number;
-  dry_run?: boolean;
-  single_video?: boolean;
-  aspect_ratio?: string;
-  current_step?: number;
-  failed_step?: number | null;
-  failed_step_label?: string | null;
-  steps?: TryOnStepInfo[];
-  error?: string | null;
-  account_id?: string | null;
-  first_frame_url?: string | null;
-  video_1_url?: string | null;
-  last_frame_url?: string | null;
-  video_2_url?: string | null;
-  final_video_url?: string | null;
 }
 
 // --------------------------------------------------------------------------- //
@@ -341,7 +261,6 @@ export interface NodeMediaOptions {
   /** Validation caps enforced by the API; the UI mirrors them (xem `src/Workflows/limits.py`). */
   limits: {
     max_prompt_chars: number;
-    max_batch_items: number;
   };
   /**
    * Kịch bản Lookbook mặc định. Node video cần `clips[].id` để agent biết đang viết clip nào
@@ -453,71 +372,6 @@ export interface NodeLastFrameRequest {
   video_path: string;
   remove_watermark?: boolean;
   workspace_project_id?: string | null;
-}
-
-export interface NodeImageResult {
-  status: "ok" | "ok_no_download" | "rejected" | "dry_run" | "failed" | string;
-  prompt: string;
-  aspect_ratio: string;
-  aspect_enum: number;
-  project_id: string;
-  seed_used?: number | null;
-  run_id: string;
-  run_dir: string;
-  file_path?: string | null;
-  file_url?: string | null;
-  file_bytes?: number | null;
-  width?: number | null;
-  height?: number | null;
-  resolution?: number[] | null;
-  signed_url?: string | null;
-  media_id?: string | null;
-  reference_sha256?: string | null;
-  reference_media_id?: string | null;
-  /** Composer model that actually ran (catalog id) + its label. */
-  model?: string;
-  model_label?: string;
-  /** Số ảnh đã yêu cầu (x1..x4). */
-  count?: number;
-  /** True ⇒ composer ở chế độ "Tác nhân", cấu hình do Flow quyết định. */
-  agent_mode?: boolean;
-  dry_run?: boolean;
-  elapsed_s?: number;
-  reason?: string | null;
-  hint?: string | null;
-  account_id?: string | null;
-}
-
-export interface NodeVideoResult {
-  status: "ok" | "dry_run" | string;
-  prompt: string;
-  aspect_ratio: string;
-  run_id: string;
-  run_dir: string;
-  project_id: string;
-  seed_used?: number | null;
-  video_path?: string | null;
-  video_url?: string | null;
-  video_bytes?: number | null;
-  resolution: string;
-  duration_s: number;
-  /** Composer config that actually ran (xem `src/Workflows/flow_catalog.py`). */
-  model?: string;
-  model_label?: string;
-  model_key?: string | null;
-  sub_mode?: string;
-  count?: number;
-  agent_mode?: boolean;
-  frame_path?: string | null;
-  frame_url?: string | null;
-  frame_source?: "provided" | "generated" | "none" | null;
-  image_prompt?: string | null;
-  watermark_removed?: boolean;
-  dry_run?: boolean;
-  elapsed_s?: number;
-  reason?: string | null;
-  hint?: string | null;
-  account_id?: string | null;
 }
 
 // --------------------------------------------------------------------------- //
