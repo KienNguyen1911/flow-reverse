@@ -85,18 +85,27 @@ npm --prefix web run build         # bundle phải build được
 Ghi lại **con số thật** của `pytest` (ví dụ "490 passed, 11 skipped") để đưa vào báo cáo cuối.
 Gate đỏ ⇒ dừng, báo lỗi, **không commit, không push**.
 
-## 4. Chốt nội dung commit với người dùng
+## 4. Commit — **một commit duy nhất**
 
-Trước khi commit, trình bày gọn: nhánh, danh sách file staged, `--stat`, và kết quả 4 gate.
-Nếu người dùng đã nói rõ "merge luôn, đừng hỏi lại nữa" trong lượt đó thì bỏ bước chờ này.
+Mặc định: **gộp tất cả thay đổi của task vào MỘT commit**. Người dùng không cần lịch sử git
+đẹp, chỉ cần lịch sử **đủ hiểu**. Một commit + message rõ ràng là đủ.
 
-Commit theo kiểu message đang dùng trong repo (`type(scope): mô tả`, tiếng Anh, mệnh lệnh cách):
+Không tách theo chủ đề, không `git reset --soft` để chia lại, không amend nhiều lần. Tách
+commit là thứ đã làm một lần merge mất hơn nửa tiếng và còn tạo ra lỗi phụ (file bị xoá
+sống lại trên đĩa sau chuỗi `reset`). Đừng lặp lại.
+
+Ngoại lệ duy nhất — tách khi người dùng **yêu cầu rõ** trong lượt đó. Và **không bao giờ
+squash commit có sẵn của người khác** trên nhánh.
+
+Commit message theo kiểu đang dùng trong repo (`type(scope): mô tả`, tiếng Anh, mệnh lệnh cách),
+phần thân nêu **vấn đề gì và vì sao sửa**, không liệt kê từng file:
 
 ```bash
-git -c core.editor=true commit -m "feat(scope): what changed and why"
+git -c core.editor=true commit -m "fix(images): stop losing money to Flow's filter" -m "<why>"
 ```
 
-Tách commit theo chủ đề khi thay đổi gồm nhiều việc độc lập. Không squash việc của người khác.
+Trình bày gọn trước khi push: nhánh, file staged, và 4 kết quả gate. Nếu người dùng đã nói
+"merge luôn, đừng hỏi lại" thì bỏ bước chờ — push thẳng.
 
 ## 5. Land và kiểm chứng
 
@@ -130,6 +139,13 @@ git --no-optional-locks rev-parse HEAD
 
 ## 7. Bẫy đã gặp thật ở repo này
 
+- **Tách commit làm chậm gấp nhiều lần và sinh lỗi phụ.** Lần land 2026‑11‑12 mất hơn nửa
+  tiếng cho một thay đổi lẽ ra vài phút, vì chia 4 commit theo chủ đề rồi phát hiện chia sai
+  (`agent.py` lọt nhóm sau, file try-on lọt commit sheet) nên phải amend hai lần; chuỗi
+  `git reset --soft` còn làm file đã xoá sống lại trên đĩa (chỉ khác CRLF) và tốn thêm lượt
+  kiểm tra. → **Một commit, xong.** Xem §4.
+- **Chạy gate SAU khi staged xong, không phải trước.** Lần đó gate bị chạy hai lượt vì cây
+  còn đổi sau lượt đầu. Thứ tự đúng: stage → gate → commit → push.
 - **Checkout cá nhân `D:\Dev\rev-flow` có thể đã lệch `origin/main`.** Quan sát 2026‑11‑12:
   `main` ở đó có 2 commit chưa đẩy (`21d1342`, `ab5087d`) đồng thời thiếu 3 commit của `origin/main`
   (`6bc4d30`, `89caae4`, `5b56779`); merge-base là `d640f18`. Land thêm từ worktree sẽ làm khoảng
