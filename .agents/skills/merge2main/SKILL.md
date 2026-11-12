@@ -131,6 +131,15 @@ git --no-optional-locks rev-parse HEAD
 
 ## 6. Báo cáo và dọn dẹp
 
+- **Tắt những gì mình đã bật.** Nếu trong lượt có bật `run.ps1 start` / `restart` (browser +
+  WebUI) thì trước khi kết thúc phải chạy ``.\run.ps1 stop`` — trừ khi người dùng nói rõ họ
+  đang cần dùng tiếp. Một browser CloakBrowser sống chiếm ~1.6 GB RAM (đo 2026‑11‑12) và không
+  tự tắt. Kiểm chứng bằng số, không đoán:
+
+  ```powershell
+  (Get-Process chrome -ErrorAction SilentlyContinue | Measure-Object).Count   # kỳ vọng 0
+  ```
+
 - Nêu SHA đã land, kèm kết quả gate thật đã chạy (và nói rõ gate nào **không** chạy được).
 - Nếu đây là một lần merge do người dùng gọi, xuất đúng một khối `<land-result>` theo skill
   `report-landed`; link commit/target chỉ dùng giá trị đọc được từ git, không tự ghép.

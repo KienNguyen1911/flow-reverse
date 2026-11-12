@@ -15,6 +15,7 @@ from src.BrowserHost.launch_profile import (
     build_command,
     describe_proxy,
     normalize_proxy,
+    profile_browser_pid,
     proxy_to_url,
 )
 from src.Workflows.account_pool import AccountPoolManager, proxy_label
@@ -187,3 +188,54 @@ def test_snapshot_exposes_credential_free_label(tmp_path):
     assert row["has_proxy"] is True
     assert "s3cr3t" not in (row["proxy"] or "")
     assert proxy_label(pool._account("acc_01").proxy).endswith("host:8080")
+
+
+# --------------------------------------------------------------------------- #
+# Guard chống mở tab trùng khi profile đã có browser sống
+# --------------------------------------------------------------------------- #
+
+def test_no_live_browser_for_an_unused_profile(tmp_path):
+    """Profile chưa chạy ⇒ không có PID, launch được bình thường."""
+    assert profile_browser_pid(tmp_path / "user_data") is None
+
+
+def test_live_browser_is_detected_by_user_data_dir(tmp_path):
+    """Tìm đúng tiến trình theo `--user-data-dir`, không đoán theo tên tiến trình.
+
+    Chromium không cho hai tiến trình dùng chung một `--user-data-dir`: lần launch thứ hai
+    sẽ chuyển URL sang cửa sổ cũ và **mở thêm một tab** rồi thoát. Đó là cách một cửa sổ
+    `flow.google.com` tích ra 8 tab trong cùng một phiên làm việc (đo 2026‑11‑12), mỗi lần
+    `run.ps1 start` khi browser còn sống là một tab.
+    """
+    from unittest.mock import MagicMock, patch
+
+    target = (tmp_path / "user_data").resolve()
+
+    def fake_iter(fields):
+        # 1) renderer của CÙNG profile — không phải tiến trình browser
+        r = MagicMock()
+        r.info = {"pid": 11, "name": "chrome.exe",
+                  "cmdline": ["chrome.exe", "--type=renderer", f"--user-data-dir={target}"]}
+        # 2) browser của profile KHÁC
+        o = MagicMock()
+        o.info = {"pid": 22, "name": "chrome.exe",
+                  "cmdline": ["chrome.exe", "--user-data-dir=D:/other/user_data"]}
+        # 3) browser của CHÍNH profile này
+        hit = MagicMock()
+        hit.info = {"pid": 33, "name": "chrome.exe",
+                    "cmdline": ["chrome.exe", f"--user-data-dir={target}", "--remote-debugging-port=4023"]}
+        return iter([r, o, hit])
+
+    fake_psutil = MagicMock()
+    fake_psutil.process_iter.side_effect = fake_iter
+    fake_psutil.NoSuchProcess = type("NoSuchProcess", (Exception,), {})
+    fake_psutil.AccessDenied = type("AccessDenied", (Exception,), {})
+
+    with patch.dict("sys.modules", {"psutil": fake_psutil}):
+        import importlib
+        import src.BrowserHost.launch_profile as lp
+        importlib.reload(lp)
+        try:
+            assert lp.profile_browser_pid(target) == 33
+        finally:
+            importlib.reload(lp)

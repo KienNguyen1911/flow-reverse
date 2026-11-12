@@ -460,6 +460,43 @@ if sys.platform == "win32":
         return pid
 
 
+def profile_browser_pid(user_data_dir: Path) -> Optional[int]:
+    """PID của browser đang sống với *chính* `user_data_dir` này, nếu có.
+
+    Chromium không cho hai tiến trình chia sẻ một `--user-data-dir`. Nếu profile đã có
+    browser sống, lần launch sau sẽ không mở cửa sổ mới: Chromium chuyển tiếp URL sang
+    tiến trình cũ và **mở thêm một tab** rồi thoát ngay. Đó chính là cách 8 tab
+    `flow.google.com` xuất hiện trong một cửa sổ duy nhất (đo 2026‑11‑12: 1 browser,
+    8 tab, 1.6 GB RAM) — mỗi lần `run.ps1 start` hay restart khi browser còn sống là một tab.
+
+    Trả về PID để `main()` báo cho người dùng thay vì cộng thêm tab.
+    """
+    try:
+        import psutil  # có sẵn trong .venv; thiếu thì bỏ qua guard, không chặn launch
+    except ImportError:
+        return None
+
+    target = str(user_data_dir).lower()
+    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            if not (proc.info["name"] or "").lower().startswith("chrome"):
+                continue
+            cmdline = [str(a) for a in (proc.info["cmdline"] or ())]
+            # Renderer/utility/gpu mang cùng `--user-data-dir` như tiến trình cha. Nếu không
+            # loại ra, guard trả về PID của một renderer — ghi vào browser.pid thì `stop`
+            # chỉ giết đứa con, browser cha vẫn sống.
+            if any(a.startswith("--type=") for a in cmdline):
+                continue
+            for arg in cmdline:
+                if arg.lower().startswith("--user-data-dir="):
+                    if arg.split("=", 1)[1].lower() == target:
+                        return proc.info["pid"]
+                    break
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return None
+
+
 def spawn_browser_process(command: list[str], env: Optional[dict[str, str]] = None) -> int:
     """Launch the browser detached from the launcher process.
 
@@ -533,6 +570,32 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
 
     env = build_child_env()
+
+    # Profile đã có browser sống ⇒ đừng spawn thêm. Chromium sẽ chuyển URL sang cửa sổ cũ
+    # và mở một tab mới rồi thoát, nên "khởi động lại" chỉ làm phình tab chứ không khởi động
+    # lại gì cả. Xem `profile_browser_pid`.
+    existing = profile_browser_pid(user_data_dir)
+    if existing:
+        print(
+            f"[launch] !! profile '{args.profile}' đã có browser đang chạy (pid={existing}). "
+            "Không spawn thêm — Chromium chỉ mở thêm một tab trong cửa sổ đó.",
+            file=sys.stderr,
+        )
+        print(
+            "[launch]    Muốn khởi động lại thật: dừng browser trước "
+            "(``.\\run.ps1 stop``) rồi start lại.",
+            file=sys.stderr,
+        )
+        if args.pid_file:
+            try:
+                Path(args.pid_file).write_text(str(existing), encoding="ascii")
+            except OSError:
+                pass
+        # Exit 0, không phải lỗi: trạng thái mong muốn (browser sống cho profile này) đã đạt.
+        # `run.ps1` coi exit != 0 là "khởi động thất bại" và ném lỗi, trong khi đây là no-op
+        # đúng ý — người dùng chỉ cần browser sẵn sàng để attach CDP.
+        return 0
+
     try:
         pid = spawn_browser_process(command, env=env)
     except OSError as exc:
