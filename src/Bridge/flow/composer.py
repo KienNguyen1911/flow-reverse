@@ -31,108 +31,145 @@ class MentionSegment:
         )
 
 
+#: Slot names for the reference declaration block. Index = position in `refs`.
+#: The prompt body refers to these as `<<model>>`, `<<garment>>`, `<<background>>`.
+REF_SLOTS: tuple[str, ...] = ("model", "garment", "background")
+
+_REF_SLOT_PATTERNS: tuple[str, ...] = (
+    r"<<\s*model\s*>>",
+    r"<<\s*garment\s*>>",
+    r"<<\s*background\s*>>",
+)
+
+#: Every spelling that means "reference #k", mapped to its index. The first three
+#: entries mirror `REF_SLOTS`; the rest are conveniences the agent may reach for.
+SLOT_ALIASES: dict[str, int] = {
+    "model": 0, "image1": 0, "image_1": 0, "person": 0,
+    "garment": 1, "clothes": 1, "outfit": 1, "image2": 1, "image_2": 1,
+    "background": 2, "scene": 2, "setting": 2, "image3": 2, "image_3": 2,
+}
+
+
+def slot_name(idx: int) -> str:
+    """The token used in the prompt body for reference `idx` (`<<model>>` …)."""
+    return REF_SLOTS[idx] if idx < len(REF_SLOTS) else f"ref{idx + 1}"
+
+
+#: A reference token in any form the skills or the composer may produce.
+_REF_TOKEN_RE = re.compile(
+    r"<<\s*[A-Za-z0-9_]+\s*>>"          # <<model>>, <<image1>>, <<ref4>>
+    r"|\bImage\s*\d+\b"                 # Image 1 (legacy templates)
+    r"|@[A-Za-z0-9_][A-Za-z0-9_.\-]*"    # @model_ab12 (a rendered chip)
+    r"|\{\{@[^}]*\}\}"                  # {{@model}} (legacy)
+)
+
+
+#: How each slot is announced in the declaration block. The attached image follows the
+#: label, so "Image 1" points at the chip rendered immediately after it.
+DECLARATION_LABELS: tuple[str, ...] = (
+    "Image 1, the person",
+    "Image 2, the outfit",
+    "Image 3, the setting",
+)
+
+
+def _normalise_for_compare(text: str) -> str:
+    """Collapse whitespace and blank out reference tokens so two renderings compare equal.
+
+    A chip renders as `@model_ab12`, an authored prompt says `Image 1` or `<<model>>`.
+    All three point at the same slot, so the completeness check has to ignore the
+    difference — otherwise every legitimate prompt looks truncated. A chip also leaves a
+    stray space before its punctuation, which is why spacing around punctuation is
+    flattened too.
+    """
+    flat = _REF_TOKEN_RE.sub("<ref>", text or "")
+    flat = re.sub(r"\s+([,.;:])", r"\1", flat)
+    return re.sub(r"\s+", " ", flat).strip()
+
+
+#: A declaration line the agent may have written itself, e.g.
+#: `<<model>> = Image 1, the person:`. The sender re-creates these, so any the agent emits
+#: are stripped — otherwise the block appears twice and the second copy is dead text.
+_DECLARATION_LINE_RE = re.compile(r"^\s*<<\s*[A-Za-z0-9_]+\s*>>\s*=\s*[^\n]*\n?", re.MULTILINE)
+
+
+def _strip_declaration_block(prompt: str) -> str:
+    """Drop declaration lines the agent wrote at the top of the prompt.
+
+    The sender owns this block (§2.2.3a of `try-on-image-prompter`): it is the only place a
+    chip can be placed, and it always uses the live alias. An agent that also writes
+    `<<model>> = Image 1, the person` leaves a duplicate whose label refers to nothing.
+    Only the leading run of such lines is removed, so a declaration quoted mid-prompt as an
+    example survives.
+    """
+    body = prompt or ""
+    leading = 0
+    for m in _DECLARATION_LINE_RE.finditer(body):
+        if m.start() != leading:
+            break
+        leading = m.end()
+    return body[leading:].lstrip("\n") if leading else body
+
+
+def _render_body(body: str, refs: list[dict[str, Any]]) -> str:
+    """Keep the body as prose: `<<model>>` etc. survive verbatim.
+
+    The tokens are *not* expanded here. An earlier version replaced a repeated mention with
+    `@alias` text, which put a dozen `@model_518cd6` fragments into the request body — the
+    shape Google rejected with INVALID_ARGUMENT. Plain tokens stay readable to the model and
+    unambiguous to the parser.
+    """
+    return body
+
+
 def parse_prompt_segments(
     prompt: str,
     refs: list[dict[str, Any]],
 ) -> list[Union[TextSegment, MentionSegment]]:
-    """Parse prompt into interleaved TextSegment and MentionSegment items.
+    """Split a prompt into text chunks and the *declaration* chips for its references.
 
-    Maps:
-    - Index 0: `Image 1`, `{{@model}}`, `@model`, or direct `alias_name` -> refs[0]
-    - Index 1: `Image 2`, `{{@garment}}`, `@garment`, or direct `alias_name` -> refs[1]
-    - Index 2: `Image 3`, `{{@scene}}`, `@scene`, or direct `alias_name` -> refs[2]
-    - Index >= 3: `Image {k}`, `{{@ref{k}}}`, `@ref{k}` -> refs[k-1]
+    Layout produced:
 
-    If any reference in `refs` is NOT mentioned anywhere in the prompt text,
-    it is automatically prepended as a MentionSegment at the start of the list.
+        <chip @alias> means <slot label>.      ← one chip per reference, in order
+        \n\n
+        <the prompt body, tokens left as text>
+
+    Why a declaration block instead of a chip at every mention: a chip is a DOM element
+    carrying a `media_id`, and the request builder turns every *repeated* mention into
+    literal `@alias` text — the try-on prompt carried 12 of those. A declaration names each
+    reference once, at the top, in the same order Flow expects, so the body can stay plain
+    prose and refer to `<<model>>` / `<<garment>>` / `<<background>>`.
+
+    References the prompt does not mention are still declared — Flow needs the image
+    attached even when the text never names it.
     """
     if not refs:
         return [TextSegment(prompt)] if prompt else []
 
-    patterns: list[tuple[int, str]] = []
+    chips: list[Union[TextSegment, MentionSegment]] = []
     for idx, ref in enumerate(refs):
-        alias = ref.get("alias_name", "")
-        sub_pats: list[str] = []
-        k = idx + 1
-        if idx == 0:
-            sub_pats.extend([r"\{\{@model\}\}", r"@model\b", r"\bImage\s*1\b"])
-        elif idx == 1:
-            sub_pats.extend([r"\{\{@garment\}\}", r"@garment\b", r"\bImage\s*2\b"])
-        elif idx == 2:
-            sub_pats.extend([r"\{\{@scene\}\}", r"@scene\b", r"\bImage\s*3\b"])
-        else:
-            sub_pats.extend([rf"\{{\{{@ref{k}\}}\}}", rf"@ref{k}\b", rf"\bImage\s*{k}\b"])
-        if alias:
-            sub_pats.extend([rf"\{{\{{@{re.escape(alias)}\}}\}}", rf"@{re.escape(alias)}\b"])
-        patterns.append((idx, "|".join(sub_pats)))
-
-    combined = "|".join(f"(?P<REF_{idx}>{pat})" for idx, pat in patterns)
-
-    segments: list[Union[TextSegment, MentionSegment]] = []
-    used_indices: set[int] = set()
-    last_end = 0
-
-    if prompt:
-        for m in re.finditer(combined, prompt, flags=re.IGNORECASE):
-            start, end = m.span()
-            if start > last_end:
-                segments.append(TextSegment(prompt[last_end:start]))
-            for idx in range(len(refs)):
-                if m.group(f"REF_{idx}") is not None:
-                    alias = refs[idx].get("alias_name", f"ref{idx+1}")
-                    if idx not in used_indices:
-                        # Only FIRST occurrence becomes a rich MentionSegment (chip in ProseMirror).
-                        # This registers the asset into Google Flow's reference shelf (max 3 references).
-                        segments.append(
-                            MentionSegment(
-                                alias_name=alias,
-                                media_id=refs[idx].get("media_id", ""),
-                            )
-                        )
-                        used_indices.add(idx)
-                    else:
-                        # Subsequent occurrences remain as clean plain text (@alias).
-                        # This prevents duplicate mention chips which causes Google Flow
-                        # backend to reject the request with [3] (INVALID_ARGUMENT).
-                        segments.append(TextSegment(f"@{alias}"))
-                    break
-            last_end = end
-
-        if last_end < len(prompt):
-            segments.append(TextSegment(prompt[last_end:]))
-
-    # Prepend any unused references
-    prepends: list[Union[TextSegment, MentionSegment]] = []
-    for idx in range(len(refs)):
-        if idx not in used_indices:
-            prepends.append(
-                MentionSegment(
-                    alias_name=refs[idx].get("alias_name", f"ref{idx+1}"),
-                    media_id=refs[idx].get("media_id", ""),
-                )
+        slot = slot_name(idx)
+        label = DECLARATION_LABELS[idx] if idx < len(DECLARATION_LABELS) else f"reference {idx + 1}"
+        # "<<model>> = Image 1, the person: <chip>" — the token keeps the body readable,
+        # the label tells the model what the attached image actually is.
+        chips.append(TextSegment(f"<<{slot}>> = {label}: "))
+        chips.append(
+            MentionSegment(
+                alias_name=ref.get("alias_name", f"ref{idx + 1}"),
+                media_id=ref.get("media_id", ""),
             )
-            if prompt or segments or idx < len(refs) - 1:
-                prepends.append(TextSegment(" "))
+        )
+        chips.append(TextSegment("\n"))
 
-    final_raw = prepends + segments
-    # Merge consecutive TextSegments and eliminate empties
-    out: list[Union[TextSegment, MentionSegment]] = []
-    for s in final_raw:
-        if isinstance(s, TextSegment):
-            if not s.text:
-                continue
-            if out and isinstance(out[-1], TextSegment):
-                out[-1].text += s.text
-            else:
-                out.append(s)
-        else:
-            out.append(s)
-    return out
+    body = _strip_declaration_block(prompt)
+    if body.strip():
+        chips.append(TextSegment("\n" + _render_body(body.strip(), refs)))
+    return chips
+
 
 
 class ComposerMixin:
     """Prompt typing, image-mode/aspect/model/count selection and the guarded Generate click."""
-
     # -- composer & generate button -------------------------------------------- #
 
     _COMPOSER_POS_JS = (
@@ -157,6 +194,43 @@ class ComposerMixin:
             retries=2,
         )
         return str(txt or "").strip()
+
+    def assert_prompt_complete(self, expected: str) -> None:
+        """Raise if the composer does not hold the whole prompt, before spending credit.
+
+        `type_prompt_with_mentions` pastes chunk by chunk, and a paste can be swallowed by
+        ProseMirror (focus lost, popover open, Escape pressed) without raising. Nothing
+        used to check, so a partial prompt could reach Generate — and Flow then rejects
+        the malformed request with `PUBLIC_ERROR_UNSAFE_GENERATION`, which reads like a
+        safety refusal and sends people hunting the wrong bug.
+
+        Reference tokens are normalised away first: the composer renders a chip as
+        `@model_ab12` where the prompt said `Image 1`, so a literal comparison would fail
+        on every legitimate prompt and the guard would be useless.
+        """
+        want = _normalise_for_compare(expected)
+        have = _normalise_for_compare(self.prompt_value())
+        if not want:
+            return
+        if not have:
+            raise PageInteractionError(
+                "Composer rỗng ngay trước khi Generate — prompt không được nhập vào. Hủy để không tốn credit."
+            )
+        # Head and tail are the cheapest hard evidence that the paste loop ran to the end.
+        # Both are directional — the *intended* head and tail must be present in the
+        # composer. Testing the reverse (`composer tail in intended`) would pass every
+        # prefix truncation, because a truncated prompt is by definition a prefix.
+        head_ok = bool(want[:60]) and want[:60] in have
+        tail_ok = bool(want[-60:]) and want[-60:] in have
+        long_enough = len(have) >= int(len(want) * 0.9)
+        if head_ok and tail_ok and long_enough:
+            return
+        raise PageInteractionError(
+            "Prompt trong composer KHÔNG đầy đủ trước khi Generate "
+            f"(composer {len(have)} ký tự / cần ~{len(want)}). "
+            f"Đầu khớp={head_ok}, cuối khớp={tail_ok}. Hủy để không tốn credit và không "
+            "nhận lỗi UNSAFE_GENERATION giả."
+        )
 
     def type_prompt(self, prompt: str, attempts: int = 4) -> None:
         for attempt in range(attempts):
@@ -563,6 +637,7 @@ class ComposerMixin:
         timeout_s: float = 8.0,
         target_aspect: Optional[str] = None,
         expected_mode: str = "image",
+        expected_prompt: Optional[str] = None,
     ) -> int:
         """Click the composer's Generate button, guarded by the expected generation mode.
 
@@ -572,6 +647,11 @@ class ComposerMixin:
             verifiably in Video mode. (A decoy click in Image mode mints a reCAPTCHA token for the
             image action -> eb1hJf rejected with PUBLIC_ERROR_UNUSUAL_ACTIVITY, and may start an
             unwanted image generation.)
+
+        expected_prompt: when given, the composer must still hold this whole prompt. A paste
+            that silently failed used to reach Generate, and Flow answers a malformed request
+            with PUBLIC_ERROR_UNSAFE_GENERATION — so the user saw a safety refusal for what
+            was really a half-typed prompt.
         """
         if expected_mode not in ("image", "video"):
             raise ValueError(f"expected_mode phải là 'image' hoặc 'video', nhận: {expected_mode!r}")
@@ -606,6 +686,8 @@ class ComposerMixin:
             raise PageInteractionError(
                 f"Composer đổi sang chế độ {final_mode} ngay trước khi Generate (mong đợi {expected_mode}) — hủy click."
             )
+        if expected_prompt is not None:
+            self.assert_prompt_complete(expected_prompt)
         self.page.mouse.click(btn["x"], btn["y"])
         ts = int(time.time() * 1000)
         self._log(f"generate clicked @ {ts} (mode={final_mode or expected_mode})")
