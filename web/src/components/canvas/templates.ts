@@ -116,7 +116,7 @@ function createLookbook8sTemplate(): { nodes: CanvasNode[]; groups: CanvasGroup[
       status: "idle",
     },
 
-    // --- Nhóm 2: Cutout sản phẩm cho lớp card (không phải first frame) ---
+    // --- Nhóm 2: Bảng phối (deliverable, không phải first frame) ---
     {
       id: "lb_ref_garment_upload",
       type: "ref",
@@ -141,7 +141,7 @@ function createLookbook8sTemplate(): { nodes: CanvasNode[]; groups: CanvasGroup[
     {
       id: "lb_node_cutout_front",
       type: "image",
-      label: "Cutout sản phẩm",
+      label: "Bảng phối (coordinate sheet)",
       x: 420,
       y: 690,
       prompt: "",
@@ -152,7 +152,6 @@ function createLookbook8sTemplate(): { nodes: CanvasNode[]; groups: CanvasGroup[
       agentSkillId: "lookbook-item-cutout-prompter",
       isItem: true,
       itemName: "",
-      itemScope: "top",
       videoRatio: "9:16",
       resolution: "1080p",
       imageAspectRatio: "1:1",
@@ -163,10 +162,9 @@ function createLookbook8sTemplate(): { nodes: CanvasNode[]; groups: CanvasGroup[
     },
   ];
 
-  // Mỗi món đúng MỘT node cutout — một mặt trước là đủ, không có node mặt sau.
-  // Thẻ sản phẩm trên timeline chỉ cần một ảnh; ảnh lưng là chi phí credit không đổi lại
-  // được gì (nó chỉ xuất hiện ở một shot 2–3s và có thể bị che bởi chữ).
-  // Template chỉ cấp MỘT node mẫu: người bán có bao nhiêu món cũng dùng lại được bằng
+  // Mỗi bộ phối đúng MỘT node — một ảnh đã có title, callout, DETAIL và palette. Ảnh lưng
+  // là credit không đổi lại được gì: sheet bị chữ che vài giây trên timeline.
+  // Template chỉ cấp MỘT node mẫu: người bán có bao nhiêu bộ cũng dùng lại được bằng
   // cách nhân bản node và đặt `itemName`, không phải khai danh sách vào script.
   const cutoutIds = nodes
     .filter((n) => n.id.startsWith("lb_node_cutout_"))
@@ -181,7 +179,7 @@ function createLookbook8sTemplate(): { nodes: CanvasNode[]; groups: CanvasGroup[
     },
     {
       id: "lb_group_items",
-      name: "Nhóm 2: Cutout sản phẩm (lớp card, không phải first frame)",
+      name: "Nhóm 2: Bảng phối (deliverable, không phải first frame)",
       nodeIds: ["lb_ref_garment_upload", ...cutoutIds],
       color: GROUP_COLORS[1],
     },

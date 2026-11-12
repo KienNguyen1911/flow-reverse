@@ -1,6 +1,4 @@
-import type { CanvasDrawerNode, ItemScope } from "./components/canvas-drawer/types";
-
-export type { ItemScope };
+import type { CanvasDrawerNode } from "./components/canvas-drawer/types";
 
 export interface BreakerInfo {
   cooldown_remaining_s: number;
@@ -405,12 +403,10 @@ export interface GenerateNodePromptRequest {
   clip_id?: string;
   clip_role?: string;
   item_id?: string;
-  /** Node ảnh là ảnh sản phẩm ⇒ agent dùng skill cutout thay vì skill lookbook. */
+  /** Node ảnh là coordinate sheet ⇒ agent dùng skill bộ phối thay vì skill lookbook. */
   is_item?: boolean;
-  /** Tên món — ngữ cảnh duy nhất khi node không gắn ảnh tham chiếu. */
+  /** Tên bộ phối — ngữ cảnh duy nhất khi node không gắn ảnh tham chiếu. */
   item_name?: string;
-  /** Phạm vi cắt món: `top` | `bottom` | `full_set` | `coordinate_sheet`. Bỏ trống ⇒ skill tự chọn. */
-  item_scope?: ItemScope;
   script_path?: string;
 }
 

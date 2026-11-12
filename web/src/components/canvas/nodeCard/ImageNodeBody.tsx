@@ -1,13 +1,12 @@
 import { useMemo } from "react";
 import { Image as ImageIcon, Plus } from "@phosphor-icons/react";
-import type { ItemScope, LibraryItem } from "../../../types";
+import type { LibraryItem } from "../../../types";
 import {
   NodeDropdownPill,
   OrderBadge,
   SeedDropdownPill,
 } from "../../node-badge/NodeBadges";
 import { PromptPreviewCard } from "../../prompt/PromptBits";
-import { ITEM_SCOPE_OPTIONS } from "../constants";
 import type { CanvasNode, FocusLink, HoverRefInfo } from "../types";
 import { PromptAgentRow } from "./PromptAgentRow";
 import { sourceLabel, type NodeSources } from "./nodeSources";
@@ -80,14 +79,6 @@ export function ImageNodeBody({
       hint: `x${c}`,
     }));
   }, [imageCounts]);
-
-  const itemScopeItems = useMemo(() => {
-    return ITEM_SCOPE_OPTIONS.map((opt) => ({
-      value: opt.value,
-      label: opt.label,
-      hint: opt.hint,
-    }));
-  }, []);
 
   return (
     <>
@@ -181,33 +172,25 @@ export function ImageNodeBody({
       />
 
       {/* Ô này KHÔNG gắn ảnh — ảnh tham chiếu nằm ở strip pill phía trên.
-          Nó chỉ đánh dấu: ảnh node này sinh ra là **ảnh sản phẩm**, nên được chép vào
-          thư viện `out/items/<project>/` ngay khi sinh xong. Tên món quyết định tên file.
-          Phạm vi cắt món (Áo/Quần/Cả bộ) đã chuyển vào Drawer cho gọn node. */}
+          Nó chỉ đánh dấu: ảnh node này sinh ra là **bảng phối**, nên được chép vào
+          thư viện `out/items/<project>/` ngay khi sinh xong. Tên bộ phối quyết định tên file. */}
       {n.type === "image" && (
         <div className="flex items-center gap-1.5 min-w-0">
           <label className="flex items-center gap-1.5 cursor-pointer select-none shrink-0">
             <input
               type="checkbox"
               checked={!!n.isItem}
-              onChange={(e) =>
-                actions.onFieldChange({
-                  isItem: e.target.checked,
-                  // Bật cờ thì mặc định luôn một phạm vi: để null nghĩa là agent
-                  // không được chỉ định món nào và quay lại lỗi "ra chiếc áo".
-                  ...(e.target.checked ? { itemScope: n.itemScope ?? "top" } : {}),
-                })
-              }
+              onChange={(e) => actions.onFieldChange({ isItem: e.target.checked })}
               className="h-3 w-3 accent-[var(--acc)] cursor-pointer"
             />
-            <span className="text-[10px] font-semibold text-mut whitespace-nowrap">Ảnh sản phẩm</span>
+            <span className="text-[10px] font-semibold text-mut whitespace-nowrap">Bảng phối</span>
           </label>
           {n.isItem && (
             <input
               type="text"
               value={n.itemName ?? ""}
               onChange={(e) => actions.onFieldChange({ itemName: e.target.value })}
-              placeholder="Tên món…"
+              placeholder="Tên bộ phối…"
               list="canvas-item-library"
               className="h-6 min-w-0 flex-1 rounded-ctl border border-line2 bg-panel2 px-1.5 text-[10px] text-fg focus:border-acc outline-none"
               title="Tên file trong thư viện: bỏ dấu, thường hoá, cách nhau bằng _"
@@ -306,21 +289,6 @@ export function ImageNodeBody({
               onOpenDrawer={() => actions.onOpenDrawer(n.id, "config")}
             />
           </>
-        )}
-        {n.isItem && (
-          <NodeDropdownPill
-            tone="warn"
-            value={`Sản phẩm · ${ITEM_SCOPE_OPTIONS.find((o) => o.value === (n.itemScope ?? "top"))?.label ?? "Áo"}`}
-            title="Ảnh sản phẩm lưu vào thư viện items/ — bấm để đổi phạm vi"
-            id="itemScope"
-            isOpen={dropdown.open === "itemScope"}
-            onToggle={() => dropdown.toggle("itemScope")}
-            onClose={dropdown.close}
-            header="Phạm vi sản phẩm"
-            items={itemScopeItems}
-            selectedValue={n.itemScope ?? "top"}
-            onSelect={(val) => actions.onFieldChange({ itemScope: val as ItemScope })}
-          />
         )}
       </div>
     </>

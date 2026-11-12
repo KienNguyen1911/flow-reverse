@@ -57,8 +57,8 @@ def _import_item_images(
     2. Chỉ có `name` ⇒ đặt tên theo slug của tên món (`ao_kieu_nu_donna.png`). Đây là
        trường hợp phổ biến: người bán có nhiều món, không khai hết vào script.
 
-    Không tách nền ở đây: ảnh Flow sinh ra đã là flat-lay nền trơn, và matting vẫn cần
-    mắt người duyệt (`scripts.cutout_items.py`).
+    Không tách nền ở đây: matting cần mắt người duyệt (`scripts.cutout_items.py`),
+    và coordinate sheet có chữ nằm sẵn trong pixel nên không dùng làm cutout được.
     """
     by_key: dict[str, ItemRef] = {}
     for ref in item_refs:
@@ -121,8 +121,9 @@ def _import_item_images(
 
         if not _has_alpha(dest):
             warnings.append(
-                f"{rel} là ảnh từ Flow (nền trơn, chưa có alpha) — chạy "
-                "`python -m scripts.cutout_items` để tách nền trước khi dùng làm card."
+                f"{rel} chưa có kênh alpha — chạy `python -m scripts.cutout_items` "
+                "để tách nền trước khi dùng làm card. Nếu ảnh này là coordinate sheet "
+                "thì đừng tách: chữ sẽ bị cắt mất."
             )
     return imported, extra_items
 
@@ -162,9 +163,9 @@ def _copy_items(
                 # Nói rõ vì sao thiếu, để người dựng không đi tìm file vô vọng: ảnh Shopee
                 # là lifestyle có người mẫu, tách nền trực tiếp ra người chứ không ra áo.
                 warnings.append(
-                    f"thiếu cutout `{rel}` — chạy node ảnh với skill "
-                    "`lookbook-item-cutout-prompter` (sinh flat-lay trên nền trơn từ ảnh "
-                    "Shopee), rồi `python -m scripts.cutout_items` để tách nền."
+                    f"thiếu cutout `{rel}` — cần ảnh MỘT món trên nền trơn, rồi chạy "
+                    "`python -m scripts.cutout_items` để tách nền. Lưu ý: coordinate sheet "
+                    "có chữ nằm sẵn trong pixel nên không dùng làm cutout được."
                 )
                 continue
             info = probe_media(p)

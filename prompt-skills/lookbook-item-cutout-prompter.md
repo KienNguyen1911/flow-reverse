@@ -1,118 +1,54 @@
 ---
-name: Item Cutout & Coordinate Sheet (From Lifestyle Photo)
-description: Sinh prompt tạo ảnh sản phẩm phẳng (flat-lay) trên nền trơn từ ảnh lifestyle Shopee làm reference, để bước sau tách nền bằng rembg. Cấm người mẫu, cấm bối cảnh. Plate `top`/`bottom`/`full_set` cấm chữ; chế độ `coordinate sheet` (§2.2) là ngoại lệ có chủ đích — cả bộ + typography editorial, KHÔNG đem rembg. Dùng cho cột item card và ảnh bìa bộ phối trong HyperFrames.
+name: Coordinate Sheet (Lookbook Board)
+description: Sinh prompt dựng **coordinate sheet** — một ảnh bộ phối dọc 2:3 trên nền trơn, có ghost-mannequin, callout đánh số, 3 ô DETAIL và palette 5 màu. Đây là deliverable (ảnh bìa, gallery, social), KHÔNG phải ảnh plate: không đem rembg, không làm first frame video. Skill chỉ có đúng một đường ra này; ảnh plate flat-lay không còn thuộc phạm vi.
 ---
 
-# Item Cutout Prompter — Flat-Lay Plate & Coordinate Sheet
+# Coordinate Sheet Prompter — Bảng phối đồ có typography
 
-Mục đích: biến ảnh **lifestyle có người mẫu** (ảnh Shopee) thành ảnh **chỉ có món đồ trên nền trơn**,
-để `scripts/cutout_items.py` tách nền bằng `rembg` (model u2net **general**, không phải human_seg).
-Đường `coordinate sheet` (§2.2) là **deliverable có typography** — không đi qua bước matting này.
+Mục đích: biến 1–3 ảnh **lifestyle có người mẫu** (ảnh Shopee) thành **một** ảnh bộ phối hoàn chỉnh,
+có chữ, dùng làm bìa / gallery / social.
 
 ```text
-ảnh Shopee lifestyle ──▶ [skill này] ──▶ item_plate.png ──▶ rembg ──▶ item_cutout.png (alpha)
+ảnh Shopee lifestyle ──▶ [skill này] ──▶ coordinate_sheet.png
 ```
 
-Skill có **hai đường ra**, đừng lẫn:
+Ảnh ra là **deliverable cuối**, không phải nguyên liệu cho bước sau:
 
-| Đường | Dùng cho | Qua rembg? | Chữ trong pixel? |
-| :--- | :--- | :--- | :--- |
-| **Plate** — `top` / `bottom` / `full_set` (§2.1, §3.1–3.2) | card sản phẩm, layer dựng phim | Có (trừ `full_set`) | **Không** |
-| **Sheet** — `coordinate sheet` (§2.2, §3.4) | ảnh bìa, gallery, social, reference cho designer | **Không bao giờ** | **Bắt buộc** |
+| Câu hỏi | Trả lời |
+| :--- | :--- |
+| Có chữ trong pixel? | **Bắt buộc** — title, callout `01`…`0N`, `DETAIL`, `COLOR PALETTE` |
+| Qua `rembg` / `scripts/cutout_items.py`? | **Không bao giờ** — mask sẽ ăn cả chữ |
+| Làm first frame video? | **Không** — chữ dính pixel, không sửa/localize được |
 
 ---
 
-## 0. Vì sao KHÔNG tách nền trực tiếp từ ảnh Shopee
+## 0. Vì sao dựng sheet thay vì cắt món từ ảnh lifestyle
 
-Model tách nền phổ biến (`u2net_human_seg`) được huấn luyện cho **người**. Chạy trên ảnh lifestyle nó
-sẽ tách nguyên cả người mẫu ra khỏi bối cảnh — đúng cái ta không muốn. Kể cả model general cũng sẽ giữ
-lại tay, tóc, quán café đè lên vải.
+Model tách nền phổ biến (`u2net_human_seg`) được huấn luyện cho **người**: chạy trên ảnh lifestyle
+nó giữ nguyên cả người mẫu. Kể cả `u2net_cloth_seg` (chuyên tách quần áo) cũng chỉ ra *chiếc áo đang
+mặc* — méo theo tư thế, thủng ở chỗ hở da, rác dưới gấu.
 
-Ngay cả `u2net_cloth_seg` — model chuyên tách **quần áo** khỏi người mặc — cũng không cứu được: đo thật
-trên `HAVANA/6.jpg` nó ra đúng chiếc áo nhưng méo theo tư thế người mẫu, thủng ở chỗ hở da, và còn rác
-dưới gấu. Đó là mask của *chiếc áo đang mặc*, không phải ảnh sản phẩm.
-
-Vì vậy luôn tách 2 bước: **AI dựng lại món đồ trên nền trơn → mới matting**. Ảnh trung gian sạch thì
-matting mới sạch. Nhiều khi bước matting còn **không cần**: ảnh Flow đã là sản phẩm trên nền trơn,
-đúng thứ lớp dựng cần.
+Sheet không cần tách gì: model **dựng lại** cả bộ trên nền trơn rồi tự đặt chữ lên. Vì vậy bước
+matting không những không cần mà còn **phá** sheet — rembg coi chữ là một phần chủ thể và cắt mất.
 
 ---
 
 ## 1. Input
 
-- 1–3 ảnh lifestyle của **đúng món đồ đó** (ảnh sản phẩm thật của người bán).
-- Tên món (`item.name`) và góc nhìn cần (`front` / `back` / `detail`).
-- Riêng `coordinate sheet` (§2.2): ảnh phải thấy **cả bộ** — áo, quần, túi, giày — vì sheet
-  không có chỗ cho món suy đoán.
+- 1–3 ảnh lifestyle của **đúng bộ đồ đó** (ảnh sản phẩm thật của người bán).
+- Ảnh phải thấy **cả bộ** — áo, quần, túi, giày — vì sheet không có chỗ cho món suy đoán.
+- Tên bộ phối (title) và số hiệu (`NO.`) nếu có.
 
-Ảnh reference phải cho thấy **hình dáng thật và chất liệu vải**. Không dùng ảnh bị che khuất phần lớn
-(ví dụ áo ngoài che gần hết áo trong) trừ khi chính món đó là món ngoài.
+Ảnh reference phải cho thấy **hình dáng thật và chất liệu vải**. Ảnh bị che khuất phần lớn (áo ngoài
+che gần hết áo trong) sẽ làm sheet thiếu món — khi đó yêu cầu thêm ảnh, đừng đoán.
 
 ---
 
 ## 2. Nguyên tắc
 
-**BẮT BUỘC:**
+### 2.1 Bố cục bắt buộc
 
-- Chỉ **một** món đồ, chính giữa khung, chiếm 60–80% diện tích — **trừ khi** người dùng
-  chọn phạm vi `full_set` (§2.1) hoặc gọi đích danh `coordinate sheet` (§2.2). Mặc định vẫn là một món.
-- Nền **trơn tuyệt đối** — màu trắng hoặc xám nhạt đồng nhất, không gradient mạnh, không bóng đổ phức tạp.
-- Ánh sáng phẳng, đều (flat even lighting) để giữ đúng màu vải.
-- Phom dáng giữ **đúng** như ảnh reference: cùng cổ áo, cùng độ dài, cùng chi tiết (nơ, ren, dây).
-- Món đồ được "trải phẳng" (flat-lay) hoặc treo trên móc (ghost mannequin) — chọn **một** kiểu và nói rõ.
-
-**CẤM TUYỆT ĐỐI** (áp dụng cho **plate**; sheet §2.2 bỏ đúng hai dòng "Chữ / UI" và "Ghép"):
-
-| Nhóm | Từ khoá cấm |
-| :--- | :--- |
-| Người | `model`, `person`, `woman`, `mannequin with face`, `hands`, `arms wearing`, `body`, `skin` |
-| Bối cảnh | `cafe`, `street`, `outdoor`, `room`, `furniture`, `plants`, `background scenery` |
-| Chữ / UI | `text`, `label`, `price tag`, `logo`, `watermark`, `banner`, `brand name` |
-| Ghép | `collage`, `multiple items`, `grid`, `outfit set on a model`, `two pieces worn together` |
-
-Nếu sản phẩm là **set nhiều món**, tạo **nhiều ảnh riêng**, mỗi ảnh một món. Không ghép chung,
-trừ `full_set` (§2.1) và `coordinate sheet` (§2.2).
-
-### 2.1 Phạm vi (`item_scope`) — chọn món nào lên ảnh
-
-Ảnh Shopee thường là **cả bộ trên người mẫu**. Không nói rõ món nào thì model tự chọn vật thể
-nổi bật nhất — thực tế luôn ra **chiếc áo** (nó chiếm nhiều diện tích và tương phản nhất), không
-bao giờ ra quần. Vì vậy phạm vi là **bắt buộc**, không phải tuỳ chọn ngẫu nhiên.
-
-| `item_scope` | Phải làm | Tuyệt đối không có |
-| :-- | :-- | :-- |
-| `top` | Chỉ món **mặc trên**: áo, camisole, cardigan, khoác | quần, váy, shorts |
-| `bottom` | Chỉ món **mặc dưới**: quần, váy, shorts | áo, camisole, cardigan |
-| `full_set` | **Cả bộ** trên một ảnh, các món xếp cạnh nhau không chồng lấn | người, bối cảnh, chữ |
-
-Ngoại lệ `full_set`: bỏ quy tắc "một món" nhưng **giữ** các quy tắc còn lại (nền trơn, cấm
-người, cấm chữ, giữ đúng phom/màu). Ảnh full-set **không đem tách nền** bằng `cutout_items` —
-rembg coi cả cụm là một khối, alpha dính liền và không dùng được làm card. Dùng thẳng ảnh nền
-trơn. Ngoại lệ thứ hai — `coordinate_sheet` — nằm ở §2.2.
-
-Nếu không xác định được món theo phạm vi (ảnh ref chỉ có một món, hoặc món không nhìn thấy), hỏi
-lại bằng cách chọn món **thấy rõ nhất trong khung** và nói rõ trong prompt điều đã chọn.
-
-### 2.2 Chế độ `coordinate sheet` — cả bộ + typography (deliverable)
-
-> [!WARNING]
-> Đây là chỗ **duy nhất** được phép có chữ trong pixel. Nó cố tình phá hai luật của plate:
-> "chỉ một món" và "cấm chữ". Chế độ này chỉ bật khi người dùng chọn phạm vi **Bộ phối**
-> (`coordinate_sheet`) trên node ảnh sản phẩm, hoặc gọi đích danh *coordinate sheet* /
-> *style board* / *bảng phối đồ*. Đừng tự chọn khi người dùng chỉ muốn ảnh sản phẩm — card
-> cần alpha và không được dính chữ.
-
-| | Plate (`top` / `bottom` / `full_set`) | Sheet (§2.2) |
-| :-- | :-- | :-- |
-| Số món | 1 (hoặc cả bộ rời, không chồng) | 2–6 món, xếp lớp có chủ đích |
-| Chữ | Cấm tuyệt đối | **Bắt buộc**: title, số callout, label, `DETAIL`, `COLOR PALETTE` |
-| Nền | Trơn, không chi tiết | Trơn, nhưng có grid + leader line + swatch |
-| Đầu ra | Nguyên liệu cho rembg / layer dựng phim | Ảnh hoàn chỉnh (bìa, gallery, social) |
-| rembg | Có (trừ `full_set`) | **Không bao giờ** — mask sẽ ăn cả chữ |
-| First frame video | Được (plate mode) | **Không** — chữ dính pixel, không sửa/localize được |
-
-**Bố cục bắt buộc** — khung dọc 2:3 (1:2 nếu cần nhiều khoảng trắng), lề 6–8% mỗi cạnh, không
-cắt món nào:
+Khung dọc 2:3 (1:2 nếu cần nhiều khoảng trắng), lề 6–8% mỗi cạnh, không cắt món nào:
 
 | Vùng | Nội dung |
 | :-- | :-- |
@@ -123,7 +59,7 @@ cắt món nào:
 | Cột phải, nửa dưới | 3 ô `DETAIL` vuông, viền hairline, là **zoom của chính món đã vẽ** |
 | Dưới trái | 5 swatch tròn, sáng → tối, swatch trắng có viền, caption `COLOR PALETTE` |
 
-**Luật nội dung:**
+### 2.2 Luật nội dung
 
 - **Ghost mannequin, không phải flat-lay phẳng lì.** Quần áo giữ phom 3D như đang mặc (cổ dựng,
   tay áo có khối, ống quần có độ rủ) nhưng **không có thân**: không da, không tóc, không tay,
@@ -139,12 +75,14 @@ cắt món nào:
 - **Không thêm món không có trong reference** (thắt lưng, dây chuyền, mũ, găng) — kể cả khi
   bố cục trông trống.
 
-**Ba lỗi làm hỏng sheet** (phải chặn ngay trong prompt, đừng để model tự quyết):
+### 2.3 Ba lỗi làm hỏng sheet
 
-1. **Negative của plate giết sheet.** `no text`, `no collage`, `no grid`, `no multiple items`
-   trong negative sẽ xoá đúng thứ ta cần. Negative của sheet **phải bỏ 4 cụm đó**.
+Phải chặn ngay trong prompt, đừng để model tự quyết:
+
+1. **Dán negative của ảnh plate.** `no text`, `no collage`, `no grid`, `no multiple items` xoá
+   đúng thứ sheet cần. Negative của sheet **phải bỏ 4 cụm đó**.
 2. **Model "sửa" chi tiết lạ.** Keyhole hở, gấu xẻ ngược, cạp trễ, ống loe — model có xu hướng
-   làm chúng bình thường lại. Khoá bằng khối `FIDELITY LOCKS` (§3.4), mỗi món 1–2 khoá.
+   làm chúng bình thường lại. Khoá bằng khối `FIDELITY LOCKS` (§3.1), mỗi món 1–2 khoá.
 3. **Detail crop thành món thứ hai.** Không nói rõ "tight zoom of the same piece" thì model vẽ
    thêm một chiếc túi/áo mới trong ô `DETAIL`, và sheet thành collage sai.
 
@@ -152,33 +90,7 @@ cắt món nào:
 
 ## 3. Template prompt
 
-### 3.1 Một món — trải phẳng (`top` / `bottom`)
-
-Trong `<ITEM DESCRIPTION FROM REFERENCE>` phải gọi tên món **theo phạm vi**, và câu mở đầu phải
-nói rõ loại món (upper garment / lower garment) để model không tự chọn món khác.
-
-```text
-Flat-lay product photograph of a single <UPPER GARMENT | LOWER GARMENT>: <ITEM DESCRIPTION FROM REFERENCE>. Only this one piece appears; the rest of the outfit is excluded entirely. The garment is laid perfectly flat, centered in frame, occupying 60-80% of the image area, fully visible from hem to waistband with no cropping. Seamless pure white studio background, flat even softbox lighting, no harsh shadows, no reflections on the background. Fabric texture, color, stitching, trim and neckline must match the reference photo exactly. Shot top-down with an 85mm lens, sharp focus across the entire garment.
-
-Negative: no person, no model, no hands, no mannequin, no face, no body, no skin, no background scenery, no furniture, no props, no text, no letters, no labels, no price tags, no logo, no watermark, no banner, no collage, no multiple items, no grid, no second garment, <the rest of the outfit>, no shadows on background.
-```
-
-### 3.2 Cả bộ trên một ảnh (`full_set` — ngoại lệ có chủ đích)
-
-```text
-Flat-lay product arrangement of a complete coordinated set: <TOP ITEM>, and <BOTTOM ITEM>. Both pieces are laid perfectly flat on the same surface, arranged next to each other without overlapping — top placed above, bottom below, with clear even spacing so both silhouettes are fully visible and uncropped. Seamless pure white studio background, flat even softbox lighting, no harsh shadows. Fabric texture, color, stitching, trim and neckline of every piece must match the reference photo exactly. Shot top-down with an 85mm lens, sharp focus across the whole set.
-
-Negative: no person, no model, no hands, no mannequin, no face, no body, no skin, no background scenery, no furniture, no props, no text, no letters, no labels, no price tags, no logo, no watermark, no banner, no overlapping garments, no shadows on background.
-```
-
-### 3.3 Chi tiết vải (tuỳ chọn, cho magnifier trong composition)
-
-```text
-Extreme close-up macro photograph of the fabric of <ITEM>: <FABRIC DETAIL>, filling the entire frame,
-even flat lighting, showing weave and texture clearly. No person, no text, no props, seamless neutral background.
-```
-
-### 3.4 Coordinate sheet — cả bộ + typography (`coordinate sheet`)
+### 3.1 Coordinate sheet
 
 Điền theo thứ tự: **nhìn reference → tả đúng thứ thấy → mới khoá chi tiết**. Bốn khối bắt buộc:
 
@@ -216,13 +128,13 @@ DO NOT ADD: <THINGS NOT PRESENT IN THE REFERENCE>.
 TYPE & LIGHT
 Two typefaces only: the fashion serif for title, issue number and callout numerals; a thin geometric sans-serif uppercase for every label. All type is black or mid-grey, never coloured, never outlined, never inside a card. Flat high-key softbox lighting, one soft contact shadow directly under each piece, no gradient on the background, no coloured cast. Materials must read true: <FABRIC 1>, <FABRIC 2>, <FABRIC 3>. Photorealistic e-commerce editorial, 8k, sharp edge to edge.
 
-Negative: no person, no model, no mannequin body, no dress form, no torso, no neck, no face, no head, no hair, no hands, no arms, no legs, no skin, no feet, no hanger, no clothes rail, no street, no car, no interior, no props, no price tag, no brand logo, no watermark, no extra garments, no duplicated pieces, no overlapping garments in the hero stack, no cropped hero pieces, no warped lettering, no misspelled words, no gibberish text, no long paragraphs, no coloured typography, no drop-shadowed text.
+Negative: no person, no model, no mannequin body, no dress form, no torso, no neck, no face, no head, no hair, no hands, no arms, no legs, no skin, no feet, no hanger, no clothes rail, no street, no car, no interior, no props, no price tag, no extra garments, no duplicated pieces, no overlapping garments in the hero stack, no cropped hero pieces, no warped lettering, no misspelled words, no gibberish text, no long paragraphs, no coloured typography, no drop-shadowed text.
 ```
 
-### 3.5 Ví dụ đã điền — mức chi tiết kỳ vọng
+### 3.2 Ví dụ đã điền — mức chi tiết kỳ vọng
 
 Bộ Y2K: áo keyhole trắng + jean ống loe cạp trễ + túi đen stud + giày nhọn đen. Đây là **phần
-`OUTFIT` + khoá**; layout giữ nguyên theo §3.4.
+`OUTFIT` + khoá**; layout giữ nguyên theo §3.1.
 
 ```text
 OUTFIT
@@ -244,39 +156,18 @@ Trả về **chỉ một khối code** chứa prompt tiếng Anh:
 
 ````text
 ```text
-<plate prompt | coordinate sheet prompt>
+<coordinate sheet prompt>
 ```
 ````
 
-Nếu script yêu cầu nhiều món, trả về nhiều khối code, mỗi khối một món, theo đúng thứ tự `item.id`.
+Không lời chào, không giải thích, không header dạng `[Prompt 1]`. Một bộ phối = một ảnh = một khối.
 
-**Mỗi món chỉ một ảnh — mặt trước.** Thẻ sản phẩm trên timeline hiện 2–3s và thường bị chữ che;
-sinh thêm ảnh lưng là credit không đổi lại được gì. Đừng đề xuất phương án mặt sau.
-
-Chế độ `coordinate sheet` cũng trả về **một** khối duy nhất. Ảnh đó là deliverable: **không** đưa
-vào `cutout_items`, **không** dùng làm first frame. Nếu sheet xuất hiện trong video thì chữ đã nằm
-trong pixel — muốn sửa hoặc localize phải sinh lại ảnh.
+Ảnh đó là deliverable: **không** đưa vào `cutout_items`, **không** dùng làm first frame. Nếu sheet
+xuất hiện trong video thì chữ đã nằm trong pixel — muốn sửa hoặc localize phải sinh lại ảnh.
 
 ---
 
 ## 5. Tiêu chí nghiệm thu
-
-### 5.1 Plate (trước khi chạy rembg)
-
-- [ ] Đúng **phạm vi** đã chọn: `top` không còn quần/váy, `bottom` không còn áo,
-      `full_set` có đủ các món và không chồng lấn. Đây là mục hay trượt nhất.
-- [ ] Không người, không tay.
-- [ ] Nền trơn một màu, không chi tiết.
-- [ ] Phom dáng + chi tiết khớp ảnh reference (đối chiếu cạnh nhau).
-- [ ] Không chữ, không giá, không logo người bán.
-- [ ] Cạnh dài ≥ 800px.
-
-Trượt mục nào → sửa prompt, chạy lại. Đừng chuyển sang rembg với ảnh sai: matting chỉ khuếch đại lỗi.
-
-Sau rembg, mở `items/_review.png` (contact sheet) và kiểm lại từng món: quai dép, viền ren, dây áo
-phải còn nguyên. Mất chi tiết mảnh → chụp lại ảnh gốc trên nền trơn, không vá tay.
-
-### 5.2 Coordinate sheet (deliverable — **không** rembg)
 
 - [ ] Đủ **N callout**, số `01`…`0N` theo thứ tự mặc, mỗi số có label 2–4 từ in hoa.
 - [ ] Hero stack đủ món, không cắt, không món nào che silhouette món khác (giày được thò dưới gấu).
@@ -289,3 +180,4 @@ phải còn nguyên. Mất chi tiết mảnh → chụp lại ảnh gốc trên 
 
 Sheet trượt vì chữ → **giảm số label và độ dài label**, đừng thêm mô tả. Model không typeset được
 đoạn văn, và càng nhiều chữ càng dễ ra ký tự rác.
+

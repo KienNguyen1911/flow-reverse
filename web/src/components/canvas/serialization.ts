@@ -1,13 +1,11 @@
-import type { ItemScope, WorkspaceCanvasState } from "../../types";
-import { ITEM_SCOPE_OPTIONS, STORAGE_KEY } from "./constants";
+import type { WorkspaceCanvasState } from "../../types";
+import { STORAGE_KEY } from "./constants";
 import { clamp } from "./geometry";
 import { getNodeSourceIds } from "./graph";
 import type { CanvasGroup, CanvasNode, Graph, NodeStatus, NodeType, View } from "./types";
 
 // Conversion between the live graph and its persisted shapes (localStorage
 // legacy graph, workspace canvas state). Defensive against old/partial data.
-
-const ITEM_SCOPES: readonly string[] = ITEM_SCOPE_OPTIONS.map((o) => o.value);
 
 const NODE_TYPES: ReadonlySet<string> = new Set(["ref", "image", "video", "last_frame"]);
 const NODE_STATUSES: ReadonlySet<string> = new Set([
@@ -147,9 +145,6 @@ export function canvasStateToGraph(state?: WorkspaceCanvasState | null): {
       runId: optionalStr(r.runId),
       isItem: typeof r.isItem === "boolean" ? r.isItem : false,
       itemName: optionalStr(r.itemName),
-      itemScope: ITEM_SCOPES.includes(String(r.itemScope) as ItemScope)
-        ? (r.itemScope as ItemScope)
-        : null,
     });
   }
 

@@ -141,4 +141,6 @@ Nếu muốn dọn thì nên làm thành một việc riêng.
   gọi chúng để lazy-create Flow project cho mỗi workspace project, theo từng account.
 - `gemini_bridge` giữ lại **đúng 2 parser thuần**; toàn bộ phần CDP/Playwright của notebook Nabi
   đã xoá cùng try-on.
-- `scripts/cutout_items.py` vẫn dùng được (tách nền sản phẩm), không liên quan try-on.
+- `scripts/cutout_items.py` vẫn dùng được (tách nền sản phẩm), nhưng **không còn là bước
+  nào của pipeline**: skill `lookbook-item-cutout-prompter` giờ chỉ sinh coordinate sheet,
+  và sheet có chữ nằm sẵn trong pixel nên rembg sẽ cắt luôn chữ.

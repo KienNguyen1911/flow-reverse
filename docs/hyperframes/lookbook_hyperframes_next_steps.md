@@ -265,15 +265,12 @@ Bước 1–2 chạy song song được với Bước 3. Bước 8 phải làm *
 
 ## Phụ lục — Những gì đã sửa trong `prompt-skills/` lượt này
 
-### `lookbook-thumbnail-prompter.md` (trước là `lookbook-image-prompter.md`)
+### `lookbook-thumbnail-prompter.md` — **đã xoá** (trước là `lookbook-image-prompter.md`)
 
-- **Mode A "model only" thành mặc định.** Prompt chỉ sinh người mẫu toàn thân trong studio,
-  cấm tuyệt đối chữ/UI/cột item. Có bảng phân vai "ai làm gì" để không ai nhầm lại.
-- **Mode B "board-with-sidebar"** giữ làm tuỳ chọn cho ảnh bìa, kèm cảnh báo rõ: **không dùng
-  làm nguồn video** (chữ méo + mất 1/3 khung).
-- Bối cảnh studio khoá cứng để 2 clip nối không lộ mối.
-- Thêm mục "lấy 5 cutout ở đâu" — chỉ rõ lấy từ ảnh sản phẩm thật, không nhờ AI vẽ.
-- Negative prompt cấm đúng bộ từ khoá bố cục.
+File này từng có hai mode: "model only" (mặc định) và "board-with-sidebar" (board NABI chia
+đôi 1/3 + 2/3). Nó **không dùng được cho video** — chữ dính pixel và phải crop mất 1/3 khung,
+bề ngang thật chỉ còn ~453px. Vì cột item giờ do lớp dựng lo, ảnh bìa lấy thẳng từ canvas, nên
+file đã bị xoá thay vì giữ lại một skill chỉ phục vụ ảnh bìa.
 
 ### `lookbook-video-prompter.md`
 

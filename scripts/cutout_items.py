@@ -1,14 +1,17 @@
-"""Tách nền cutout sản phẩm từ ảnh flat-lay do AI sinh.
+"""Tách nền cutout sản phẩm từ ảnh flat-lay có sẵn.
+
+Công cụ **độc lập**, không phải bước nào của pipeline bảng phối: coordinate sheet
+(`lookbook-item-cutout-prompter`) có chữ nằm sẵn trong pixel, rembg sẽ cắt luôn chữ.
+Dùng script này khi bạn đã có ảnh sản phẩm trên nền trơn và muốn card có alpha thật.
 
 Vì sao **không** dùng `npx hyperframes remove-background`:
     Lệnh đó chạy `u2net_human_seg` — model huấn luyện cho **người**. Ảnh nguồn Shopee là
     ảnh lifestyle có người mẫu, chạy model đó sẽ tách **cả người**, không tách chiếc áo.
     Ngay cả khi đã có ảnh flat-lay sạch, `human_seg` vẫn là model sai loại.
 
-Quy trình đúng (3 bước, có mắt người ở giữa):
-    A. Chọn ảnh Shopee làm reference.
-    B. Dùng node ảnh + skill `lookbook-item-cutout-prompter` sinh ảnh flat-lay trên nền trơn.
-    C. Chạy script này: rembg (u2net **general**) → kiểm tra → contact sheet để duyệt.
+Quy trình (có mắt người ở giữa):
+    A. Có ảnh một món trên nền trơn (chụp lại, hoặc thuê ngoài tách).
+    B. Chạy script này: rembg (u2net **general**) → kiểm tra → contact sheet để duyệt.
 
 Script cố ý nằm ngoài `src/Workflows/` (không thuộc vòng production): chất lượng matting
 phụ thuộc ảnh nguồn và cần mắt người duyệt trước khi đưa vào bộ dựng phim.
@@ -155,9 +158,11 @@ def _check_source_flatlay(path: Path, session=None) -> dict:
 def _components(alpha, min_area_pct: float) -> int:
     """Đếm số mảnh rời đáng kể trong alpha — để nhận ra ảnh **cả bộ**.
 
-    Ảnh full-set (`item_scope=full_set`) có 2+ món xếp cạnh nhau, mỗi món là một đảo
-    alpha riêng. rembg vẫn tách được, nhưng khung chữ nhật của bbox gộp cả bộ nên card
-    sản phẩm sẽ hở khoảng trống giữa các món — không dùng được cho composition.
+    Ảnh nhiều món xếp cạnh nhau có 2+ món, mỗi món là một đảo alpha riêng. rembg vẫn
+tách
+    được, nhưng khung chữ nhật của bbox gộp cả bộ nên card sản phẩm sẽ hở khoảng trống
+giữa
+    các món — không dùng được cho composition.
     """
     w, h = alpha.size
     total = w * h
@@ -323,8 +328,8 @@ def _validate(png_path: Path) -> dict:
         pieces = _components(alpha, MIN_PIECE_AREA_PCT)
         if pieces > 1:
             problems.append(
-                f"alpha có {pieces} mảnh rời — đây là ảnh CẢ BỘ (item_scope=full_set). "
-                "Card sản phẩm cần một món; sinh lại với phạm vi 'Áo' hoặc 'Quần / Váy'."
+                f"alpha có {pieces} mảnh rời — đây là ảnh CẢ BỘ (nhiều món xếp cạnh "
+                "nhau). Card sản phẩm cần MỘT món; tách riêng từng ảnh."
             )
 
     return {
@@ -468,7 +473,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             print(
                 f"⏭  bỏ qua {p.name}: {reason}\n"
-                "   Sinh ảnh flat-lay bằng skill `lookbook-item-cutout-prompter` trước, "
+                "   Cần ảnh MỘT món trên nền trơn trước, "
                 "hoặc dùng --force nếu chắc chắn.",
                 file=sys.stderr,
             )

@@ -148,7 +148,6 @@ export function newNode(type: NodeType, opts: NodeMediaOptions | null, x: number
     jobId: null,
     status: "idle",
     isItem: false,
-    itemScope: null,
   };
   return base;
 }

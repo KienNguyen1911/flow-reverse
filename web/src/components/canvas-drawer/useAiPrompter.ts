@@ -76,11 +76,10 @@ export function useAiPrompter({
             ? scriptClips.find((c) => c.id === (selectedClip || node.clipId))?.role
             : undefined,
         script_path: node.type === "video" ? SCRIPT_PATH : undefined,
-        // Thiếu 3 trường này thì node ảnh sản phẩm bị coi là node ảnh lookbook: agent dùng
-        // skill vẽ người mẫu và không biết phải cắt món nào.
+        // Thiếu 2 trường này thì node bảng phối bị coi là node ảnh lookbook: agent dùng
+        // skill vẽ người mẫu thay vì dựng coordinate sheet.
         is_item: !!node.isItem,
         item_name: node.isItem ? node.itemName || undefined : undefined,
-        item_scope: node.isItem ? node.itemScope ?? undefined : undefined,
       });
 
       if (res.ok && res.prompt) {

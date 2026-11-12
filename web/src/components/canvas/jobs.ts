@@ -56,6 +56,5 @@ export function buildPromptRequest(
     // thay vì skill cutout, và prompt sinh ra lại đi vẽ người mẫu cho node ảnh sản phẩm.
     is_item: !!target.isItem,
     item_name: target.isItem ? target.itemName || undefined : undefined,
-    item_scope: target.isItem ? target.itemScope ?? undefined : undefined,
   };
 }

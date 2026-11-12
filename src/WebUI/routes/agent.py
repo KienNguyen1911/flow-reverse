@@ -36,12 +36,10 @@ class GenerateNodePromptBody(BaseModel):
     clip_id: Optional[str] = None
     clip_role: Optional[str] = None
     item_id: Optional[str] = None
-    #: Node ảnh tick "đây là ảnh sản phẩm" ⇒ dùng skill cutout + tên món làm ngữ cảnh.
+    #: Node ảnh tick "đây là ảnh sản phẩm" ⇒ dùng skill coordinate sheet + tên bộ phối làm
+    #: ngữ cảnh. Skill đó chỉ có một đường ra nên không còn `item_scope`.
     is_item: bool = False
     item_name: Optional[str] = None
-    #: Phạm vi tách món: `"top"` | `"bottom"` | `"full_set"` | `"coordinate_sheet"`.
-    #: Chỉ có nghĩa khi `is_item`; giá trị lạ bị `PromptAgent.resolve_item_scope` bỏ qua.
-    item_scope: Optional[str] = None
     script_path: Optional[str] = None
 
 
@@ -108,7 +106,6 @@ def build_router() -> APIRouter:
             item_id=body.item_id,
             is_item=body.is_item,
             item_name=body.item_name,
-            item_scope=body.item_scope,
             script_path=body.script_path,
         )
         try:
