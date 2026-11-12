@@ -55,6 +55,8 @@ def test_skills_load():
     # Skill plate riêng đã gộp vào try-on §2.5; nếu nó quay lại thì hai nguồn sự thật
     # cho 50mm/76% lại xuất hiện và lệch nhau.
     assert "lookbook-model-only-prompter" not in ids
+    # Board NABI đã bị xoá: cột item chuyển hẳn sang lớp dựng, ảnh bìa cũng lấy từ canvas.
+    assert "lookbook-thumbnail-prompter" not in ids
 
 
 def test_no_skill_emits_policy_compliance_clause():
@@ -111,40 +113,57 @@ def test_plate_mode_lives_in_tryon_skill():
 
 
 def test_plate_mode_does_not_require_second_image():
-    """Template plate không được nhắc `Image 2` / `Image 3` trong khối code — node plate chỉ
-    có một ảnh, nhắc tới ảnh không tồn tại thì agent tự ứng biến mỗi lần một kiểu."""
+    """Template plate không được nhắc `<<garment>>` / `<<background>>` trong khối code —
+    node plate chỉ có một ảnh, nhắc tới ảnh không tồn tại thì agent tự ứng biến mỗi lần một kiểu."""
     text = (SKILLS / "try-on-image-prompter.md").read_text(encoding="utf-8")
     section = text.split("**2.5.1 Đầu vào chỉ có một ảnh**")[-1][:800]
     blocks = re.findall(r"```text\n(.*?)\n```", section, re.DOTALL)
     assert blocks, "thiếu khối code mẫu câu mở đầu cho plate"
     opening = blocks[0]
-    assert "Image 1" in opening
-    assert "Image 2" not in opening and "Image 3" not in opening
+    assert "<<model>>" in opening
+    assert "<<garment>>" not in opening and "<<background>>" not in opening
 
 
-def test_image_board_skill_marked_thumbnail_only():
-    """Skill board NABI chỉ còn dùng làm thumbnail, phải ghi rõ không dùng cho video."""
-    text = (SKILLS / "lookbook-thumbnail-prompter.md").read_text(encoding="utf-8")
-    assert "thumbnail" in text.lower()
-    assert "không" in text.lower() and "first frame" in text.lower()
-    # Phải trỏ đúng chỗ sinh plate thay thế
-    assert "try-on-image-prompter" in text
+def test_image_board_skill_removed():
+    """Board NABI chưa từng dùng được cho video (chữ dính pixel, phải crop 1/3 khung), và
+    cột item giờ do lớp dựng lo. File skill đã xoá — giữ lại thì agent có hai nguồn quy
+    tắc ảnh bìa mâu thuẫn nhau."""
+    assert not (SKILLS / "lookbook-thumbnail-prompter.md").exists()
 
 
 def test_cutout_skill_rejects_human_seg():
-    """Skill cutout phải chỉ rõ vì sao không tách nền trực tiếp từ ảnh lifestyle."""
+    """Skill sheet phải chỉ rõ vì sao không tách nền trực tiếp từ ảnh lifestyle."""
     text = (SKILLS / "lookbook-item-cutout-prompter.md").read_text(encoding="utf-8")
     assert "human_seg" in text.lower()
     assert "rembg" in text.lower()
     assert "no person" in text.lower()
 
 
+def test_cutout_skill_has_one_output_only():
+    """Skill chỉ còn coordinate sheet — không còn template plate hay phạm vi để chọn.
+
+    Từng có bốn đường ra (`top`/`bottom`/`full_set`/`coordinate_sheet`) và người dùng phải
+    chọn đúng trước khi bấm AI Prompt. Bốn đường sinh ra bốn template, và agent chọn nhầm
+    template là chuyện có thật.
+    """
+    text = (SKILLS / "lookbook-item-cutout-prompter.md").read_text(encoding="utf-8")
+    blocks = re.findall(r"```text\n(.*?)\n```", text, re.DOTALL)
+    openers = [b.strip() for b in blocks if b.strip()]
+    assert any(o.startswith("Editorial fashion coordinate sheet") for o in openers)
+    # Không còn template flat-lay của plate.
+    assert not any("Flat-lay product photograph" in o for o in openers)
+    assert not any("Flat-lay product arrangement" in o for o in openers)
+    # Không còn khái niệm phạm vi.
+    assert "item_scope" not in text
+    assert "full_set" not in text
+
+
 def test_coordinate_sheet_keeps_typography_and_drops_plate_negatives():
     """Sheet là ngoại lệ có chủ đích: có chữ, nhiều món, **không** qua rembg.
 
-    Hai lỗi phá sheet ngay: (1) bê negative của plate (`no text`, `no collage`, `no grid`,
-    `no multiple items`) — xoá đúng thứ sheet cần; (2) quên khoá chi tiết lạ nên model
-    "sửa" keyhole / gấu xẻ / cạp trễ. Test khoá cả hai, và khoá luôn palette 5 ô.
+    Hai lỗi phá sheet ngay: (1) bê negative của ảnh plate (`no text`, `no collage`,
+    `no grid`, `no multiple items`) — xoá đúng thứ sheet cần; (2) quên khoá chi tiết lạ
+    nên model "sửa" keyhole / gấu xẻ / cạp trễ. Test khoá cả hai, và khoá luôn palette 5 ô.
     """
     text = (SKILLS / "lookbook-item-cutout-prompter.md").read_text(encoding="utf-8")
     block = next(
@@ -158,6 +177,34 @@ def test_coordinate_sheet_keeps_typography_and_drops_plate_negatives():
     negative = block.split("Negative:", 1)[-1].lower()
     for banned in ("no text", "no collage", "no grid", "no multiple items"):
         assert banned not in negative, f"negative sheet chứa '{banned}' — sẽ xoá chính sheet"
+
+
+def _prompt_templates(name: str) -> list[str]:
+    """Khối ```text trong skill là prompt mẫu — thứ thực sự được gửi lên Flow."""
+    text = (SKILLS / name).read_text(encoding="utf-8")
+    return re.findall(r"```text\n(.*?)\n```", text, re.DOTALL)
+
+
+def test_prompt_templates_avoid_the_unsafe_generation_trigger_word():
+    """Họ từ `brand` làm Flow từ chối cả request, kể cả trong câu phủ định.
+
+    Đo trên server thật (2026‑11‑12, profile `aaaaa`, Nano Banana Pro, cùng prompt + cùng
+    ảnh tham chiếu): `Avoid: no brand logo.` và `Avoid: no brand.` → REJECT
+    `PUBLIC_ERROR_UNSAFE_GENERATION`; `Avoid: no logo.` và `Avoid: no watermark.` → 200 OK.
+    Prompt try-on thật, chỉ đổi hai từ `branding`, cũng từ REJECT thành 200 OK.
+
+    Chỉ kiểm tra **khối prompt mẫu**, không kiểm tra văn xuôi: skill phải được phép viết
+    "đừng dùng họ từ brand" và liệt kê nó trong danh sách từ vựng để tra.
+    """
+    for name in ("try-on-image-prompter.md", "lookbook-item-cutout-prompter.md"):
+        blocks = _prompt_templates(name)
+        assert blocks, f"{name} không có khối prompt mẫu nào"
+        for block in blocks:
+            hits = re.findall(r"\b(?:brand|brands|branded|branding)\b", block, re.IGNORECASE)
+            assert not hits, f"{name}: prompt mẫu còn họ từ 'brand' {hits} ⇒ Flow chặn request"
+
+    tpl = (SKILLS / "try-on-image-prompter.md").read_text(encoding="utf-8")
+    assert "no added marks beyond what the reference garment actually carries" in tpl
 
 
 def _skill_example_prompts() -> list[str]:

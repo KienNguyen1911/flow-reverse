@@ -644,7 +644,7 @@ class FlowClient:
                 else:
                     ev("step", "nhập prompt vào composer...")
                     br.type_prompt(prompt)
-                br.click_generate(target_aspect=target_ratio)
+                br.click_generate(target_aspect=target_ratio, expected_prompt=prompt)
                 cap = br.wait_capture(30.0)
                 app_reqid = extract_app_reqid(cap.url)
                 token, at_param = parse_app_capture(cap.body)

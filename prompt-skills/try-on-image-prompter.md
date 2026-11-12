@@ -58,6 +58,43 @@ first frame video được — chữ sẽ méo và phải bỏ một phần khun
 
 **Chế độ Plate** (§2.5) chỉ nhận **một** ảnh duy nhất — ảnh đó đóng cả vai identity và trang phục.
 
+#### 2.1.1 Ảnh 2 là coordinate sheet (flat-lay) — phải neo lại độ dài theo CƠ THỂ
+
+Sheet xếp từng món **rời nhau, cùng cỡ cho dễ nhìn**. Tỷ lệ giữa các món trên sheet là tỷ lệ **trình
+bày**, không phải tỷ lệ **trên người**. Nếu prompt chỉ nói "chép đúng trang phục Ảnh 2" thì model giữ
+luôn tỷ lệ trình bày đó và mặc lên người — quần ngắn thành quần dài.
+
+**Đo thật** (2026‑11‑12, bike shorts đen + sweatshirt hồng, ảnh ra 768×1376):
+
+| | Trên sheet | Trên ảnh ra | Sự thật trên cơ thể |
+| :--- | :--- | :--- | :--- |
+| shorts / áo (chiều cao) | 0.755 | 0.685 | ~0.44 |
+| shorts / chiều cao người | — | 0.224 | 0.12–0.16 |
+
+Ảnh ra bám tỷ lệ **sheet** (0.685 gần 0.755 hơn 0.44) ⇒ quần dài gấp ~1.6 lần thực tế. Đây là lỗi
+có hệ thống, không phải ngẫu nhiên: mỗi lần lấy sheet làm Ảnh 2 đều gặp.
+
+**Cách sửa — viết vào module 2 (`[GARMENT FIDELITY]`) một câu neo độ dài:**
+
+```text
+Length is anchored to <<model>>'s body, never to the layout of <<garment>>: the sheet shows each
+piece enlarged and separated, so scale each hem to the body. The sweatshirt ends at the high hip.
+The shorts end at mid-thigh, above the knee, covering roughly the top third of the thigh.
+```
+
+Quy tắc khi viết câu neo:
+
+1. **Neo vào mốc giải phẫu**, không dùng số đo pixel hay "dài/ngắn": `ends at the high hip`,
+   `ends at mid-thigh, above the knee`, `hem sits just below the knee`, `hem grazes the ankle bone`.
+2. **Một câu cho mỗi món có gấu** — áo, quần/váy, chân váy. Món phụ kiện không cần.
+3. **Không mô tả lại phom** — phom vẫn do `<<garment>>` quyết định. Câu này chỉ chốt **gấu nằm ở đâu**.
+4. Nếu Ảnh 2 là **người mặc thật** (ảnh Shopee, lookbook) thì **bỏ câu neo** — tỷ lệ đã đúng sẵn,
+   thêm câu neo chỉ tạo mâu thuẫn với pixel.
+
+> Vì sao không chỉ dựa vào `<<garment>>` wins: ảnh sheet **không có người**, nên model không có cách
+> nào suy ra gấu quần nằm ở đâu trên cơ thể. Nó chỉ thấy một hình chữ nhật đen cao bằng 0.755 chiều
+> cao cái áo. Không có mốc giải phẫu thì con số đó là thông tin duy nhất nó có.
+
 ### 2.2 Output — 2 phiên bản tiếng Anh
 
 **Bản 1 — Direct Flow Transfer Prompt (ngắn, trực diện)**
@@ -73,7 +110,7 @@ với nhau — model đọc từ đầu đến cuối, module đứng trước t
 | # | Module | Mức | Kiểm soát điều gì |
 | :--- | :--- | :--- | :--- |
 | 1 | `[IDENTITY LOCK]` | Critical | Chỉ nói "Ảnh 1 là nguồn duy nhất" + không beautify. **Không** mô tả lại mắt/mũi/môi/tóc — pixel của Ảnh 1 đã mang thông tin đó |
-| 2 | `[GARMENT FIDELITY]` | Critical | Trang phục từ Ảnh 2: phom, màu, chất liệu, may, layering, branding có thật trên đồ |
+| 2 | `[GARMENT FIDELITY]` | Critical | Trang phục từ Ảnh 2: phom, màu, chất liệu, may, layering, nhãn/mác có thật trên đồ |
 | 3 | `[ANATOMY & POSE]` | High | Tỷ lệ cơ thể gốc, tư thế, hướng thân **và hướng đầu/mắt riêng** |
 | 4 | `[HEIGHT & PROPORTION OPTIMIZATION]` | High | Cách máy ảnh ghi lại cơ thể: góc, khoảng cách, tiêu cự, bố cục, silhouette |
 | 5 | `[ENVIRONMENT & LIGHTING]` | Medium | Bối cảnh + ánh sáng từ Ảnh 3 nếu có; không có thì studio mô tả sẵn |
@@ -172,7 +209,7 @@ Khối tư thế chèn tương ứng với mode đã chọn:
 
 ```text
 --- Mode A (default) ---
-Preserve the model's exact body proportions, height and silhouette from Image 1:
+Preserve the model's exact body proportions, height and silhouette from <<model>>:
 long unbroken leg line, visible waist-to-hip transition, natural anatomical proportions,
 no shortening of the torso, no widening of the shoulders, no limb stretching.
 Body turned about thirty to forty-five degrees away from the camera so the silhouette reads tall
@@ -186,7 +223,7 @@ keeps its three-quarter angle; eyes toward the lens or just beside it, chin leve
 
 ```text
 --- Mode B (garment fidelity) ---
-Preserve the model's exact body proportions, height and silhouette from Image 1:
+Preserve the model's exact body proportions, height and silhouette from <<model>>:
 long unbroken leg line, visible waist-to-hip transition, natural anatomical proportions,
 no shortening of the torso, no widening of the shoulders, no limb stretching.
 The model stands naturally upright, facing almost directly toward the camera with a subtle
@@ -260,7 +297,7 @@ số đo thực nghiệm). Tất cả đều tác động lên **cách máy ản
 ```text
 [HEIGHT & PROPORTION OPTIMIZATION]
 Body Proportion: preserve the exact head-to-body ratio, leg-to-torso ratio and limb lengths visible
-in Image 1; that body is the only proportion reference, and height comes from posture, framing and
+in <<model>>; that body is the only proportion reference, and height comes from posture, framing and
 camera distance, never from redrawn proportions.
 Camera Perspective: full-body fashion photography, camera at waist level with a three-degree upward
 tilt, horizon level, same subject-to-camera distance across every image in the set.
@@ -272,7 +309,7 @@ Posture: upright spine, relaxed shoulders, balanced pelvis.
 Visual Silhouette: one continuous vertical line from shoulders through waist, hips, knees and
 ankles, thighs and calves individually distinguishable, legs never merging into one mass.
 Anatomical Integrity: realistic joints, consistent limb lengths and the original body structure of
-Image 1.
+<<model>>.
 [END HEIGHT & PROPORTION OPTIMIZATION]
 ```
 
@@ -313,7 +350,7 @@ video. Chưa có batch kiểm chứng ở mức này, nên mặc định vẫn l
 #### 2.2.2a V2 đã bỏ gì khỏi khối Height (và vì sao)
 
 Bản V1 neo thêm `seven-and-a-half head-to-body ratio` để "chắc chắn" người mẫu cao. Đó là mâu thuẫn
-trực tiếp với `preserve the exact proportions from Image 1`: nếu Ảnh 1 là người 7 đầu, model phải
+trực tiếp với `preserve the exact proportions from <<model>>`: nếu ảnh model là người 7 đầu, model phải
 chọn giữa hai mệnh lệnh — và nó chọn cái nào cũng sai. Tỷ lệ đầu-thân **cố định** chỉ đúng khi người
 mẫu là một nhân vật do mình định nghĩa (thư viện pose, xem `poses_reference.md` §4), không đúng khi
 identity đến từ ảnh người dùng.
@@ -337,44 +374,82 @@ mất khả năng định vị lỗi.
 #### 2.2.3 Template Bản 2 — đủ 7 module
 
 ```text
-Try-on photograph of the exact same model from Image 1, wearing the exact garment from Image 2.
+Try-on photograph of the exact same model from <<model>>, wearing the exact garment from <<garment>>.
 
 [IDENTITY LOCK]
-Preserve the exact identity, facial features, hairstyle, hair colour and skin texture of the model in Image 1. Image 1 is the sole identity reference. Do not beautify, slim, symmetrise or age the face.
+Preserve the exact identity, facial features, hairstyle, hair colour and skin texture of the model in <<model>>. <<model>> is the sole identity reference. Do not beautify, slim, symmetrise or age the face.
 
 [GARMENT FIDELITY]
-Reproduce the complete outfit from Image 2 exactly: <name each visible garment from Image 2 by category and colour — visible elements only>. Seams, weave, trims, hardware and branding that are physically part of the garment are reproduced; anything hidden behind the body, hair or another layer is not invented or restyled. Where this description and Image 2 disagree, Image 2 wins. Do not redesign, simplify, recolour or re-proportion any element.
+Reproduce the complete outfit from <<garment>> exactly: <name each visible garment from <<garment>> by category and colour — visible elements only>. Seams, weave, trims, hardware and any label that is physically part of the garment are reproduced; anything hidden behind the body, hair or another layer is not invented or restyled. Where this description and <<garment>> disagree, <<garment>> wins. Do not redesign, simplify, recolour or re-proportion any element.
+<sheet as <<garment>>? add the length sentence from §2.1.1>
 
 [ANATOMY & POSE]
 <insert the prompt_core of the chosen pose from §2.2.1a, or the Mode A / Mode B block, plus the shared stance clause>
 Head turned gently back toward the camera on the neck so the face stays readable while the torso keeps its angle; chin level, eyes to the lens or just beside it.
 
 [HEIGHT & PROPORTION OPTIMIZATION]
-Body Proportion: preserve the exact head-to-body ratio, leg-to-torso ratio and limb lengths visible in Image 1; that body is the only proportion reference, and height comes from posture, framing and camera distance, never from redrawn proportions.
+Body Proportion: preserve the exact head-to-body ratio, leg-to-torso ratio and limb lengths visible in <<model>>; that body is the only proportion reference, and height comes from posture, framing and camera distance, never from redrawn proportions.
 Camera Perspective: full-body fashion photography, camera at waist level with a three-degree upward tilt, horizon level, same subject-to-camera distance across every image in the set.
 Lens: 50mm equivalent field of view; focal length alone does not compress or elongate, so hold that distance and let no foot read oversized.
 Composition: crown 12 percent below the top edge, soles 12 percent above the bottom edge, figure filling 76 percent of the frame height, both feet visible and grounded.
 Posture: upright spine, relaxed shoulders, balanced pelvis.
 Visual Silhouette: one continuous vertical line from shoulders through waist, hips, knees and ankles, thighs and calves individually distinguishable, legs never merging into one mass.
-Anatomical Integrity: realistic joints, consistent limb lengths and the original body structure of Image 1.
+Anatomical Integrity: realistic joints, consistent limb lengths and the original body structure of <<model>>.
 [END HEIGHT & PROPORTION OPTIMIZATION]
 
 [ENVIRONMENT & LIGHTING]
-If Image 3 is provided: take only the space, surfaces, ambient light and shadow behaviour from it — never the person or the garment from Image 3. If Image 3 is not provided: clean minimalist studio with a curved white cyclorama wall and floor, soft directional daylight and realistic light falloff.
+If <<background>> is provided: take only the space, surfaces, ambient light and shadow behaviour from it — never the person or the garment from <<background>>. If <<background>> is not provided: clean minimalist studio with a curved white cyclorama wall and floor, soft directional daylight and realistic light falloff.
 
 [PHOTOGRAPHY AESTHETICS]
 Raw candid fashion photography, natural lifestyle editorial aesthetic, realistic skin texture with visible pores, authentic fabric weave, subtle film grain, natural photographic imperfections, no plastic skin.
 
-Constraints: the face, hair and body remain exactly those of Image 1, with no altered facial identity; the outfit is copied from Image 2 exactly, with no garment redesign, no recoloured or missing element and no branding beyond what the reference garment actually carries; the anatomy of Image 1 stays undistorted, with no stretched limbs, no elongated legs, no artificial body stretching, no crossed legs, no overlapping thighs and no legs merging into one mass; full-body framing with no cropped head or feet, no wide-angle or high-angle distortion and no tilted horizon; no text, no added logos, no UI, no cards, no border, no collage.
+Constraints: the face, hair and body remain exactly those of <<model>>, with no altered facial identity; the outfit is copied from <<garment>> exactly, with no garment redesign, no recoloured or missing element and no added marks beyond what the reference garment actually carries; the anatomy of <<model>> stays undistorted, with no stretched limbs, no elongated legs, no artificial body stretching, no crossed legs, no overlapping thighs and no legs merging into one mass; full-body framing with no cropped head or feet, no wide-angle or high-angle distortion and no tilted horizon; no text, no added logos, no UI, no cards, no border, no collage.
 ```
+
+#### 2.2.3a Token tham chiếu — `<<model>>` / `<<garment>>` / `<<background>>`
+
+Prompt **không** viết `Image 1` / `Image 2` / `Image 3`, và cũng **không** chèn `@alias` bằng
+tay. Chỉ dùng ba token:
+
+| Token | Trỏ tới | Dạng cũ có thể gặp |
+| :-- | :-- | :-- |
+| `<<model>>` | Ảnh người mẫu (identity: mặt, tóc, dáng) | `Image 1`, `@model_ab12` |
+| `<<garment>>` | Ảnh trang phục | `Image 2`, `@garment_ab12` |
+| `<<background>>` | Ảnh bối cảnh | `Image 3`, `@scene_ab12` |
+
+**Vì sao đổi.** Pipeline cũ biến *mỗi lần lặp* một tham chiếu thành chữ `@model_51aad2` nằm
+thẳng trong request body — đo được **12 chuỗi như vậy** trong một prompt try-on. Đó là chữ vô
+nghĩa với model, và là dạng payload Flow trả `INVALID_ARGUMENT` (kèm nhãn
+`PUBLIC_ERROR_UNSAFE_GENERATION`, khiến người dùng đi tìm lỗi an toàn không có thật).
+
+**Tầng gửi đi tự khai báo, agent không viết phần này.** Trước thân prompt, hệ thống chèn đúng
+một chip mỗi ảnh, theo thứ tự:
+
+```text
+<<model>> = Image 1, the person: <chip ảnh 1>
+<<garment>> = Image 2, the outfit: <chip ảnh 2>
+<<background>> = Image 3, the setting: <chip ảnh 3>
+
+Try-on photograph of the exact same model from <<model>>, wearing the exact garment from <<garment>>.
+…
+```
+
+Quy tắc khi viết prompt:
+
+- Dùng **đúng ba tên** trên: chữ thường, hai dấu ngoặc nhọn mỗi bên. Đừng tự đặt tên khác.
+- Reference nào không được nhắc trong thân vẫn được khai báo — Flow cần ảnh được đính kèm.
+- **Không** viết `@model_ab12` hay `@garment_ab12`: chuỗi đó do tầng gửi đi sinh ra từ chip,
+  không phải thứ agent viết. Viết tay vào prompt sẽ tạo mention giả.
 
 > Ba chỗ điền trong template:
 >
-> - `<name each visible garment ...>` — agent đọc Ảnh 2 rồi liệt kê **món nhìn thấy được** (áo, váy,
->   tất, giày). Không suy diễn lớp bên trong bị che, không tự thêm chi tiết cho đẹp.
-> - `<insert the prompt_core ...>` — pose thật từ §2.2.1a, hoặc block Mode A/B nếu không dùng thư viện.
-> - `Image 3` — nếu node chỉ nối hai ảnh, bỏ hẳn câu "If Image 3 is provided" và giữ câu studio.
->   Câu về Ảnh 3 chỉ được nói **môi trường**, không được nói người hay trang phục.
+> - `<name each visible garment ...>` — agent đọc `<<garment>>` rồi liệt kê **món nhìn thấy được**
+>   (áo, váy, tất, giày). Không suy diễn lớp bên trong bị che, không tự thêm chi tiết cho đẹp.
+> - `<insert the prompt_core ...>` — pose thật từ §2.2.1a, hoặc block Mode A/B nếu không dùng
+>   thư viện.
+> - `<<background>>` — nếu node chỉ nối hai ảnh, **xoá hẳn khối `[ENVIRONMENT & LIGHTING]`** chứa
+>   câu "If `<<background>>` is provided" và thay bằng câu studio ở §2.5.2. Bối cảnh chỉ được nói
+>   **môi trường**, không được nói người hay trang phục.
 
 > **Identity Lock không mô tả khuôn mặt.** Template V3 đã bỏ hẳn catalogue mặt/mắt/mũi/tóc
 > (`East Asian facial features`, `messy high bun`, ...) vì hai lý do: nó tạo ra **nguồn tham chiếu
@@ -403,7 +478,7 @@ Không chèn `[POLICY COMPLIANCE]` vào prompt ảnh. Nếu ảnh bị bộ lọ
 > hoặc một mục ngắn trong `Constraints:`; tuyệt đối không dán nguyên danh sách dưới đây.
 
 ```text
-text, letters, words, numbers, typography, added logo, invented branding, watermark, UI,
+text, letters, words, numbers, typography, added logo, invented label, watermark, UI,
 interface, sidebar, white card, label, price tag, collage, moodboard, split screen,
 two panels, grid, infographic, border, frame, mockup, high camera angle, overhead perspective,
 downward camera tilt, foreshortening, cropped feet, shoes touching bottom border,
@@ -425,8 +500,23 @@ Bốn nhóm khác bản chất:
 - **`elongated legs`, `slimmer waist`, `seven-and-a-half head-to-body ratio`** — bắt model **vẽ lại
   giải phẫu** hoặc áp một tỷ lệ không phải của người trong Ảnh 1. Tỷ lệ cố định chỉ dùng ở thư viện
   pose (`poses_reference.md` §4), nơi người mẫu là nhân vật do mình định nghĩa — không dùng ở đây.
-- **`added logo`, `invented branding`** — chỉ cấm logo **bịa thêm**. Logo/thương hiệu có thật trên
+- **`added logo`, `invented label`** — chỉ cấm nhãn **bịa thêm**. Nhãn/mác có thật trên
   trang phục trong Ảnh 2 phải được giữ, vì Garment Fidelity yêu cầu chép đúng mọi chi tiết.
+
+**Tuyệt đối không viết họ từ `brand`** (`brand`, `brands`, `branded`, `branding`), kể cả trong
+câu phủ định `no brand logo`. Đo trên server thật 2026‑11‑12 (profile `aaaaa`, Nano Banana Pro,
+cùng ảnh tham chiếu):
+
+| Prompt | Kết quả |
+| :--- | :--- |
+| `Avoid: no brand logo.` | REJECT `PUBLIC_ERROR_UNSAFE_GENERATION` (gRPC `[3]`) |
+| `Avoid: no brand.` | REJECT |
+| `Avoid: no logo.` | 200 OK + ảnh |
+| `Avoid: no watermark.` | 200 OK + ảnh |
+
+Prompt try-on thật, **chỉ** đổi hai từ `branding` thành `any label` / `no added marks`, đã từ
+REJECT thành 200 OK với đúng bộ 3 ảnh tham chiếu. Nhãn lỗi đọc như lỗi an toàn hình ảnh nên rất
+dễ đi sai hướng — `src/Workflows/prompt_lint.py` (`IMAGE_FILTER_TRIGGER_TERMS`) chặn sẵn.
 
 Cả bốn đều hỏng — xem §2.2.1 và §2.2.2a.
 
@@ -446,7 +536,7 @@ yêu cầu; một lỗi chỉ nói một lần, và chỉ nói khi module 1–6 
 | Nhóm | Nội dung | Ghi chú |
 | :--- | :--- | :--- |
 | 1. Identity | `no altered facial identity` | Chặn beautify, đổi mặt. Tóc/da đã nằm ở `[IDENTITY LOCK]` |
-| 2. Garment | `no garment redesign`, `no recoloured or missing element`, `no branding beyond the reference` | Chặn thu gọn phom và bịa logo |
+| 2. Garment | `no garment redesign`, `no recoloured or missing element`, `no added marks beyond the reference` | Chặn thu gọn phom và bịa nhãn |
 | 3. Anatomy | `no stretched limbs`, `no elongated legs`, `no artificial body stretching`, `no crossed legs`, `no overlapping thighs`, `no legs merging` | Nhóm nặng nhất — chân là nơi lỗi đọc ra rõ nhất |
 | 4. Framing | `no cropped head or feet`, `no wide-angle or high-angle distortion`, `no tilted horizon` | Chặn lỗi bố cục giữa các ảnh trong bộ |
 | 5. Graphics | `no text`, `no UI`, `no cards`, `no border`, `no collage` | Điều kiện của kiến trúc tách lớp (§0) |
@@ -523,22 +613,22 @@ văn** — đó là lý do không cần một skill riêng cho plate nữa.
 
 **2.5.1 Đầu vào chỉ có một ảnh**
 
-Ảnh duy nhất đóng cả hai vai: identity **và** trang phục. Sửa câu mở đầu của template thành:
+Ảnh duy nhất đóng cả hai vai: identity **và** trang phục. Ở chế độ plate chỉ có **một** tham chiếu,
+nên `<<garment>>` không tồn tại và tầng gửi đi chỉ khai báo `<<model>>`. Sửa câu mở đầu thành:
 
 ```text
-Photograph of the exact model from Image 1, wearing the exact outfit from Image 1.
+Photograph of the exact model from <<model>>, wearing the exact outfit from <<model>>.
 ```
 
-Có đúng **hai câu** phải thay. Hai module `[IDENTITY LOCK]` và `[GARMENT FIDELITY]` giữ nguyên phần
-còn lại — chúng không phụ thuộc số hiệu ảnh:
+Có đúng **hai câu** phải thay trong template §2.2.3:
 
 | Câu gốc (try-on) | Câu plate |
 | :--- | :--- |
-| `[GARMENT FIDELITY] Reproduce the complete outfit from Image 2 exactly, ...` | `Reproduce the complete outfit from Image 1 exactly, ...` — giữ nguyên phần đuôi |
-| `If Image 3 is provided: take only the space ... If Image 3 is not provided: ...` | **xoá hẳn**, thay bằng câu studio ở §2.5.2 |
+| `[GARMENT FIDELITY] Reproduce the complete outfit from <<garment>> exactly, ...` | `Reproduce the complete outfit from <<model>> exactly, ...` — giữ nguyên phần đuôi |
+| `If <<background>> is provided: take only the space ... If <<background>> is not provided: ...` | **xoá hẳn khối `[ENVIRONMENT & LIGHTING]`**, thay bằng câu studio ở §2.5.2 |
 
-Sau khi sửa, prompt plate **không được còn chuỗi `Image 2` hay `Image 3` nào** — node plate chỉ nối
-một ảnh, nhắc tới ảnh không tồn tại là agent đang tự bịa.
+Sau khi sửa, prompt plate **không được còn `<<garment>>` hay `<<background>>` nào** — node plate
+chỉ nối một ảnh, nhắc tới ảnh không tồn tại là agent đang tự bịa.
 
 **2.5.2 Bối cảnh: thay, không kế thừa**
 

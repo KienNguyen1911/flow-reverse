@@ -121,6 +121,17 @@ IMAGE_RESTATE_TERMS = (
     "slow motion", "slow-motion",
 )
 
+#: Từ khiến Flow từ chối cả request bằng `PUBLIC_ERROR_UNSAFE_GENERATION` (gRPC `[3]`),
+#: kể cả khi từ đó nằm trong mệnh đề phủ định. Đo trên server thật (2026‑11‑12, profile
+#: `aaaaa`): cùng một prompt + cùng ảnh tham chiếu,
+#:   - `Avoid: no brand logo.` / `Avoid: no brand.`  → REJECT
+#:   - `Avoid: no logo.` / `Avoid: no watermark.`    → 200 OK + ảnh
+#:   - bỏ hẳn hai từ `branding` trong prompt try-on → 200 OK + ảnh đúng
+#: Phủ định dùng `_find_terms` chứ không `_find_affirmed_terms`: "no brand" vẫn bị chặn.
+IMAGE_FILTER_TRIGGER_TERMS = (
+    "brand", "brands", "branded", "branding", "brand logo", "brand name",
+)
+
 #: Ngân sách từ cho prompt video. Trước đây là 80 vì skill chỉ cho phép 1 câu camera + 2 câu cơ thể.
 #: Khi prompt phải mang 3 beat có mốc thời gian (xem `motion_prompt.beats_to_prompt`), 80 không đủ
 #: để vừa diễn đạt nhịp vừa nói điều KHÔNG được xảy ra. Đo trên script mẫu: 99–110 từ đi qua
@@ -134,6 +145,31 @@ VIDEO_MIN_WORDS = 40
 #: lặp — chính thứ đã bị cắt ở V3. Đây là **warn**, không phải error: có outfit nhiều món thật sự cần
 #: mô tả dài, và linter không đủ khôn để phân biệt.
 IMAGE_PROMPT_MAX_CHARS = 4500
+
+#: Câu neo độ dài khi ảnh trang phục là coordinate sheet (flat-lay). Xem
+#: `prompt-skills/try-on-image-prompter.md` §2.1.1.
+#:
+#: Sheet xếp từng món **cùng cỡ cho dễ nhìn**, nên tỷ lệ giữa các món trên sheet là tỷ lệ
+#: *trình bày*, không phải tỷ lệ *trên người*. Đo thực tế 2026‑11‑12 (bike shorts đen +
+#: sweatshirt hồng): shorts/áo trên sheet 0.755, trên cơ thể ~0.44, ảnh ra 0.685 — ảnh bám
+#: sheet, quần ra dài gấp ~1.6 lần.
+#:
+#: Dùng bởi `prompt_agent` khi nó **biết chắc** ảnh tham chiếu là sheet (tên file). Linter
+#: không dùng được: prompt thật không hề viết "flat-lay", nên một luật dò chữ trong prompt
+#: sẽ không bao giờ cháy — tức là guard giả.
+SHEET_LENGTH_ANCHOR_RE = re.compile(
+    r"length\s+is\s+anchored|anchored\s+to\s+(?:<<\s*model\s*>>|the\s+body)"
+    r"|scale\s+each\s+hem|never\s+to\s+the\s+layout",
+    re.IGNORECASE,
+)
+
+#: Tên file cho biết ảnh tham chiếu là một coordinate sheet / flat-lay chứ không phải người
+#: mặc thật. Đây là tín hiệu **chắc chắn** duy nhất không cần nhìn pixel: pipeline đặt tên
+#: file theo loại ảnh (`..._editorial_fashion_coordinate_sheet_verti.jpg`).
+SHEET_FILENAME_RE = re.compile(
+    r"coordinate[_-]?sheet|flat[_-]?lay|ghost[_-]?mannequin|product[_-]?sheet|cutout",
+    re.IGNORECASE,
+)
 
 
 def _word_count(text: str) -> int:
@@ -344,6 +380,15 @@ def lint_image_prompt(prompt: str) -> LintResult:
             "leg_pose", "warn",
             f"Tư thế '{term}' làm hai chân dính/chồng thành một khối ⇒ mất đường chân, "
             "đọc ra lùn. Dùng 'one foot slightly forward without crossing the centreline'.",
+            match=term,
+        ))
+
+    for term in _find_terms(text, IMAGE_FILTER_TRIGGER_TERMS):
+        warnings.append(PromptWarning(
+            "filter_trigger", "error",
+            f"Từ '{term}' làm Flow từ chối cả request bằng PUBLIC_ERROR_UNSAFE_GENERATION "
+            "(gRPC 3), kể cả trong câu phủ định. Viết 'no added marks', 'no labels', "
+            "'no logos' — đừng dùng họ từ 'brand'.",
             match=term,
         ))
 

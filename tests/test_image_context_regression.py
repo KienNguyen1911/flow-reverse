@@ -87,9 +87,11 @@ def test_image_roles_told_explicitly_for_three_images():
         skill,
         [Path("a.png"), Path("b.png"), Path("c.png")],
     )
-    assert "Ảnh 1 = MODEL" in out
-    assert "Ảnh 2 = GARMENT" in out
-    assert "Ảnh 3 = BACKGROUND" in out
+    assert "ảnh thứ 1 = MODEL" in out
+    assert "ảnh thứ 2 = GARMENT" in out
+    assert "ảnh thứ 3 = BACKGROUND" in out
+    # Ánh xạ sang token phải nói rõ, nếu không agent tự đặt tên khác.
+    assert "`<<model>>`" in out
 
 
 def test_image_roles_told_explicitly_for_two_images():
@@ -100,15 +102,15 @@ def test_image_roles_told_explicitly_for_two_images():
         skill,
         [Path("a.png"), Path("b.png")],
     )
-    assert "Ảnh 2 = GARMENT" in out
-    # Skill có nhắc "Ảnh 3" trong phần mô tả đầu vào; chỉ phần BỐI CẢNH NODE mới
+    assert "ảnh thứ 2 = GARMENT" in out
+    # Skill có nhắc `<<background>>` trong template; chỉ phần BỐI CẢNH NODE mới
     # được quyết định vai trò, nên scope assertion vào đó.
     node_ctx = out.split("--- BỐI CẢNH NODE HIỆN TẠI ---")[-1]
-    assert "Ảnh 3 = BACKGROUND" not in node_ctx
+    assert "ảnh thứ 3 = BACKGROUND" not in node_ctx
 
 
 def test_plate_mode_does_not_claim_three_images():
-    """Plate chỉ có một ảnh; nhắc Ảnh 2/3 là agent tự bịa ra ảnh không tồn tại."""
+    """Plate chỉ có một ảnh; nhắc ảnh 2/3 là agent tự bịa ra ảnh không tồn tại."""
     agent = _agent()
     skill = agent.skill_mgr.get_skill("try-on-image-prompter")
     out = agent.format_agent_instruction(
@@ -118,8 +120,9 @@ def test_plate_mode_does_not_claim_three_images():
         skill,
         [Path("a.png")],
     )
-    assert "Ảnh 2 = GARMENT" not in out
-    assert "Ảnh 1 đóng cả hai vai" in out
+    node_ctx = out.split("--- BỐI CẢNH NODE HIỆN TẠI ---")[-1]
+    assert "ảnh thứ 2 = GARMENT" not in node_ctx
+    assert "nó đóng cả hai vai" in node_ctx
 
 
 # --------------------------------------------------------------------------- #

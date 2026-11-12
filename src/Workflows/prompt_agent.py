@@ -10,65 +10,19 @@ from typing import Optional
 
 from .local_agent_runner import LocalAgentRunner, get_agent_runner
 from .media_service import resolve_input_path
+from .prompt_lint import SHEET_FILENAME_RE
 from .script_contract import LookbookScript, ScriptError, load_default_script, load_script
 from .skill_manager import PromptSkill, get_skill_manager
 
 ROOT = Path(__file__).resolve().parents[2]
 
-#: Phạm vi món đồ của node ảnh sản phẩm. Skill cutout mặc định bắt "chỉ một món", nên
-#: phải nói rõ món nào — không thì model tự chọn vật thể nổi bật nhất (thường là chiếc áo).
-#: Hai ngoại lệ có chủ đích: `full_set` bỏ luật "một món" nhưng vẫn cấm chữ (plate dùng làm
-#: layer); `coordinate_sheet` bỏ cả "một món" lẫn "cấm chữ" vì ảnh ra là deliverable có
-#: typography — xem §2.2/§3.4 của skill, và tuyệt đối không đem rembg.
-ITEM_SCOPES: dict[str, dict[str, str]] = {
-    "top": {
-        "label": "chỉ ÁO",
-        "rule": (
-            "Isolate the UPPER garment only (top / shirt / blouse / camisole / jacket). "
-            "Exclude every bottom piece (skirt, shorts, trousers): they must not appear "
-            "in the image at all."
-        ),
-        "exclude": "bottoms, skirt, shorts, trousers, and any second garment",
-    },
-    "bottom": {
-        "label": "chỉ QUẦN / VÁY",
-        "rule": (
-            "Isolate the LOWER garment only (skirt / shorts / trousers). Exclude every top "
-            "piece (shirt, camisole, cardigan): they must not appear in the image at all."
-        ),
-        "exclude": "tops, shirt, camisole, cardigan, and any second garment",
-    },
-    "full_set": {
-        "label": "CẢ BỘ (nhiều món)",
-        "rule": (
-            "This is the ONLY case where the skill's single-garment rule is overridden: the "
-            "user wants the COMPLETE SET on one plate. Lay every piece of the outfit together "
-            "as one coordinated flat-lay — the top and the bottom arranged next to each other "
-            "(top above, bottom below, or side by side), all pieces fully visible and not "
-            "overlapping. Same background, lighting and framing for the whole set."
-        ),
-        "exclude": "background scenery, furniture, props",
-    },
-    "coordinate_sheet": {
-        "label": "BỘ PHỐI (sheet)",
-        "rule": (
-            "Produce the COORDINATE SHEET deliverable defined by §2.2 and the §3.4 template: "
-            "the complete outfit as a ghost-mannequin flat-lay PLUS editorial typography — "
-            "sheet title, issue number, numbered callouts (01..0N, in dressing order), three "
-            "DETAIL crops and a five-swatch COLOR PALETTE. Include every piece visible in the "
-            "reference: top, bottom, bag and shoes. Do NOT use the plain full_set template "
-            "(§3.2) — it has no typography. The output is a deliverable: never feed it to "
-            "rembg, never use it as a video first frame."
-        ),
-        "exclude": (
-            "human body, face, hands, hair, background scenery, props, and any garment or "
-            "accessory that is not in the reference"
-        ),
-    },
-}
+#: Skill duy nhất dùng cho node ảnh sản phẩm. Node đánh dấu `is_item` (hoặc gắn `item_id`
+#: của script) đi qua skill này, và skill chỉ có **một** đường ra: coordinate sheet.
+CUTOUT_SKILL_ID = "lookbook-item-cutout-prompter"
 
-#: Các khối bắt buộc của khung §3.4. Dùng để kiểm tra agent có thật sự viết coordinate
-#: sheet hay lại lùi về flat-lay §3.2 — chuyện đã xảy ra thật với `gemini-3.8-flash-low`.
+#: Các khối bắt buộc của khung §3.1. Dùng để kiểm tra agent có thật sự viết coordinate
+#: sheet hay lại lùi về một flat-lay không chữ — chuyện đã xảy ra thật với
+#: `gemini-3.8-flash-low` khi skill còn template plate.
 COORDINATE_SHEET_SECTIONS: tuple[str, ...] = (
     "LAYOUT",
     "OUTFIT",
@@ -77,6 +31,21 @@ COORDINATE_SHEET_SECTIONS: tuple[str, ...] = (
     "TYPE & LIGHT",
     "COLOR PALETTE",
     "Negative:",
+)
+
+#: Ngoại lệ có chủ đích của quy tắc "một món": sheet có 2–6 món, có chữ, không rembg.
+COORDINATE_SHEET_RULE = (
+    "Produce the COORDINATE SHEET deliverable defined by §2 and the §3.1 template: the "
+    "complete outfit as a ghost-mannequin flat-lay PLUS editorial typography — sheet "
+    "title, issue number, numbered callouts (01..0N, in dressing order), three DETAIL "
+    "crops and a five-swatch COLOR PALETTE. Include every piece visible in the reference: "
+    "top, bottom, bag and shoes. Never a plain flat-lay without typography. The output is "
+    "a deliverable: never feed it to rembg, never use it as a video first frame."
+)
+
+COORDINATE_SHEET_EXCLUDE = (
+    "human body, face, hands, hair, background scenery, props, and any garment or "
+    "accessory that is not in the reference"
 )
 
 
@@ -95,7 +64,7 @@ def extract_skill_template(raw_content: str, section: str) -> Optional[str]:
 
 
 def coordinate_sheet_sections_missing(prompt: str) -> list[str]:
-    """Các khối §3.4 mà `prompt` còn thiếu. Rỗng ⇒ đúng là coordinate sheet."""
+    """Các khối §3.1 mà `prompt` còn thiếu. Rỗng ⇒ đúng là coordinate sheet."""
     text = (prompt or "").upper()
     return [s for s in COORDINATE_SHEET_SECTIONS if s.upper() not in text]
 
@@ -114,15 +83,11 @@ class NodePromptTask:
     clip_id: Optional[str] = None       # "clip1" | "clip2" | ...
     clip_role: Optional[str] = None     # "hook" | "showcase" | "detail"
     item_id: Optional[str] = None       # "item_1" khi sinh ảnh cutout
-    #: Node ảnh được đánh dấu là **ảnh sản phẩm** ⇒ dùng skill cutout, và `item_name` là
-    #: tên món người dùng đặt (ngữ cảnh duy nhất khi không có ảnh tham chiếu).
+    #: Node ảnh được đánh dấu là **ảnh sản phẩm** ⇒ dùng skill cutout (coordinate sheet),
+    #: và `item_name` là tên bộ phối người dùng đặt (ngữ cảnh duy nhất khi không có ảnh
+    #: tham chiếu). Skill đó chỉ có một đường ra nên không còn `item_scope`.
     is_item: bool = False
     item_name: Optional[str] = None
-    #: Phạm vi món đồ người dùng chọn trên node ảnh sản phẩm:
-    #: `"top"` (chỉ áo) | `"bottom"` (chỉ quần/váy) | `"full_set"` (cả bộ, ngoại lệ của
-    #: quy tắc "một món") | `"coordinate_sheet"` (bộ phối có typography, ngoại lệ của cả
-    #: "một món" lẫn "cấm chữ"). `None` ⇒ giữ nguyên hành vi cũ.
-    item_scope: Optional[str] = None
     #: Node ảnh sinh **first frame cho video** ⇒ agent dùng chế độ plate của skill try-on
     #: (§2.5): chỉ một ảnh đầu vào, bối cảnh studio thay thế, negative thêm nhóm nền sạch.
     #: Trước đây là skill riêng `lookbook-model-only-prompter`; đã gộp vào try-on.
@@ -191,9 +156,9 @@ class PromptAgent:
                 return s
         else:
             if task.item_id or task.is_item:
-                # Ảnh sản phẩm phẳng trên nền trơn. `is_item` là cờ người dùng tick trên
+                # Ảnh sản phẩm: coordinate sheet. `is_item` là cờ người dùng tick trên
                 # node; `item_id` là kiểu cũ khi còn gắn cứng vào `items[]` của script.
-                s = self.skill_mgr.get_skill("lookbook-item-cutout-prompter")
+                s = self.skill_mgr.get_skill(CUTOUT_SKILL_ID)
                 if s:
                     return s
             hint = (task.custom_hint or "").lower()
@@ -215,17 +180,13 @@ class PromptAgent:
 
         raise RuntimeError("Không tìm thấy skill nào trong thư mục prompt-skills/.")
 
-    def resolve_item_scope(self, task: NodePromptTask) -> Optional[tuple[str, dict[str, str]]]:
-        """Phạm vi tách món đồ đang áp dụng cho task, `None` khi không liên quan.
+    def is_item_task(self, task: NodePromptTask) -> bool:
+        """Node này có dựng coordinate sheet không.
 
-        Chỉ node ẢNH đánh dấu `is_item` mới có phạm vi — video không tách món. Giá trị
-        lạ (dữ liệu cũ, gõ tay) bị coi như không có, để không đổi hành vi cũ.
+        Skill cutout chỉ còn **một** đường ra nên không có phạm vi để chọn: node ảnh sản
+        phẩm luôn là sheet. Video không bao giờ là sheet.
         """
-        if task.node_type == "video" or not task.is_item:
-            return None
-        key = (task.item_scope or "").strip().lower()
-        spec = ITEM_SCOPES.get(key)
-        return (key, spec) if spec else None
+        return task.node_type != "video" and bool(task.is_item or task.item_id)
 
     def format_agent_instruction(
         self,
@@ -268,7 +229,7 @@ class PromptAgent:
             lines.extend([
                 "- **Chế độ PLATE** (ảnh này làm first frame cho node video).",
                 "  → Áp §2.5 của skill: giả định chỉ có MỘT ảnh tham chiếu đóng cả vai identity và",
-                "    trang phục. Không viết câu nào nhắc tới `Image 2` / `Image 3`.",
+                "    trang phục. Chỉ dùng `<<model>>`; KHÔNG viết `<<garment>>` hay `<<background>>`.",
                 "  → Bối cảnh: LUÔN thay bằng studio trơn §2.5.2, kể cả khi ảnh gốc chụp ngoài trời.",
                 "  → Negative: nối thêm nhóm nền sạch §2.5.3 (no props / no other people /",
                 "    no progress bar / no banner / no product cards / no catalog strip / no thumbnails).",
@@ -276,36 +237,22 @@ class PromptAgent:
                 "    HyperFrames desktop đã tự canh lớp chữ nên không cần chừa cột trái nữa.",
             ])
         if task.item_id:
-            lines.append(f"- Món đồ trong script: {task.item_id}")
+            lines.append(f"- Bộ phối của script: {task.item_id}")
         elif task.is_item and task.item_name:
-            if (task.item_scope or "").strip().lower() == "coordinate_sheet":
-                # Gọi là "ảnh sản phẩm" ở đây thì agent lại viết template plate §3.2.
-                lines.append(f"- Bộ phối cần dựng (coordinate sheet): {task.item_name}")
-            else:
-                lines.append(f"- Món đồ cần dựng ảnh sản phẩm: {task.item_name}")
+            lines.append(f"- Bộ phối cần dựng (coordinate sheet): {task.item_name}")
 
-        scope = self.resolve_item_scope(task)
-        if scope is not None:
-            key, spec = scope
-            lines.append(f"- Phạm vi cần tách: **{spec['label']}**.")
-            lines.append(f"  → {spec['rule']}")
-            lines.append(f"  → Ảnh phải KHÔNG có: {spec['exclude']}.")
-            if key == "full_set":
-                lines.append(
-                    "  → Ngoại lệ có chủ đích: bỏ quy tắc 'một món' của skill; giữ nguyên "
-                    "các quy tắc còn lại (nền trơn, cấm người, cấm chữ)."
-                )
-            elif key == "coordinate_sheet":
-                lines.extend([
-                    "  → Ngoại lệ có chủ đích: bỏ CẢ quy tắc 'một món' và 'cấm chữ'. Dùng "
-                    "§2.2 + template §3.4; KHÔNG dùng template flat-lay §3.2.",
-                    "  → Bắt buộc có typography: title + `NO. <số>`, callout 01..0N theo thứ "
-                    "tự mặc, 3 ô `DETAIL`, 5 swatch `COLOR PALETTE`.",
-                    "  → Negative phải BỎ `no text`, `no collage`, `no grid`, `no multiple "
-                    "items` — chúng xoá đúng thứ sheet cần.",
-                    "  → Ảnh này là deliverable: không đưa vào `cutout_items`, không dùng làm "
-                    "first frame video.",
-                ])
+        if self.is_item_task(task):
+            lines.extend([
+                "- **Chế độ COORDINATE SHEET** (ảnh này là deliverable, không phải nguyên liệu).",
+                f"  → {COORDINATE_SHEET_RULE}",
+                f"  → Ảnh phải KHÔNG có: {COORDINATE_SHEET_EXCLUDE}.",
+                "  → Bắt buộc có typography: title + `NO. <số>`, callout 01..0N theo thứ "
+                "tự mặc, 3 ô `DETAIL`, 5 swatch `COLOR PALETTE`.",
+                "  → Negative phải BỎ `no text`, `no collage`, `no grid`, `no multiple "
+                "items` — chúng xoá đúng thứ sheet cần.",
+                "  → Ảnh này là deliverable: không đưa vào `cutout_items`, không dùng làm "
+                "first frame video.",
+            ])
 
         # Ngữ cảnh script: shot nào rơi vào clip này, đang nhấn món nào. Đây là thứ
         # trước kia agent không hề biết, nên prompt sinh ra không khớp timeline.
@@ -323,11 +270,17 @@ class PromptAgent:
             )
 
         if rel_files:
+            lines.extend([
+                "- Token tham chiếu BẮT BUỘC (khai báo một lần ở đầu prompt, dùng lại trong thân):",
+                "  `<<model>>` = ảnh người mẫu, `<<garment>>` = ảnh trang phục,",
+                "  `<<background>>` = ảnh bối cảnh.",
+                "  → KHÔNG viết `Image 1/2/3`, KHÔNG viết `@alias`. Xem §2.2.3a của skill.",
+            ])
             lines.append("- File ảnh upstream đang kết nối vào node này, THEO ĐÚNG THỨ TỰ:")
             for idx, rf in enumerate(rel_files, 1):
                 lines.append(f"  {idx}. {rf}")
             if not is_video:
-                lines.extend(self._image_role_lines(task, len(rel_files)))
+                lines.extend(self._image_role_lines(task, rel_files))
                 lines.append(
                     "  => ĐỌC TRỰC TIẾP các file trên (màu sắc, phom dáng, chất liệu vải, chi tiết may mặc) "
                     "để prompt khớp 100% với sản phẩm thật."
@@ -338,27 +291,27 @@ class PromptAgent:
         if task.custom_hint and task.custom_hint.strip():
             lines.append(f"- Ghi chú bổ sung từ người dùng: \"{task.custom_hint.strip()}\"")
 
-        is_sheet = scope is not None and scope[0] == "coordinate_sheet"
-        # Dán khung §3.4 ngay trước khi agent trả lời: nhắc "dùng §3.4" ở giữa instruction
-        # là chưa đủ — template §3.2 nằm sát ngay trên nó trong file skill, và
-        # `gemini-3.8-flash-low` đã thật sự trả về nguyên văn §3.2 dù phạm vi là sheet.
+        is_sheet = self.is_item_task(task)
+        # Dán khung §3.1 ngay trước khi agent trả lời: nhắc "dùng §3.1" ở giữa instruction
+        # là chưa đủ — `gemini-3.8-flash-low` đã thật sự trả về một flat-lay không chữ
+        # dù được chỉ đúng mục.
         #
         # Chỉ dán CÂU MỞ ĐẦU + danh sách khối, không dán cả template 3.5K ký tự: nội dung
         # template vẫn nằm nguyên trong phần skill ở trên, dán lại lần nữa chỉ làm agent
         # đọc thêm 3.5K mà không thêm thông tin.
         sheet_opener = ""
         if is_sheet:
-            template = extract_skill_template(skill.raw_content, "3.4") or ""
+            template = extract_skill_template(skill.raw_content, "3.1") or ""
             sheet_opener = template.split("\n\n")[0].strip()
 
         lines.extend(["", "--- ĐỊNH DẠNG ĐẦU RA ---"])
         if is_sheet:
             lines.extend([
                 "Trả về CHỈ MỘT khối code markdown chứa prompt tiếng Anh hoàn chỉnh.",
-                "Prompt đó là coordinate sheet theo §3.4, KHÔNG phải flat-lay §3.2 — bản §3.2",
-                "không có chữ, không callout, không palette, và bị tính là câu trả lời sai.",
+                "Prompt đó là coordinate sheet theo §3.1 — một flat-lay không chữ, không",
+                "callout, không palette bị tính là câu trả lời sai.",
                 "Câu mở đầu dùng đúng nguyên văn:",
-                f'"{sheet_opener}"' if sheet_opener else "<câu mở đầu của §3.4>",
+                f'"{sheet_opener}"' if sheet_opener else "<câu mở đầu của §3.1>",
                 "Tiếp theo là đúng các khối sau, giữ nguyên tên khối và thứ tự:",
                 "  LAYOUT — title góc trên trái, `NO. <số>` góc trên phải, bộ đồ xếp dọc ở",
                 "    giữa, callout 01..0N theo thứ tự mặc, 3 ô DETAIL xếp dọc bên phải,",
@@ -427,36 +380,81 @@ class PromptAgent:
         return lines
 
 
-    def _image_role_lines(self, task: NodePromptTask, count: int) -> list[str]:
+    def _image_role_lines(self, task: NodePromptTask, rel_files: list[str]) -> list[str]:
         """Nói rõ ảnh nào là gì, để agent khỏi đoán theo thứ tự.
 
         Lỗi thật đã xảy ra: node nối 3 ảnh (model / garment / background) nhưng prompt
         sinh ra lại tả bộ DONNA - tức agent lấy chữ từ ngữ cảnh script thay vì pixel.
         Khi đã bỏ chữ khỏi ngữ cảnh thì phải nói rõ vai trò từng vị trí, nếu không agent
         vẫn có thể hoán đổi model và garment.
+
+        Nhận `rel_files` chứ không phải `count`: tên file là tín hiệu để biết ảnh trang phục
+        là coordinate sheet hay người mặc thật (§2.1.1 skill).
         """
+        count = len(rel_files)
         if task.plate_mode:
             return [
-                "  → Vai trò ảnh (chế độ PLATE — chỉ MỘT ảnh): Ảnh 1 đóng cả hai vai",
+                "  → Vai trò ảnh (chế độ PLATE — chỉ MỘT ảnh): nó đóng cả hai vai",
                 "     identity (khuôn mặt, dáng) VÀ trang phục. Không có ảnh nào khác.",
+            ]
+        if self.is_item_task(task):
+            # Sheet không có khái niệm "ảnh model" tách khỏi "ảnh garment": mọi ảnh
+            # upstream đều là **reference của cùng một bộ đồ**. Gán vai như try-on sẽ
+            # khiến agent viết prompt mặc đồ lên người — đúng thứ skill cấm.
+            return [
+                "  → Vai trò ảnh (chế độ COORDINATE SHEET): mọi ảnh upstream đều là",
+                "     reference của CÙNG MỘT bộ đồ. Không ảnh nào là 'ảnh model' cần giữ",
+                "     mặt hay dáng — sheet không có người. Đọc từng ảnh để lấy phom, màu,",
+                "     chất liệu và chi tiết may của từng món; ảnh sau bổ sung góc/món mà",
+                "     ảnh trước bị che.",
             ]
         if count >= 3:
             return [
-                "  → Vai trò ảnh: Ảnh 1 = MODEL (identity: mặt, tóc, dáng — giữ nguyên).",
-                "     Ảnh 2 = GARMENT (trang phục cần mặc — chép đúng phom, màu, chất liệu).",
-                "     Ảnh 3 = BACKGROUND (bối cảnh + ánh sáng — kế thừa).",
-                "     Thứ tự này cố định; đừng suy ra vai trò từ tên file hay thứ tự khác.",
+                "  → Vai trò ảnh: ảnh thứ 1 = MODEL (identity: mặt, tóc, dáng — giữ nguyên).",
+                "     ảnh thứ 2 = GARMENT (trang phục cần mặc — chép đúng phom, màu, chất liệu).",
+                "     ảnh thứ 3 = BACKGROUND (bối cảnh + ánh sáng — kế thừa).",
+                "     Thứ tự này cố định và ánh xạ vào `<<model>>` / `<<garment>>` / `<<background>>`.",
+                *self._sheet_garment_lines(rel_files[1:2], garment_slot="<<garment>>"),
             ]
         if count == 2:
             return [
-                "  → Vai trò ảnh: Ảnh 1 = MODEL (identity: mặt, tóc, dáng — giữ nguyên).",
-                "     Ảnh 2 = GARMENT (trang phục cần mặc — chép đúng phom, màu, chất liệu).",
+                "  → Vai trò ảnh: ảnh thứ 1 = MODEL (identity: mặt, tóc, dáng — giữ nguyên).",
+                "     ảnh thứ 2 = GARMENT (trang phục cần mặc — chép đúng phom, màu, chất liệu).",
                 "     Không có ảnh bối cảnh riêng: dùng studio trơn ở module Environment của skill,",
-                "     KHÔNG kế thừa bối cảnh Ảnh 2 (ảnh Shopee ngoài đường sẽ lọt vào khung).",
+                "     KHÔNG kế thừa bối cảnh ảnh 2 (ảnh Shopee ngoài đường sẽ lọt vào khung).",
+                *self._sheet_garment_lines(rel_files[1:2], garment_slot="<<garment>>"),
             ]
         return [
             "  → Chỉ có MỘT ảnh: nó đóng cả vai model và trang phục.",
-            "     Không được nhắc tới `Image 2` / `Image 3`.",
+            "     Chỉ dùng `<<model>>`; không nhắc `<<garment>>` / `<<background>>`.",
+            *self._sheet_garment_lines(rel_files[:1], garment_slot="<<model>>"),
+        ]
+
+    @staticmethod
+    def _sheet_garment_lines(refs: list[str], *, garment_slot: str) -> list[str]:
+        """Chỉ dẫn neo độ dài khi (các) ảnh trang phục là coordinate sheet — xem skill §2.1.1.
+
+        Lỗi thật 2026‑11‑12: lấy sheet làm ảnh trang phục thì quần ra dài gấp ~1.6 lần
+        thực tế. Nguyên nhân: sheet xếp từng món **cùng cỡ cho dễ nhìn**, nên tỷ lệ giữa
+        các món trên sheet là tỷ lệ *trình bày*, không phải tỷ lệ *trên người*. Đo được:
+        shorts/áo trên sheet 0.755, trên cơ thể ~0.44, ảnh ra 0.685 — bám sheet, không bám
+        người. Ảnh sheet không có người nên model không có cách nào suy ra gấu quần nằm ở
+        đâu trên cơ thể; nó chỉ thấy một hình chữ nhật cao bằng 0.755 cái áo.
+
+        Nhận diện bằng **tên file** vì đó là tín hiệu chắc chắn duy nhất không cần nhìn
+        pixel: prompt thật không hề viết "flat-lay", nên dò chữ trong prompt là guard giả.
+        """
+        if not refs or not any(SHEET_FILENAME_RE.search(r) for r in refs):
+            return []
+        return [
+            "  → ẢNH TRANG PHỤC LÀ COORDINATE SHEET (flat-lay): các món xếp rời, cùng cỡ,",
+            "     không có người mặc. BẮT BUỘC thêm câu neo độ dài vào `[GARMENT FIDELITY]`,",
+            "     neo vào MỐC GIẢI PHẪU (không dùng số đo, không nói 'dài/ngắn'):",
+            f"       Length is anchored to <<model>>'s body, never to the layout of {garment_slot}:",
+            "       the sheet shows each piece enlarged and separated, so scale each hem to the body.",
+            "       The top ends at the high hip. The shorts end at mid-thigh, above the knee.",
+            "     Mỗi món có gấu một câu. Câu này chỉ chốt GẤU NẰM Ở ĐÂU; phom vẫn do ảnh quyết.",
+            "     Ảnh là NGƯỜI MẶC THẬT thì KHÔNG thêm. Xem skill §2.1.1.",
         ]
 
     def _load_script_context(self, task: NodePromptTask) -> Optional[LookbookScript]:
@@ -570,8 +568,7 @@ class PromptAgent:
         t0 = time.perf_counter()
         skill = self.select_skill(task)
         upstream_files = self.resolve_upstream_files(task.upstream_media_urls)
-        scope = self.resolve_item_scope(task)
-        is_sheet = scope is not None and scope[0] == "coordinate_sheet"
+        is_sheet = self.is_item_task(task)
 
         instruction = self.format_agent_instruction(task, skill, upstream_files)
         raw_output = await self.runner.run_prompt_instruction(
@@ -580,9 +577,9 @@ class PromptAgent:
             model=task.model,
         )
 
-        # Kiểm tra hậu sinh: agent đôi khi vẫn trả về §3.2 dù khung §3.4 đã nằm cuối
-        # instruction. Chạy lại ĐÚNG MỘT lần với cảnh báo thay vì trả về prompt sai định
-        # dạng — người dùng chỉ thấy kết quả, không thấy lý do nó sai.
+        # Kiểm tra hậu sinh: agent đôi khi vẫn trả về một flat-lay không chữ dù khung §3.1
+        # đã nằm cuối instruction. Chạy lại ĐÚNG MỘT lần với cảnh báo thay vì trả về prompt
+        # sai định dạng — người dùng chỉ thấy kết quả, không thấy lý do nó sai.
         if is_sheet:
             missing = coordinate_sheet_sections_missing(raw_output)
             if missing:
@@ -611,8 +608,8 @@ class PromptAgent:
         note = (
             "--- CẢNH BÁO: LẦN TRƯỚC SAI ĐỊNH DẠNG ---\n"
             f"Lần trước bạn trả về thiếu: {', '.join(missing)}.\n"
-            "Đó là template flat-lay §3.2, không phải coordinate sheet. Viết lại từ đầu và\n"
-            "giữ đủ mọi khối của khung §3.4 bên dưới.\n\n"
+            "Đó là một flat-lay không chữ, không phải coordinate sheet. Viết lại từ đầu và\n"
+            "giữ đủ mọi khối của khung §3.1 bên dưới.\n\n"
         )
         marker = "--- ĐỊNH DẠNG ĐẦU RA ---"
         idx = instruction.find(marker)

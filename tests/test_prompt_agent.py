@@ -34,7 +34,7 @@ def test_skill_manager_loads_skills():
     assert len(skills) >= 2
     ids = [s.id for s in skills]
     assert "try-on-image-prompter" in ids
-    assert "lookbook-thumbnail-prompter" in ids
+    assert "lookbook-item-cutout-prompter" in ids
 
     tryon = mgr.get_skill("try-on-image-prompter")
     assert tryon is not None
@@ -81,7 +81,7 @@ def test_api_agent_config(client: TestClient):
     assert r2.json()["config"]["agy_model"] == "gemini-3.8-flash-low"
 
 
-# -- item_scope: chọn món nào lên ảnh sản phẩm ------------------------------- #
+# -- coordinate sheet: skill ảnh sản phẩm chỉ có một đường ra ------------------ #
 
 
 def _agent_with_skills():
@@ -92,105 +92,103 @@ def _agent_with_skills():
     return agent
 
 
-def test_item_scope_reaches_agent_instruction():
-    """Không có phạm vi thì agent không biết cắt món nào — model tự chọn, luôn ra chiếc áo."""
+def test_item_node_always_asks_for_coordinate_sheet():
+    """Không có phạm vi để chọn: node ảnh sản phẩm luôn ra coordinate sheet.
+
+    Trước đây agent phải được chỉ định `item_scope`, vì skill còn 4 đường ra (áo / quần /
+    cả bộ / bộ phối). Skill giờ chỉ còn sheet, nên mọi node ảnh sản phẩm nhận cùng một
+    instruction — không còn giá trị nào để truyền sai.
+    """
     from src.Workflows.prompt_agent import NodePromptTask
 
     agent = _agent_with_skills()
     skill = agent.skill_mgr.get_skill("lookbook-item-cutout-prompter")
     assert skill is not None
 
-    for scope, needle in (
-        ("top", "chỉ ÁO"),
-        ("bottom", "chỉ QUẦN / VÁY"),
-        ("full_set", "CẢ BỘ"),
-        ("coordinate_sheet", "BỘ PHỐI"),
-    ):
-        out = agent.format_agent_instruction(
-            NodePromptTask(
-                node_id="n",
-                node_type="image",
-                upstream_media_urls=[],
-                is_item=True,
-                item_name="Set Donna",
-                item_scope=scope,
-            ),
-            skill,
-            [],
-        )
-        assert needle in out, scope
-        assert "Phạm vi cần tách" in out, scope
+    out = agent.format_agent_instruction(
+        NodePromptTask(
+            node_id="n",
+            node_type="image",
+            upstream_media_urls=[],
+            is_item=True,
+            item_name="Set Donna",
+        ),
+        skill,
+        [],
+    )
+    assert "COORDINATE SHEET" in out
+    assert "Bộ phối cần dựng" in out
+    # Không còn khối "Phạm vi cần tách" của 4 chế độ cũ.
+    assert "Phạm vi cần tách" not in out
 
 
-def test_item_scope_excludes_other_piece():
-    """Mỗi phạm vi phải nói rõ món KHÔNG được xuất hiện, nếu không model vẫn vẽ cả bộ."""
-    from src.Workflows.prompt_agent import ITEM_SCOPES
+def test_sheet_instruction_keeps_typography_and_drops_plate_negatives():
+    """Sheet là ngoại lệ có chủ đích của quy tắc "một món": có chữ, nhiều món, không rembg.
 
-    assert "skirt" in ITEM_SCOPES["top"]["exclude"].lower()
-    assert "shirt" in ITEM_SCOPES["bottom"]["exclude"].lower()
-    assert "full_set" in ITEM_SCOPES
-    # Sheet là ngoại lệ: túi và giày là món BẮT BUỘC, không được nằm trong danh sách loại trừ.
-    sheet = ITEM_SCOPES["coordinate_sheet"]
-    assert "3.4" in sheet["rule"] and "3.2" in sheet["rule"]
-    assert "bag" not in sheet["exclude"].lower()
-    assert "shoes" not in sheet["exclude"].lower()
+    Hai lỗi phá sheet ngay: (1) bê negative của ảnh plate (`no text`, `no collage`,
+    `no grid`, `no multiple items`) — xoá đúng thứ sheet cần; (2) quên palette 5 ô. Túi và
+    giày là món BẮT BUỘC nên không được nằm trong danh sách loại trừ.
+    """
+    from src.Workflows.prompt_agent import COORDINATE_SHEET_EXCLUDE, COORDINATE_SHEET_RULE
+
+    assert "3.1" in COORDINATE_SHEET_RULE
+    assert "bag" not in COORDINATE_SHEET_EXCLUDE.lower()
+    assert "shoes" not in COORDINATE_SHEET_EXCLUDE.lower()
+    assert "color palette" in COORDINATE_SHEET_RULE.lower()
 
 
-def test_item_scope_ignored_for_video_and_plain_images():
-    """Phạm vi chỉ có nghĩa với node ẢNH sản phẩm; video/non-item không được đổi hành vi."""
+def test_item_sheet_never_applies_to_video():
+    """Sheet chỉ có nghĩa với node ẢNH sản phẩm; video không bao giờ là sheet."""
     from src.Workflows.prompt_agent import NodePromptTask
 
     agent = _agent_with_skills()
-    assert agent.resolve_item_scope(
+    assert not agent.is_item_task(
         NodePromptTask(node_id="n", node_type="video", upstream_media_urls=[],
-                       is_item=True, item_scope="top")
-    ) is None
-    assert agent.resolve_item_scope(
+                       is_item=True)
+    )
+    assert not agent.is_item_task(
         NodePromptTask(node_id="n", node_type="image", upstream_media_urls=[],
-                       is_item=False, item_scope="top")
-    ) is None
-    # Dữ liệu cũ / gõ tay sai ⇒ bỏ qua, giữ hành vi cũ.
-    assert agent.resolve_item_scope(
+                       is_item=False)
+    )
+    assert agent.is_item_task(
         NodePromptTask(node_id="n", node_type="image", upstream_media_urls=[],
-                       is_item=True, item_scope="left_sleeve")
-    ) is None
-    assert agent.resolve_item_scope(
+                       is_item=True)
+    )
+    # Kiểu cũ: gắn cứng `item_id` của script vẫn phải ra sheet.
+    assert agent.is_item_task(
         NodePromptTask(node_id="n", node_type="image", upstream_media_urls=[],
-                       is_item=True, item_scope="full_set")
-    ) is not None
-    assert agent.resolve_item_scope(
-        NodePromptTask(node_id="n", node_type="image", upstream_media_urls=[],
-                       is_item=True, item_scope="coordinate_sheet")
-    ) is not None
+                       item_id="item_1")
+    )
 
 
-def test_coordinate_sheet_instruction_forbids_plain_fullset_template():
-    """Chọn 'Bộ phối' mà agent vẫn dùng template §3.2 thì ra flat-lay không chữ — đúng lỗi
-    đã gặp trên UI. Instruction phải chỉ §3.4, bắt buộc typography, và dặn BỎ các cụm
-    negative của plate (`no text`, `no collage`…)."""
+def test_coordinate_sheet_instruction_forbids_typeless_flat_lay():
+    """Sheet mà agent lại dùng một flat-lay không chữ thì ra ảnh sai hẳn mục tiêu.
+
+    Instruction phải chỉ §3.1, bắt buộc typography, và dặn BỎ các cụm negative của ảnh
+    plate (`no text`, `no collage`…) — chúng xoá đúng thứ sheet cần."""
     from src.Workflows.prompt_agent import NodePromptTask
 
     agent = _agent_with_skills()
     skill = agent.skill_mgr.get_skill("lookbook-item-cutout-prompter")
     out = agent.format_agent_instruction(
         NodePromptTask(node_id="n", node_type="image", upstream_media_urls=[],
-                       is_item=True, item_name="Set Y2K",
-                       item_scope="coordinate_sheet"),
+                       is_item=True, item_name="Set Y2K"),
         skill, [],
     )
-    assert "BỘ PHỐI" in out
-    assert "§3.4" in out and "§3.2" in out
+    assert "COORDINATE SHEET" in out
+    assert "§3.1" in out
     assert "Negative phải BỎ" in out
+    assert "no text" in out and "no collage" in out
     assert "3 ô `DETAIL`" in out
     assert "COLOR PALETTE" in out
     assert "first frame" in out
 
 
-def test_coordinate_sheet_instruction_embeds_34_skeleton_at_the_end():
-    """Nhắc §3.4 ở giữa instruction là chưa đủ — agent vẫn trả về §3.2.
+def test_coordinate_sheet_instruction_embeds_31_skeleton_at_the_end():
+    """Nhắc §3.1 ở giữa instruction là chưa đủ — agent vẫn trả về flat-lay không chữ.
 
-    Khối `ĐỊNH DẠNG ĐẦU RA` (thứ agent đọc cuối) phải nêu đúng câu mở đầu của §3.4 và
-    đủ 6 tên khối, để agent không còn đường lùi về template flat-lay.
+    Khối `ĐỊNH DẠNG ĐẦU RA` (thứ agent đọc cuối) phải nêu đúng câu mở đầu của §3.1 và
+    đủ 6 tên khối, để agent không còn đường lùi về ảnh không typography.
     """
     from src.Workflows.prompt_agent import NodePromptTask
 
@@ -198,8 +196,7 @@ def test_coordinate_sheet_instruction_embeds_34_skeleton_at_the_end():
     skill = agent.skill_mgr.get_skill("lookbook-item-cutout-prompter")
     out = agent.format_agent_instruction(
         NodePromptTask(node_id="n", node_type="image", upstream_media_urls=[],
-                       is_item=True, item_name="Set Y2K",
-                       item_scope="coordinate_sheet"),
+                       is_item=True, item_name="Set Y2K"),
         skill, [],
     )
     _, _, tail = out.partition("--- ĐỊNH DẠNG ĐẦU RA ---")
@@ -207,16 +204,16 @@ def test_coordinate_sheet_instruction_embeds_34_skeleton_at_the_end():
     for marker in ("LAYOUT", "OUTFIT", "FIDELITY LOCKS", "DO NOT ADD",
                    "TYPE & LIGHT", "COLOR PALETTE", "Negative"):
         assert marker in tail, marker
-    # Câu mở đầu lấy từ chính §3.4 của skill, không phải bản chép tay.
+    # Câu mở đầu lấy từ chính §3.1 của skill, không phải bản chép tay.
     assert "Editorial fashion coordinate sheet" in tail
     assert "ghost-mannequin" in tail
-    assert "KHÔNG phải flat-lay §3.2" in tail
+    assert "flat-lay không chữ" in tail
     # Khung đầy đủ 3.5K không được dán lại: một lượt gọi thật đã vượt trần 75s.
     assert len(tail) < 2500
 
 
-def test_coordinate_sheet_sections_flag_plain_plate_prompt():
-    """Đúng prompt người dùng gửi: §3.2 verbatim ⇒ phải bị nhận là thiếu khối."""
+def test_coordinate_sheet_sections_flag_typeless_flat_lay():
+    """Prompt flat-lay không chữ ⇒ phải bị nhận là thiếu khối."""
     from src.Workflows.prompt_agent import coordinate_sheet_sections_missing
 
     plate = (
@@ -255,24 +252,23 @@ _SHEET_PROMPT = (
     "FIDELITY LOCKS: keep the keyhole open.\nDO NOT ADD: belt.\n"
     "TYPE & LIGHT\nTwo typefaces.\nCOLOR PALETTE\nNegative: no person."
 )
-_PLATE_PROMPT = (
+_TYPELESS_PROMPT = (
     "Flat-lay product arrangement of a complete coordinated set: shirt and jeans.\n\n"
     "Negative: no person, no text, no collage, no grid."
 )
 
 
-def test_coordinate_sheet_retries_once_when_agent_returns_plate():
-    """Agent trả §3.2 ⇒ chạy lại một lần với cảnh báo, không trả prompt sai cho UI."""
+def test_coordinate_sheet_retries_once_when_agent_returns_typeless_flat_lay():
+    """Agent trả flat-lay không chữ ⇒ chạy lại một lần với cảnh báo, không trả prompt sai cho UI."""
     import asyncio
 
     from src.Workflows.prompt_agent import NodePromptTask
 
     agent = _agent_with_skills()
-    agent.runner = _StubRunner([_PLATE_PROMPT, _SHEET_PROMPT])
+    agent.runner = _StubRunner([_TYPELESS_PROMPT, _SHEET_PROMPT])
     res = asyncio.run(agent.generate_prompt_for_node(
         NodePromptTask(node_id="n", node_type="image", upstream_media_urls=[],
-                       is_item=True, item_name="Set Y2K",
-                       item_scope="coordinate_sheet")
+                       is_item=True, item_name="Set Y2K")
     ))
     assert res.prompt == _SHEET_PROMPT
     assert len(agent.runner.instructions) == 2
@@ -281,19 +277,18 @@ def test_coordinate_sheet_retries_once_when_agent_returns_plate():
     assert retry.index("CẢNH BÁO") < retry.index("--- ĐỊNH DẠNG ĐẦU RA ---")
 
 
-def test_plate_scope_never_retries():
-    """Phạm vi plate không được sinh thêm lần gọi: §3.2 là ĐÚNG cho `full_set`."""
+def test_plain_image_node_never_retries():
+    """Node ảnh không phải bảng phối không được sinh thêm lần gọi: retry là của sheet."""
     import asyncio
 
     from src.Workflows.prompt_agent import NodePromptTask
 
     agent = _agent_with_skills()
-    agent.runner = _StubRunner([_PLATE_PROMPT])
+    agent.runner = _StubRunner([_TYPELESS_PROMPT])
     res = asyncio.run(agent.generate_prompt_for_node(
-        NodePromptTask(node_id="n", node_type="image", upstream_media_urls=[],
-                       is_item=True, item_name="Set Y2K", item_scope="full_set")
+        NodePromptTask(node_id="n", node_type="image", upstream_media_urls=[])
     ))
-    assert res.prompt == _PLATE_PROMPT
+    assert res.prompt == _TYPELESS_PROMPT
     assert len(agent.runner.instructions) == 1
 
 
@@ -311,8 +306,7 @@ def test_sheet_instruction_never_goes_inline():
     skill = agent.skill_mgr.get_skill("lookbook-item-cutout-prompter")
     ins = agent.format_agent_instruction(
         NodePromptTask(node_id="n", node_type="image", upstream_media_urls=[],
-                       is_item=True, item_name="Set Y2K",
-                       item_scope="coordinate_sheet"),
+                       is_item=True, item_name="Set Y2K"),
         skill, [],
     )
     assert len(ins) > MAX_INLINE_INSTRUCTION, (
@@ -331,22 +325,56 @@ def test_item_node_not_reminded_it_is_a_plate():
     skill = agent.skill_mgr.get_skill("lookbook-item-cutout-prompter")
     out = agent.format_agent_instruction(
         NodePromptTask(node_id="n", node_type="image", upstream_media_urls=[],
-                       is_item=True, item_name="Set Donna", item_scope="top"),
+                       is_item=True, item_name="Set Donna"),
         skill, [],
     )
     assert "plate nền" not in out
 
 
-def test_api_accepts_item_scope(client: TestClient):
-    """Route phải nhận `item_scope`; sai chính tả là 422 và UI không gửi được phạm vi."""
+def test_item_node_image_roles_are_sheet_roles():
+    """Hai ảnh Shopee cho một bộ phối không được gán vai MODEL/GARMENT của try-on.
+
+    Vai đó bảo agent giữ mặt và dáng của ảnh người mẫu — tức là vẽ người, đúng thứ sheet cấm.
+    Mọi ảnh upstream ở chế độ sheet đều là reference của cùng một bộ đồ.
+    """
+    from src.Workflows.prompt_agent import NodePromptTask
+
+    agent = _agent_with_skills()
+    for count in (1, 2, 3):
+        lines = agent._image_role_lines(
+            NodePromptTask(node_id="n", node_type="image", upstream_media_urls=[],
+                           is_item=True, item_name="Set Y2K"),
+            [f"out/uploads/ref_{i}.jpg" for i in range(count)],
+        )
+        joined = "\n".join(lines)
+        assert "COORDINATE SHEET" in joined, count
+        assert "= MODEL" not in joined, count
+        assert "CÙNG MỘT bộ đồ" in joined, count
+
+
+def test_plain_image_node_keeps_tryon_image_roles():
+    """Ảnh try-on thường vẫn phải nhận vai MODEL / GARMENT — đừng sửa nhầm sang sheet."""
+    from src.Workflows.prompt_agent import NodePromptTask
+
+    agent = _agent_with_skills()
+    joined = "\n".join(
+        agent._image_role_lines(
+            NodePromptTask(node_id="n", node_type="image", upstream_media_urls=[]),
+            ["out/uploads/model.jpg", "out/uploads/garment.jpg"],
+        )
+    )
+    assert "ảnh thứ 1 = MODEL" in joined and "ảnh thứ 2 = GARMENT" in joined
+
+
+def test_api_accepts_sheet_fields(client: TestClient):
+    """Route phải nhận `is_item`/`item_name`; thiếu là UI không gửi được bảng phối."""
     from src.WebUI.app import GenerateNodePromptBody
 
-    body = GenerateNodePromptBody(node_id="n", is_item=True, item_scope="bottom")
-    assert body.item_scope == "bottom"
-    assert GenerateNodePromptBody(
-        node_id="n", is_item=True, item_scope="coordinate_sheet"
-    ).item_scope == "coordinate_sheet"
-    assert GenerateNodePromptBody(node_id="n").item_scope is None
+    body = GenerateNodePromptBody(node_id="n", is_item=True, item_name="Set Y2K")
+    assert body.is_item is True
+    assert body.item_name == "Set Y2K"
+    empty = GenerateNodePromptBody(node_id="n")
+    assert empty.is_item is False and empty.item_name is None
 
 
 # -- plate mode: skill plate cũ đã gộp vào try-on ----------------------------- #

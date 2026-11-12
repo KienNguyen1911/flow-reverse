@@ -59,19 +59,22 @@ chính header đó; editor hardcode `duration_s = 8`; không có gì nói shot n
 | :-- | :-- | :-- |
 | `try-on-image-prompter` | Ảnh **plate** cho video + ảnh thử đồ | Chế độ plate §2.5: một ảnh, studio trống, cấm tuyệt đối chữ/UI |
 | `lookbook-video-prompter` | Mọi prompt video | Motion-only 25–60 từ, đúng 1 câu camera + 2 câu cơ thể |
-| `lookbook-item-cutout-prompter` | Ảnh flat-lay sản phẩm | Sinh ảnh sạch từ ảnh Shopee làm reference, cấm người/bối cảnh |
-| `lookbook-thumbnail-prompter` | **Chỉ thumbnail** | Board có cột NABI; không được làm first frame video |
+| `lookbook-item-cutout-prompter` | **Coordinate sheet** (bảng phối) | Một đường ra duy nhất: cả bộ + typography. Là deliverable — không rembg, không first frame |
 
 > Skill `lookbook-model-only-prompter` đã **gộp vào `try-on-image-prompter` §2.5** (chế độ plate).
 > Nó chỉ là try-on với một ảnh đầu vào + bối cảnh thay thế, nên tách riêng tạo ra hai nguồn sự thật
 > cho `50mm`/`76%` và sớm lệch nhau (`85mm`, `across the body line`). Mã cũ vẫn ghi ID đó được map
 > sang try-on qua `PromptAgent.LEGACY_SKILL_ALIASES`.
 
-Hai skill cũ `lookbook-video-1-push.md` và `lookbook-video-2-showcase.md` đã **xoá**: chúng
-đòi cột UI nằm trong pixel để đẩy văng, trái với quyết định tách lớp.
+Ba skill cũ đã **xoá**:
+
+- `lookbook-video-1-push.md` / `lookbook-video-2-showcase.md` — chúng đòi cột UI nằm trong pixel
+  để đẩy văng, trái với quyết định tách lớp.
+- `lookbook-thumbnail-prompter.md` — board NABI chia đôi (1/3 cột item + 2/3 người mẫu) chỉ dùng
+  được làm ảnh bìa: chữ dính pixel, muốn dùng cho video phải crop 1/3 khung và bề ngang thật chỉ
+  còn ~453px. Cột item giờ do lớp dựng lo, ảnh bìa lấy thẳng từ canvas.
 
 ### Prompt video: những gì bị cấm
-
 `sanitize_video_prompt` (`src/Bridge/flow_video_bridge.py`) chạy trước khi gửi Flow, và
 `src/Workflows/prompt_lint.py` cảnh báo sớm cho người dùng:
 
@@ -86,6 +89,66 @@ Hai skill cũ `lookbook-video-1-push.md` và `lookbook-video-2-showcase.md` đã
 > Bug đã sửa: `Camera\s*&\s*Realism:.*$` từng xoá cả phần đuôi prompt vì toàn bộ prompt đã
 > được join thành một dòng. Xem `tests/test_prompt_skills_contract.py`
 > `test_sanitizer_keeps_tail_after_camera_realism_header`.
+
+## 4b. Tham chiếu ảnh trong prompt: token, không phải `@mention` lặp lại
+
+Prompt ảnh nói về các ảnh tham chiếu bằng **ba token** — không dùng `Image 1/2/3`, cũng không
+chèn `@alias` bằng tay:
+
+| Token | Trỏ tới |
+| :-- | :-- |
+| `<<model>>` | Ảnh người mẫu (identity) |
+| `<<garment>>` | Ảnh trang phục |
+| `<<background>>` | Ảnh bối cảnh |
+
+`parse_prompt_segments` (`src/Bridge/flow/composer.py`) dựng **khối khai báo một lần ở đầu**,
+mỗi tham chiếu đúng **một** chip mang `media_id`, rồi để thân prompt là chữ thường:
+
+```text
+<<model>> = Image 1, the person: <chip>
+<<garment>> = Image 2, the outfit: <chip>
+<<background>> = Image 3, the setting: <chip>
+
+Try-on photograph of the exact same model from <<model>>, wearing …
+```
+
+**Vì sao đổi.** Cơ chế cũ thay *mỗi lần lặp* một tham chiếu bằng chữ `@model_51aad2` nằm thẳng
+trong `spec[8]` của request `ogiZ0b`. Đo trên một lần chạy thật: **12 chuỗi như vậy** trong một
+prompt try-on, trong khi chỉ có 3 chip. Sau khi đổi, mỗi alias xuất hiện đúng **một** lần, dưới
+dạng chip.
+
+Test khoá: `tests/test_prompt_mention_parser.py::test_no_repeated_mention_becomes_literal_alias_text`.
+
+### 4.1 `PUBLIC_ERROR_UNSAFE_GENERATION` — nguyên nhân thật là họ từ `brand`
+
+Nhãn này gây hiểu sai hai lần liên tiếp: nó đọc như lỗi an toàn hình ảnh, trong khi gRPC code là
+`[3]` = `INVALID_ARGUMENT`. Đo trên server thật 2026‑11‑12 (profile `aaaaa`, Nano Banana Pro,
+cùng prompt, cùng ảnh tham chiếu) bằng cách chỉ đổi **một** biến mỗi lần:
+
+| Thay đổi | Kết quả |
+| :--- | :--- |
+| Prompt đầy đủ, **có** ảnh tham chiếu | REJECT |
+| Đúng prompt đó, **bỏ** ảnh tham chiếu | 200 OK + ảnh |
+| Prompt ngắn + ảnh tham chiếu | 200 OK + ảnh |
+| Thân prompt đầy đủ (bỏ khối `Negative:`) + ảnh | 200 OK + ảnh |
+| Thân prompt + `Negative: … no watermark, …` | 200 OK + ảnh |
+| Thân prompt + `Negative: no brand logo.` | REJECT (lặp lại 2/2) |
+| Thân prompt + `Negative: no logo.` | 200 OK |
+| Thân prompt + `Negative: no brand.` | REJECT |
+
+Kết luận: trigger là **họ từ `brand`** (`brand`, `brands`, `branded`, `branding`), kể cả khi đứng
+sau `no`. Không phải độ dài prompt, không phải ảnh tham chiếu, không phải token `@alias` lặp.
+Prompt try-on thật, **chỉ** đổi hai từ `branding` → `any label` / `no added marks`, đã cho 200 OK
+và ra đúng ảnh (cùng khuôn mặt, áo dài xanh, quần hồng, quạt, sân đình) từ chính bộ 3 ảnh tham
+chiếu đã fail trước đó.
+
+Đã xử lý ở hai lớp:
+
+1. `prompt-skills/try-on-image-prompter.md` và `prompt-skills/lookbook-item-cutout-prompter.md`
+   không còn họ từ này trong prompt mẫu.
+2. `src/Workflows/prompt_lint.py` → `IMAGE_FILTER_TRIGGER_TERMS` báo `filter_trigger` (mức
+   `error`) trước khi tiêu credit, kèm test âm để luật không phình ra bắt nhầm `no logo` /
+   `no watermark` (đã qua 200 OK).
 
 ## 5. Delivery export
 
@@ -148,7 +211,7 @@ lại bằng một ảnh plate sạch để có độ nét đầy đủ.
 | Thời lượng | 8.000s mỗi clip theo `CLIP_MAX_S` của script; Flow (Omni 1.2) cho 3..15s |
 | Audio | **không có** — `-an` tại `flow_video_bridge.py` (strip/concat) và `watermark_remover.py` |
 
-## 6. Cutout sản phẩm: Flow sinh ảnh → delivery tự lấy về
+## 6. Bảng phối: Flow sinh ảnh, không tách nền
 
 Ảnh Shopee (`main_images/*.jpg`) là **ảnh lifestyle có người mẫu**, không phải flat-lay.
 `u2net_human_seg` — model mà `npx hyperframes remove-background` dùng — được huấn luyện
@@ -158,65 +221,48 @@ lifestyle để lấy chiếc áo** — dù thử `u2net_cloth_seg` (model chuy�
 ra đúng chiếc áo đang mặc trên người, méo theo tư thế ngồi và thủng ở chỗ hở da.
 
 Việc tách sản phẩm phải xảy ra **trong Flow**, với ảnh Shopee làm reference:
-
 ```
 A. Upload ảnh Shopee làm reference (kéo thả vào node ref)
 B. Node ảnh + skill lookbook-item-cutout-prompter
-      → ảnh sản phẩm sạch trên nền trơn (~1 credit/món)
-C. Tách nền — CHỈ KHI CẦN:  python -m scripts.cutout_items
+      → coordinate sheet: cả bộ + callout, 3 ô DETAIL, palette 5 màu (~1 credit)
 ```
 
-**Bước C là tuỳ chọn.** Ảnh Flow sinh ra đã là sản phẩm trên nền trơn, không có người mẫu —
-đúng thứ HyperFrames cần. Chỉ chạy `cutout_items` khi muốn card sản phẩm có alpha thật
-(đặt chồng lên video mà không thấy khung chữ nhật).
+**Không có bước tách nền.** Sheet có chữ nằm sẵn trong pixel nên rembg sẽ cắt luôn chữ. Ảnh ra
+là **deliverable** — ảnh bìa, gallery, social — không phải nguyên liệu cho lớp card.
 
 ### Đường ống trong app
 
 Template **Lookbook 16s** có sẵn nhóm 2: `lb_ref_garment_upload` → `lb_node_cutout_front`
-(một node mẫu duy nhất). Muốn thêm món thì nhân bản node rồi đặt tên — **không** khai danh
+(một node mẫu duy nhất). Muốn thêm bộ phối thì nhân bản node rồi đặt tên — **không** khai danh
 sách món vào kịch bản.
 
-### Phạm vi món (`item_scope`) — áo, quần, hay cả bộ
+### Một đường ra: coordinate sheet
 
-Ảnh Shopee gần như luôn là **cả bộ trên người mẫu**, còn skill cutout lại bắt "chỉ một món".
-Không chỉ định gì thì model chọn vật thể nổi bật nhất — thực tế **luôn ra chiếc áo**, không
-bao giờ ra quần. Vì vậy node ảnh sản phẩm có thêm 4 nút chọn phạm vi, mặc định `Áo`:
+Skill `lookbook-item-cutout-prompter` chỉ còn **một** chế độ. Node ảnh tick **Bảng phối**
+(`is_item`) là agent dựng sheet — không còn `item_scope`, không còn nút chọn phạm vi:
 
-| Nút | `item_scope` | Ảnh sinh ra | Tách nền được? |
-| :-- | :-- | :-- | :-- |
-| **Áo** | `top` | Một món mặc trên, quần/váy bị loại hẳn | Có |
-| **Quần / Váy** | `bottom` | Một món mặc dưới, áo bị loại hẳn | Có |
-| **Cả bộ** | `full_set` | Các món xếp cạnh nhau trên cùng nền | **Không** |
-| **Bộ phối** | `coordinate_sheet` | Cả bộ + callout, 3 ô `DETAIL`, palette 5 màu | **Không** |
+| Trước | Sau |
+| :-- | :-- |
+| `top` / `bottom` / `full_set` / `coordinate_sheet` | chỉ `coordinate_sheet` |
+| Bốn template trong skill, agent phải chọn đúng | Một template §3.1 |
+| Người dùng chọn phạm vi trước khi bấm AI Prompt | Không có gì để chọn |
 
-`full_set` và `coordinate_sheet` là **hai ngoại lệ có chủ đích** của quy tắc "một món" trong
-`prompt-skills/lookbook-item-cutout-prompter.md`:
+Bốn đường ra cũ sinh ra bốn template, và chuyện agent chọn nhầm template là có thật: chọn
+"Bộ phối" mà vẫn trả về nguyên văn template flat-lay `no text`, `no collage`. Bỏ ba đường kia là
+cách duy nhất bỏ luôn khả năng chọn nhầm.
 
-- `full_set` chỉ bỏ "một món" — vẫn **cấm chữ**, vẫn là plate dùng làm layer.
-- `coordinate_sheet` bỏ cả "một món" lẫn "cấm chữ": ảnh ra là **deliverable** có typography
-  (title, callout `01`–`0N`, 3 ô `DETAIL`, palette 5 màu), dùng cho bìa/gallery/social.
+Đường đi của giá trị: `CanvasNode.isItem` / `itemName` → `GenerateNodePromptBody.is_item` /
+`item_name` → `NodePromptTask` → `PromptAgent.is_item_task` (chèn khối coordinate sheet vào
+instruction). Cả 3 đường gọi agent — nút **AI Prompt** trên thẻ, tab Cấu hình trong drawer, và
+JIT lúc chạy workflow — đều gửi kèm hai trường đó.
 
-Cả hai đều **không đem tách nền**: rembg coi cả cụm là một khối, và với sheet thì cắt luôn chữ.
+#### Vì sao instruction sheet phải dán lại khung §3.1
 
-Với `full_set`, rembg còn gộp bbox cả cụm nên card sản phẩm hở khoảng trống giữa các món.
-`cutout_items` giờ đếm số mảnh alpha rời (`pieces`) và loại ảnh có >1 mảnh kèm lời nhắc sinh
-lại theo từng món. Dùng thẳng ảnh nền trơn cho composition.
+Nhắc "dùng §3.1" ở giữa instruction là **không đủ**. `gemini-3.8-flash-low` đọc 21K ký tự
+skill rồi vẫn trả về một flat-lay không chữ (`no text`, `no collage`) — đúng triệu chứng
+"bấm AI Prompt mà bảng phối ra ảnh trơn". Hai lớp chặn:
 
-Đường đi của giá trị: `CanvasNode.itemScope` → `GenerateNodePromptBody.item_scope` →
-`NodePromptTask.item_scope` → `PromptAgent.ITEM_SCOPES` (chèn khối "Phạm vi cần tách" vào
-instruction của agent). Cả 3 đường gọi agent — nút **AI Prompt** trên thẻ, tab Cấu hình trong
-drawer, và JIT lúc chạy workflow — đều gửi kèm `is_item`/`item_name`/`item_scope`.
-
-Đổi phạm vi **không** tự sinh lại prompt: prompt cũ vẫn nằm nguyên trên node. Drawer hiện
-nhắc đúng câu đó; phải bấm **AI Prompt** thì prompt mới đổi.
-
-#### Vì sao instruction sheet phải dán lại khung §3.4
-
-Nhắc "dùng §3.4" ở giữa instruction là **không đủ**. `gemini-3.8-flash-low` đọc 21K ký tự
-skill rồi vẫn trả về nguyên văn template §3.2 (flat-lay, `no text`, `no collage`) — đúng
-triệu chứng "chọn Bộ phối mà prompt không khác gì". Hai lớp chặn:
-
-1. `format_agent_instruction` trích **câu mở đầu** của §3.4 từ chính file skill rồi dán vào
+1. `format_agent_instruction` trích **câu mở đầu** của §3.1 từ chính file skill rồi dán vào
    cuối instruction, ngay trong `ĐỊNH DẠNG ĐẦU RA` — chỗ agent đọc cuối cùng trước khi trả
    lời — kèm danh sách 6 khối bắt buộc. Không chép tay sang Python: sửa template trong
    skill là app theo ngay.
@@ -236,11 +282,11 @@ tới khi hết 75s timeout, và người dùng chỉ thấy prompt cũ không �
 
 ### Thư viện ảnh sản phẩm (`out/items/<project_id>/`)
 
-Node ảnh có một ô tick **"Đây là ảnh sản phẩm"** (`is_item`). Tick vào, đặt tên món, chạy
-node — server chép ảnh vừa sinh vào `out/items/<project_id>/<slug>.png` ngay khi job xong:
+Node ảnh có một ô tick **"Bảng phối"** (`is_item`). Tick vào, đặt tên bộ phối, chạy node —
+server chép ảnh vừa sinh vào `out/items/<project_id>/<slug>.png` ngay khi job xong:
 
 ```
-Áo Kiểu Nữ Donna  ──▶  out/items/prj_0a7e…/ao_kieu_nu_donna.png
+Set Y2K  ──▶  out/items/prj_0a7e…/set_y2k.png
 ```
 
 Đây là **thư viện dùng lại được**, không phải hợp đồng của một bộ phim: cùng một ảnh phục vụ
@@ -251,7 +297,7 @@ liệt kê 2 món DONNA/CARDIGAN là vô nghĩa với họ.
 
 | Mảnh | Ở đâu |
 | :-- | :-- |
-| Ô tick + tên món + phạm vi | `CanvasPanel.tsx` — inspector của node ảnh |
+| Ô tick + tên bộ phối | `CanvasPanel.tsx` — inspector của node ảnh |
 | Chép vào thư viện | `jobs.py::_save_project_item` → `item_library.save_item` |
 | Liệt kê thư viện | `GET /api/items/library?project_id=…` |
 | Slug tên file | `item_library.safe_item_name` (bỏ dấu NFD, xử lý `đ`, cấm ký tự Windows) |
@@ -275,11 +321,15 @@ curl -X POST http://127.0.0.1:4000/api/deliveries -H "content-type: application/
 }'
 ```
 
-### Guard của `cutout_items.py`
+### Guard của `cutout_items.py` (công cụ ngoài pipeline)
 
-Chỉ áp dụng cho **bước C** (tách nền), và nó bảo vệ đúng thứ nó cần bảo vệ: nhận ra ảnh
-nguồn **không phải sản phẩm sạch**. Đo trên chính 2 thư mục Shopee của bạn, cả 17 ảnh đều bị
-chặn — đúng, vì không ảnh nào là flat-lay:
+`scripts/cutout_items.py` **không còn là bước nào trong pipeline bảng phối**: sheet có chữ nằm
+sẵn trong pixel, rembg sẽ cắt luôn chữ. Script vẫn dùng được như công cụ độc lập khi bạn có sẵn
+ảnh sản phẩm trên nền trơn và muốn card có alpha thật.
+
+Guard của nó bảo vệ đúng thứ nó cần bảo vệ: nhận ra ảnh nguồn **không phải sản phẩm sạch**.
+Đo trên chính 2 thư mục Shopee của bạn, cả 17 ảnh đều bị chặn — đúng, vì không ảnh nào là
+flat-lay:
 
 | Tầng | Bắt được | Ngưỡng |
 | :-- | :-- | :-- |
@@ -310,6 +360,9 @@ Cài đặt:
 ```bash
 pip install rembg onnxruntime      # ~176MB model tải ở lần chạy đầu
 ```
+
+> Chính script này đếm số mảnh alpha rời (`pieces`) và từ chối ảnh có >1 mảnh — dấu hiệu ảnh
+> **cả bộ** xếp cạnh nhau, mà bbox gộp cả cụm sẽ làm card hở khoảng trống giữa các món.
 
 ## 7. Những gì chưa làm (đã ghi nhận)
 

@@ -103,10 +103,10 @@ def test_template_does_not_impose_a_body(phrase: str):
     assert phrase not in _template().lower(), f"template còn áp đặt '{phrase}'"
 
 
-def test_template_uses_image_1_as_the_only_proportion_reference():
+def test_template_uses_model_image_as_the_only_proportion_reference():
     tpl = _template().lower()
     assert "head-to-body ratio" in tpl
-    assert "visible in image 1" in tpl
+    assert "visible in <<model>>" in tpl
     assert "that body is the only proportion reference" in tpl
 
 
@@ -141,11 +141,17 @@ def test_template_drops_self_cancelling_negatives(phrase: str):
 
 
 def test_logo_rule_is_conditional_not_absolute():
-    """Cấm logo *bịa thêm*, giữ logo có thật trên trang phục tham chiếu."""
+    """Cấm nhãn *bịa thêm*, giữ nhãn/mác có thật trên trang phục tham chiếu.
+
+    Ý định giữ nguyên, nhưng không dùng họ từ `brand` nữa: Flow từ chối cả request bằng
+    `PUBLIC_ERROR_UNSAFE_GENERATION` khi prompt chứa từ đó (đo trên server thật, xem
+    `IMAGE_FILTER_TRIGGER_TERMS` trong `src/Workflows/prompt_lint.py`).
+    """
     tpl = _template().lower()
     assert "added logos" in tpl
-    assert "branding beyond what the reference garment actually carries" in tpl
-    assert "branding that are physically part of the garment are reproduced" in tpl
+    assert "no added marks beyond what the reference garment actually carries" in tpl
+    assert "any label that is physically part of the garment are reproduced" in tpl
+    assert "brand" not in tpl, "template còn họ từ 'brand' ⇒ Flow chặn cả request"
 
 
 def test_negative_does_not_repeat_positive_instructions():
@@ -195,11 +201,11 @@ def test_template_has_no_negative_clause():
 
 def test_identity_lock_does_not_catalogue_a_face():
     """Template dùng cho mọi người mẫu; mô tả mặt cụ thể tạo nguồn tham chiếu thứ hai
-    đối kháng với pixel của Ảnh 1 (xem §2.2.3)."""
+    đối kháng với pixel của ảnh người mẫu (xem §2.2.3)."""
     tpl = _template().lower()
     for phrase in FACE_CATALOGUE:
         assert phrase not in tpl, f"Identity Lock còn mô tả khuôn mặt cụ thể: '{phrase}'"
-    assert "image 1 is the sole identity reference" in tpl
+    assert "<<model>> is the sole identity reference" in tpl
     assert "do not beautify" in tpl
 
 
@@ -228,17 +234,17 @@ def test_shared_stance_clause_is_declared_once():
 # 5. Ảnh 3 là tuỳ chọn (Critical #2)
 # --------------------------------------------------------------------------- #
 
-def test_image_3_is_handled_as_optional():
+def test_background_is_handled_as_optional():
     tpl = _template()
-    assert "If Image 3 is provided" in tpl
-    assert "If Image 3 is not provided" in tpl
-    # Ảnh 3 chỉ được nói môi trường, không được nói người/trang phục
+    assert "If <<background>> is provided" in tpl
+    assert "If <<background>> is not provided" in tpl
+    # Bối cảnh chỉ được nói môi trường, không được nói người/trang phục
     env = tpl.split("[ENVIRONMENT & LIGHTING]")[-1].split("[PHOTOGRAPHY")[0]
-    assert "never the person or the garment from Image 3" in env
+    assert "never the person or the garment from <<background>>" in env
 
 
-def test_environment_falls_back_to_studio_not_image_2():
-    """V1 lấy bối cảnh Ảnh 2 khi thiếu Ảnh 3 — ảnh Shopee ngoài đường sẽ lọt vào plate."""
+def test_environment_falls_back_to_studio_not_garment_image():
+    """V1 lấy bối cảnh ảnh trang phục khi thiếu ảnh background — ảnh Shopee ngoài đường sẽ lọt vào plate."""
     tpl = _template().lower()
     assert "curved white cyclorama" in tpl
     assert "if image 3 is absent" not in tpl
@@ -250,7 +256,8 @@ def test_two_image_node_instruction_matches_the_skill():
 
     agent = PromptAgent.__new__(PromptAgent)  # chỉ cần phần format
     lines = agent._image_role_lines(
-        NodePromptTask(node_id="n", node_type="image", upstream_media_urls=[]), 2
+        NodePromptTask(node_id="n", node_type="image", upstream_media_urls=[]),
+        ["out/uploads/model.jpg", "out/uploads/garment.jpg"],
     )
     joined = " ".join(lines).lower()
     assert "studio" in joined
@@ -282,6 +289,82 @@ def test_template_passes_image_lint():
     assert not [w for w in result.warnings if w.code == "anatomy_rewrite"]
     # Template phải nằm dưới trần ký tự, nếu không thì chính skill tự dạy agent viết prompt quá dài.
     assert not [w for w in result.warnings if w.code == "image_prompt_too_long"]
+    # Họ từ `brand` làm Flow chặn cả request — xem `test_linter_flags_unsafe_generation_words`.
+    assert not [w for w in result.warnings if w.code == "filter_trigger"]
+
+
+#: Đo trên server thật 2026‑11‑12 (profile `aaaaa`): chỉ những prompt này bị REJECT.
+_FILTER_TRIGGERS = ("Avoid: no brand logo.", "Avoid: no brand.")
+#: Cùng vị trí, cùng ảnh tham chiếu, nhưng đã qua 200 OK.
+_FILTER_CLEAN = ("Avoid: no logo.", "Avoid: no watermark.", "Avoid: no added marks.")
+
+
+@pytest.mark.parametrize("phrase", _FILTER_TRIGGERS)
+def test_linter_flags_unsafe_generation_words(phrase: str):
+    """Từ `brand` bị Flow đọc thành vi phạm, kể cả khi đứng sau `no`.
+
+    Đây là lỗi thật đã đốt ba lần chạy: nhãn `PUBLIC_ERROR_UNSAFE_GENERATION` khiến mọi
+    người đi tìm ảnh tham chiếu và mô tả cơ thể, trong khi thủ phạm là một từ trong danh
+    sách phủ định. Linter phải bắt trước khi tiêu credit.
+    """
+    result = lint_image_prompt(_template() + "\n" + phrase)
+    assert not result.ok
+    assert [w for w in result.warnings if w.code == "filter_trigger"]
+
+
+@pytest.mark.parametrize("phrase", _FILTER_CLEAN)
+def test_linter_does_not_flag_clean_negative_phrases(phrase: str):
+    """Luật phải hẹp: `no logo` / `no watermark` đã qua 200 OK, cấm báo nhầm."""
+    result = lint_image_prompt(_template() + "\n" + phrase)
+    assert not [w for w in result.warnings if w.code == "filter_trigger"]
+
+
+# --------------------------------------------------------------------------- #
+# 8. Neo độ dài khi ảnh trang phục là coordinate sheet (§2.1.1)
+# --------------------------------------------------------------------------- #
+
+#: Tên file thật của sheet đã gây lỗi 2026‑11‑12.
+_SHEET_FILE = "out/uploads/1794478054426_editorial_fashion_coordinate_sheet_verti.jpg"
+_PERSON_FILE = "out/uploads/1794458265956_ao_xanhqxanh_nhat.jpg"
+
+
+def test_sheet_is_detected_from_filename_but_person_photo_is_not():
+    """Nhận diện bằng tên file: tín hiệu chắc chắn duy nhất mà không cần đọc pixel.
+
+    Prompt thật không hề viết "flat-lay", nên một luật dò chữ trong prompt sẽ không bao giờ
+    cháy — tức là guard giả. Tên file thì pipeline tự đặt theo loại ảnh.
+    """
+    from src.Workflows.prompt_lint import SHEET_FILENAME_RE
+
+    assert SHEET_FILENAME_RE.search(_SHEET_FILE)
+    assert not SHEET_FILENAME_RE.search(_PERSON_FILE)
+
+
+def test_agent_demands_length_anchor_only_for_sheet_garment():
+    """Sheet ⇒ bắt buộc có câu neo; người mặc thật ⇒ không được thêm.
+
+    Thêm câu neo vào ảnh người mặc thật là tạo mâu thuẫn với pixel: tỷ lệ đã đúng sẵn.
+    """
+    from src.Workflows.prompt_agent import PromptAgent
+
+    for_sheet = "\n".join(PromptAgent._sheet_garment_lines([_SHEET_FILE], garment_slot="<<garment>>"))
+    assert for_sheet, "sheet phải sinh chỉ dẫn neo độ dài"
+    assert "mid-thigh" in for_sheet
+    assert "Length is anchored" in for_sheet
+    assert "<<garment>>" in for_sheet
+
+    assert PromptAgent._sheet_garment_lines([_PERSON_FILE], garment_slot="<<garment>>") == []
+    assert PromptAgent._sheet_garment_lines([], garment_slot="<<garment>>") == []
+
+
+def test_skill_documents_the_length_anchor_and_the_measurement():
+    """Số đo phải nằm trong skill, nếu không sáu tháng nữa không ai biết vì sao có luật này."""
+    text = _text()
+    assert "2.1.1" in text
+    section = text.split("#### 2.1.1")[1][:3000]
+    assert "0.755" in section, "thiếu số đo shorts/áo trên sheet"
+    assert "mid-thigh" in section
+    assert "Length is anchored" in section
 
 
 def test_plate_mode_does_not_swap_the_shoes():
